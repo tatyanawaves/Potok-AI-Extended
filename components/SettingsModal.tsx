@@ -1,0 +1,133 @@
+import React, { useState } from 'react';
+import { AISettings, Language } from '../types';
+import { translations } from '../translations';
+
+interface SettingsModalProps {
+  settings: AISettings;
+  onSave: (settings: AISettings) => void;
+  onClose: () => void;
+}
+
+const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose }) => {
+  const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey);
+  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel);
+  const [language, setLanguage] = useState<Language>(settings.language || 'ru');
+  const [decaySpeed, setDecaySpeed] = useState(settings.decaySpeed || 1.0);
+
+  const t = translations[language];
+
+  const handleSave = () => {
+    onSave({
+      openRouterKey,
+      openRouterModel,
+      language,
+      decaySpeed
+    });
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+        <div className="p-6 border-b border-slate-800 flex justify-between items-center">
+          <h2 className="text-xl font-bold text-white font-mono">{t.settingsTitle}</h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        
+        <div className="p-6 space-y-6">
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              {t.language}
+            </label>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => setLanguage('ru')}
+                className={`flex-1 py-2 rounded-lg border font-mono text-sm transition-all ${language === 'ru' ? 'bg-cyan-600 border-cyan-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
+              >
+                РУССКИЙ
+              </button>
+              <button
+                onClick={() => setLanguage('en')}
+                className={`flex-1 py-2 rounded-lg border font-mono text-sm transition-all ${language === 'en' ? 'bg-cyan-600 border-cyan-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
+              >
+                ENGLISH
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              {t.openRouterKey}
+            </label>
+            <input
+              type="password"
+              value={openRouterKey}
+              onChange={(e) => setOpenRouterKey(e.target.value)}
+              placeholder="sk-or-v1-..."
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              {t.openRouterModel}
+            </label>
+            <input
+              type="text"
+              value={openRouterModel}
+              onChange={(e) => setOpenRouterModel(e.target.value)}
+              placeholder="author/model:free"
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+            />
+          </div>
+          
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              Cognitive Decay Speed: {decaySpeed.toFixed(1)}x
+            </label>
+            <input
+              type="range"
+              min="0.1"
+              max="3.0"
+              step="0.1"
+              value={decaySpeed}
+              onChange={(e) => setDecaySpeed(parseFloat(e.target.value))}
+              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+            />
+            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                <span>SLOW</span>
+                <span>FAST</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-800/50 p-4 rounded-lg border border-slate-700">
+            <p className="text-xs text-slate-400 leading-relaxed italic">
+              {t.storageWarning}
+            </p>
+          </div>
+        </div>
+
+        <div className="p-6 bg-slate-800/30 border-t border-slate-800 flex justify-end space-x-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-white transition-colors"
+          >
+            {t.cancel}
+          </button>
+          <button
+            onClick={handleSave}
+            className="px-6 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-bold rounded-lg transition-all active:scale-95 shadow-lg shadow-cyan-900/20"
+          >
+            {t.save}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default SettingsModal;
