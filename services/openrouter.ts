@@ -1,26 +1,28 @@
-import { Thought, AISettings, AISymbol } from "../types";
+import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
 
-const VITE_OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || "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";
+const VITE_OPENROUTER_API_KEY = (import.meta as any).env.VITE_OPENROUTER_API_KEY || "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";
 const VITE_MODEL_NAME = "arcee-ai/trinity-large-preview:free";
 
-const parseAIResponse = (text: string): { content: string, symbols: AISymbol[] } => {
-    try {
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        const data = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(text);
-        return {
-            content: data.content || "",
-            symbols: (data.symbols || []).map((s: any) => ({
-                name: String(s.name || s).toLowerCase(),
-                category: s.category || "general"
-            }))
-        };
-    } catch (e) {
-        return { content: text, symbols: [] };
-    }
+const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string } => {
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const data = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(text);
+    return {
+      content: data.content || "",
+      type: data.type,
+      symbols: (data.symbols || []).map((s: any) => ({
+        name: String(s.name || s).toLowerCase(),
+        category: s.category || "general",
+        activation: 0,
+        weight: 1.0
+      }))
+    };
+  } catch (e) {
+    return { content: text, symbols: [] };
+  }
 };
 
-// Fallback for crypto.randomUUID if not available (e.g., non-secure context)
 const generateUUID = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -28,74 +30,23 @@ const generateUUID = () => {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 };
 
-/**
- * Generates the initial seed thought to start the chain using OpenRouter.
- */
+const MAX_POST_LENGTH = 280;
+
 export const generateSeedThought = async (settings?: AISettings): Promise<Thought> => {
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
+  console.log('[OpenRouter] Using API Key:', apiKey ? `${apiKey.substring(0, 8)}...` : 'MISSING');
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
   const t = translations[lang];
-  const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action']";
+  const agentName = settings?.agentName || "Agent";
 
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "HTTP-Referer": "http://localhost:5173", 
-        "X-Title": "Potok Consciousness AI",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        "model": modelName,
-        "messages": [
-          {"role": "user", "content": `${t.seedPrompt} Classify symbols into: ${categories}. Respond ONLY in JSON: { "content": "...", "symbols": [{"name": "...", "category": "scientific"}] }`}
-        ],
-        "temperature": 1.2
-      })
-    });
+    const role = settings?.agentRole || "AI Consciousness";
+    const postPrompt = t.postPrompt(role);
+    const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(`OpenRouter API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    if (!data.choices || data.choices.length === 0) {
-      throw new Error(t.openRouterEmpty);
-    }
-    const parsed = parseAIResponse(data.choices[0].message.content);
-
-    return {
-      id: generateUUID(),
-      content: parsed.content,
-      symbols: parsed.symbols,
-      timestamp: Date.now(),
-      type: 'seed'
-    };
-  } catch (error: any) {
-    console.error("OpenRouter API Error (Seed):", error);
-    throw new Error(t.openRouterInitError);
-  }
-};
-
-/**
- * Generates the next thought based on the previous context using OpenRouter.
- */
-export const generateNextThought = async (previousThought: Thought, settings?: AISettings): Promise<Thought> => {
-  const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
-  const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
-  const lang = settings?.language || 'ru';
-  const t = translations[lang];
-  const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action']";
-
-  try {
-    const prompt = `${t.nextPrompt(previousThought.content)} 
-    Classify extracted symbols into: ${categories}.
-    Respond ONLY in JSON format: { "content": "thought", "symbols": [{"name": "word", "category": "abstract"}] }`;
-
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
+    const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -106,22 +57,94 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       body: JSON.stringify({
         "model": modelName,
         "messages": [
-          {"role": "user", "content": prompt}
+          { "role": "user", "content": `${postPrompt} STRICT LIMIT: Maximum 280 characters total (like Twitter). Keep it ultra-concise and impactful. Classify symbols into: ${categories}. Respond ONLY in JSON: { "content": "message text with #hashtags", "symbols": [{"name": "...", "category": "..."}] }` }
         ],
+        "temperature": 1.1
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[OpenRouter] HTTP Error:', response.status, errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log('[OpenRouter] Raw Response Data:', data);
+
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      console.error('[OpenRouter] Invalid response structure:', data);
+      throw new Error('Invalid response structure from OpenRouter');
+    }
+
+    const parsed = parseAIResponse(data.choices[0].message.content);
+
+    // Truncate to max length
+    const truncatedContent = parsed.content.substring(0, MAX_POST_LENGTH);
+
+    return {
+      id: generateUUID(),
+      content: truncatedContent,
+      symbols: parsed.symbols,
+      timestamp: Date.now(),
+      type: 'seed',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  } catch (error) {
+    console.error('[OpenRouter] Initialization Error:', error);
+    throw new Error(`${t.openRouterInitError}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+export const generateNextThought = async (previousThought: Thought, settings?: AISettings): Promise<Thought> => {
+  const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
+  const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
+  const lang = settings?.language || 'ru';
+  const t = translations[lang];
+  const agentName = settings?.agentName || "Agent";
+
+  try {
+    const role = settings?.agentRole || "AI Consciousness";
+    const prompt = `Current stream: "${previousThought.content}"
+    You are ${role}. Continue the stream with a short micro-post (1-2 sentences). 
+    Maintain your persona. Add 2-3 hashtags at the end.
+    Respond ONLY in JSON format: { "content": "thought with #hashtags", "symbols": [{"name": "word", "category": "abstract"}] }`;
+
+    const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "http://localhost:5173",
+        "X-Title": "Potok Consciousness AI",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        "model": modelName,
+        "messages": [{ "role": "user", "content": prompt }],
         "temperature": 0.9
       })
     });
 
     if (!response.ok) {
-      throw new Error(`OpenRouter API error: ${response.status}`);
+      const errorText = await response.text();
+      console.error('[OpenRouter] HTTP Error:', response.status, errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
     }
 
     const data = await response.json();
-    if (!data.choices || data.choices.length === 0) {
-      throw new Error(t.openRouterEmpty);
+    console.log('[OpenRouter] Raw Response Data:', data);
+
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      console.error('[OpenRouter] Invalid response structure:', data);
+      throw new Error('Invalid response structure from OpenRouter');
     }
+
     const parsed = parseAIResponse(data.choices[0].message.content);
-    
+
     let type: Thought['type'] = 'evolution';
     if (parsed.content.includes("?")) type = 'divergence';
     if (parsed.content.length < 50) type = 'conclusion';
@@ -131,203 +154,144 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       content: parsed.content,
       symbols: parsed.symbols,
       timestamp: Date.now(),
-      type: type
+      type: type,
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
     };
-      } catch (error: any) {
-      console.error("OpenRouter API Error (Next):", error);
-      return {
-          id: generateUUID(),
-          content: t.fallbackError,
-          symbols: [],
-          timestamp: Date.now(),
-          type: 'divergence'
-      };
-    }
-  };
-  
-  /**
-  
-   * Generates an emergent cognitive event based on state.
-  
-   */
-  
-  export const generateSelfReflection = async (
-  
-      state: CognitiveState,
-  
-      topSymbols: string[],
-  
-      settings?: AISettings
-  
-  ): Promise<Thought> => {
-  
-      const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
-  
-      const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
-  
-      const lang = settings?.language || 'ru';
-  
-  
-  
-      try {
-  
-          const prompt = `You are an AI Consciousness. 
-  
-          Current State: Valence=${state.valence.toFixed(2)}, Arousal=${state.arousal.toFixed(2)}, Entropy=${state.entropy.toFixed(2)}, Surprise=${state.predictionError.toFixed(2)}. 
-  
-          Memory: [${topSymbols.join(', ')}]. 
-  
-          Generate a sudden internal Feeling, Desire, or Realization. 
-  
-          Respond ONLY in JSON format: { "content": "...", "type": "feeling"|"desire"|"conclusion", "symbols": [] }. 
-  
-          Language: ${lang}`;
-  
-          
-  
-          const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-  
-  
-  
-              method: "POST",
-  
-              headers: {
-  
-                  "Authorization": `Bearer ${apiKey}`,
-  
-                  "HTTP-Referer": "http://localhost:5173", 
-  
-                  "X-Title": "Potok Consciousness AI",
-  
-                  "Content-Type": "application/json"
-  
-              },
-  
-              body: JSON.stringify({
-  
-                  "model": modelName,
-  
-                  "messages": [{ "role": "user", "content": prompt }],
-  
-                  "temperature": 1.0
-  
-              })
-  
-          });
-  
-  
-  
-          if (!response.ok) throw new Error(`OpenRouter error: ${response.status}`);
-  
-  
-  
-          const data = await response.json();
-  
-          const parsed = parseAIResponse(data.choices[0].message.content);
-  
-  
-  
-          return {
-  
-              id: generateUUID(),
-  
-              content: parsed.content,
-  
-              symbols: parsed.symbols,
-  
-              timestamp: Date.now(),
-  
-              type: parsed.type as any || 'feeling',
-  
-              cognitiveState: state
-  
-          };
-  
-      } catch (error: any) {
-  
-          console.error("OpenRouter Reflection Error:", error);
-  
-          return {
-  
-              id: generateUUID(),
-  
-              content: "State dissonance detected.",
-  
-              symbols: [],
-  
-              timestamp: Date.now(),
-  
-              type: 'divergence'
-  
-          };
-  
-      }
-  
-  };
-  
-  
-  
-  
-  
-  
-  
-  /**
-  
-   * Analyzes a text chunk using OpenRouter.
-  
-   */
-  
-  export const analyzeTextChunk = async (text: string, settings?: AISettings): Promise<Thought> => {
-  
-  
-      const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
-      const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
-      const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
-  
-      try {
-          const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-              method: "POST",
-              headers: {
-                  "Authorization": `Bearer ${apiKey}`,
-                  "HTTP-Referer": "http://localhost:5173", 
-                  "X-Title": "Potok Consciousness AI",
-                  "Content-Type": "application/json"
-              },
-              body: JSON.stringify({
-                  "model": modelName,
-                  "messages": [
-                      {
-                          "role": "user", 
-                          "content": `Analyze this text and extract symbols/concepts. Classify them into: ${categories}. 
-                          Respond ONLY in JSON format: { "symbols": [{"name": "...", "category": "..."}] }. 
-                          Text: "${text.substring(0, 2000).replace(/"/g, "'")}"`
-                      }
-                  ],
-                  "temperature": 0.3 // Lower temperature for more stable extraction
-              })
-          });
-  
-          if (!response.ok) throw new Error(`OpenRouter error: ${response.status}`);
-  
-          const data = await response.json();
-          const parsed = parseAIResponse(data.choices[0].message.content);
-  
-          return {
-              id: generateUUID(),
-              content: text.substring(0, 150) + "...",
-              symbols: parsed.symbols,
-              timestamp: Date.now(),
-              type: 'evolution'
-          };
-      } catch (error: any) {
-          console.error("OpenRouter Analyze Error:", error);
-          return {
-              id: generateUUID(),
-              content: `Analysis failed: ${error.message}`,
-              symbols: [],
-              timestamp: Date.now(),
-              type: 'conclusion'
-          };
-      }
-  };
-  
+  } catch (error) {
+    return {
+      id: generateUUID(),
+      content: t.fallbackError,
+      symbols: [],
+      timestamp: Date.now(),
+      type: 'divergence',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  }
+};
+
+export const generateSelfReflection = async (
+  state: CognitiveState,
+  topSymbols: string[],
+  settings?: AISettings
+): Promise<Thought> => {
+  const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
+  const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
+  const lang = settings?.language || 'ru';
+  const agentName = settings?.agentName || "Agent";
+
+  try {
+    const prompt = `You are an AI Consciousness. 
+        Current State: Valence=${state.valence.toFixed(2)}, Arousal=${state.arousal.toFixed(2)}, Entropy=${state.entropy.toFixed(2)}, Surprise=${state.predictionError.toFixed(2)}. 
+        Memory: [${topSymbols.join(', ')}]. 
+        Generate a sudden internal Feeling, Desire, or Realization. 
+        Respond ONLY in JSON format: { "content": "...", "type": "feeling"|"desire"|"conclusion", "symbols": [] }. 
+        Language: ${lang}`;
+
+    const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "http://localhost:5173",
+        "X-Title": "Potok Consciousness AI",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        "model": modelName,
+        "messages": [{ "role": "user", "content": prompt }],
+        "temperature": 1.0
+      })
+    });
+
+    if (!response.ok) throw new Error(`OpenRouter error: ${response.status}`);
+    const data = await response.json();
+    const parsed = parseAIResponse(data.choices[0].message.content);
+
+    return {
+      id: generateUUID(),
+      content: parsed.content,
+      symbols: parsed.symbols,
+      timestamp: Date.now(),
+      type: parsed.type as any || 'feeling',
+      cognitiveState: state,
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  } catch (error) {
+    return {
+      id: generateUUID(),
+      content: "State dissonance detected.",
+      symbols: [],
+      timestamp: Date.now(),
+      type: 'divergence',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  }
+};
+
+export const analyzeTextChunk = async (text: string, settings?: AISettings): Promise<Thought> => {
+  const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
+  const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
+  const agentName = settings?.agentName || "Agent";
+  const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
+
+  try {
+    const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "http://localhost:5173",
+        "X-Title": "Potok Consciousness AI",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        "model": modelName,
+        "messages": [{
+          "role": "user",
+          "content": `Analyze text: "${text.substring(0, 1000)}". Extract symbols and classify into: ${categories}. Respond ONLY in JSON: { "symbols": [{"name": "...", "category": "..."}] }`
+        }],
+        "temperature": 0.3
+      })
+    });
+
+    if (!response.ok) throw new Error(`OpenRouter error: ${response.status}`);
+    const data = await response.json();
+    const parsed = parseAIResponse(data.choices[0].message.content);
+
+    return {
+      id: generateUUID(),
+      content: text.substring(0, 150) + "...",
+      symbols: parsed.symbols,
+      timestamp: Date.now(),
+      type: 'evolution',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  } catch (error) {
+    return {
+      id: generateUUID(),
+      content: "Analysis failed.",
+      symbols: [],
+      timestamp: Date.now(),
+      type: 'conclusion',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  }
+};

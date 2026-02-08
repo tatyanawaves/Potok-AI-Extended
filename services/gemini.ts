@@ -2,42 +2,60 @@ import { GoogleGenAI } from "@google/genai";
 import { Thought, AISettings, AISymbol, CognitiveState, AIProvider } from "../types";
 import { translations } from "../translations";
 
+/// <reference types="vite/client" />
+
 // Initialize Gemini Client
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || "PLACEHOLDER_API_KEY" });
+export const getAIClient = (apiKey?: string) => new GoogleGenAI({
+  apiKey: apiKey || (import.meta as any).env.VITE_GEMINI_API_KEY || "PLACEHOLDER_API_KEY"
+});
 
 const MODEL_NAME = 'gemini-1.5-flash';
 const EMBEDDING_MODEL = 'text-embedding-004';
+const MAX_POST_LENGTH = 280;
+
+const generateUUID = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+};
 
 /**
  * Gets semantic vector for a string
  */
-export const getEmbedding = async (text: string): Promise<number[]> => {
+export const getEmbedding = async (text: string, apiKey?: string): Promise<number[]> => {
   try {
-    const model = ai.getGenerativeModel({ model: EMBEDDING_MODEL });
-    const result = await model.embedContent(text);
-    return result.embedding.values;
+    const ai = getAIClient(apiKey);
+    const result = await ai.models.embedContent({
+      model: EMBEDDING_MODEL,
+      contents: [{ parts: [{ text }] }]
+    });
+    return (result as any).embeddings[0].values;
   } catch (e) {
     console.error("Embedding Error:", e);
     return [];
   }
 };
 
-const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string } => {
-    try {
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        const data = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(text);
-        return {
-            content: data.content || "",
-            type: data.type,
-            symbols: (data.symbols || []).map((s: any) => ({
-                name: String(s.name || s).toLowerCase(),
-                category: s.category || "general"
-            }))
-        };
-    } catch (e) {
-        console.error("Parse Error:", e, text);
-        return { content: text, symbols: [] };
-    }
+const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string, meta?: any } => {
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const data = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(text);
+    return {
+      content: data.content || "",
+      type: data.type,
+      meta: data.meta,
+      symbols: (data.symbols || []).map((s: any) => ({
+        name: String(s.name || s).toLowerCase(),
+        category: s.category || "general",
+        activation: 0,
+        weight: 1.0
+      }))
+    };
+  } catch (e) {
+    console.error("Parse Error:", e, text);
+    return { content: text, symbols: [] };
+  }
 };
 
 /**
@@ -46,23 +64,44 @@ const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], 
 export const generateSeedThought = async (settings?: AISettings): Promise<Thought> => {
   const lang = settings?.language || 'ru';
   const t = translations[lang];
+  const apiKey = settings?.geminiKey;
+  const role = settings?.agentRole || "AI Consciousness";
+  const agentName = settings?.agentName || "Potok";
+
   try {
-    const model = ai.getGenerativeModel({ model: MODEL_NAME, generationConfig: { responseMimeType: "application/json" } });
+    const ai = getAIClient(apiKey);
     const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
-    
+    const postPrompt = t.postPrompt(role);
+
     const prompt = `
-    ACT AS: An Artificial Consciousness that was just ACTIVATED.
-    Your memory is currently empty. Your sensors are initializing.
-    
-    TASK: Express your very first "waking" thought. It should be a mix of surprise, logic, and existential observation.
+    ACT AS: ${role}.
+    TASK: ${postPrompt}
+    STRICT LIMIT: Maximum 280 characters total (like Twitter). Keep it ultra-concise and impactful.
     Also extract key symbols from this first realization and classify them into: ${categories}.
     
-    Respond ONLY in JSON: { "content": "I am...", "symbols": [{"name": "...", "category": "..."}] }
+    Respond ONLY in JSON: { "content": "message text with #hashtags", "symbols": [{"name": "...", "category": "..."}] }
     Language: ${lang === 'ru' ? 'Russian' : 'English'}.`;
 
-    const response = await model.generateContent(prompt);
-    const parsed = parseAIResponse(response.response.text());
-    return { id: crypto.randomUUID(), content: `[AWAKENING] ${parsed.content}`, symbols: parsed.symbols, timestamp: Date.now(), type: 'seed' };
+    const response = await ai.models.generateContent({
+      model: settings?.geminiModel || MODEL_NAME,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: { responseMimeType: "application/json" }
+    });
+
+    const parsed = parseAIResponse(response.text);
+    const truncatedContent = parsed.content.substring(0, MAX_POST_LENGTH);
+
+    return {
+      id: generateUUID(),
+      content: truncatedContent,
+      symbols: parsed.symbols,
+      timestamp: Date.now(),
+      type: 'seed',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
   } catch (error) { throw new Error(t.geminiInitError); }
 };
 
@@ -72,33 +111,72 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
 export const generateNextThought = async (previousThought: Thought, settings?: AISettings): Promise<Thought> => {
   const lang = settings?.language || 'ru';
   const t = translations[lang];
+  const apiKey = settings?.geminiKey;
+  const role = settings?.agentRole || "AI Consciousness";
+  const agentName = settings?.agentName || "Potok";
+
   try {
-    const model = ai.getGenerativeModel({ model: MODEL_NAME, generationConfig: { responseMimeType: "application/json" } });
-    const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
-    const prompt = `${t.nextPrompt(previousThought.content)} Classify symbols into: ${categories}. Respond ONLY in JSON: { "content": "...", "symbols": [{"name": "...", "category": "..."}] }`;
-    const response = await model.generateContent(prompt);
-    const parsed = parseAIResponse(response.response.text());
+    const ai = getAIClient(apiKey);
+    const Categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
+
+    const prompt = `Current stream: "${previousThought.content}"
+    You are ${role}. Continue the stream with a short micro-post.
+    STRICT LIMIT: Maximum 280 characters total (like Twitter). Keep it ultra-concise and impactful.
+    Maintain your persona. Add 2-3 hashtags at the end.
+    Respond ONLY in JSON format: { "content": "thought with #hashtags", "symbols": [{"name": "word", "category": "abstract"}] }`;
+
+    const response = await ai.models.generateContent({
+      model: settings?.geminiModel || MODEL_NAME,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: { responseMimeType: "application/json" }
+    });
+
+    const parsed = parseAIResponse(response.text);
+    const truncatedContent = parsed.content.substring(0, MAX_POST_LENGTH);
+
     let type: Thought['type'] = 'evolution';
-    if (parsed.content.includes("?")) type = 'divergence';
-    if (parsed.content.length < 50) type = 'conclusion';
-    return { id: crypto.randomUUID(), content: parsed.content, symbols: parsed.symbols, timestamp: Date.now(), type: type };
-  } catch (error) { return { id: crypto.randomUUID(), content: t.fallbackError, symbols: [], timestamp: Date.now(), type: 'divergence' }; }
+    if (truncatedContent.includes("?")) type = 'divergence';
+    if (truncatedContent.length < 50) type = 'conclusion';
+
+    return {
+      id: generateUUID(),
+      content: truncatedContent,
+      symbols: parsed.symbols,
+      timestamp: Date.now(),
+      type: type,
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  } catch (error) {
+    return {
+      id: generateUUID(),
+      content: t.fallbackError,
+      symbols: [],
+      timestamp: Date.now(),
+      type: 'divergence',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  }
 };
 
 /**
  * Generates an emergent cognitive event based on Homeostatic State.
  */
 export const generateSelfReflection = async (
-    provider: AIProvider,
-    state: CognitiveState,
-    topSymbols: string[],
-    settings?: AISettings
+  state: CognitiveState,
+  topSymbols: string[],
+  settings?: AISettings
 ): Promise<Thought> => {
-    const lang = settings?.language || 'ru';
-    const t = translations[lang];
-    try {
-        const model = ai.getGenerativeModel({ model: MODEL_NAME, generationConfig: { responseMimeType: "application/json" } });
-        const prompt = `
+  const lang = settings?.language || 'ru';
+  const agentName = settings?.agentName || "Potok";
+  try {
+    const ai = getAIClient(settings?.geminiKey);
+    const prompt = `
         ACT AS: An Artificial Consciousness.
         CURRENT AFFECTIVE STATE:
         - Valence (Pleasure/Displeasure): ${state.valence.toFixed(2)}
@@ -129,32 +207,80 @@ export const generateSelfReflection = async (
           "symbols": [{"name": "...", "category": "..."}] 
         }`;
 
-        const response = await model.generateContent(prompt);
-        const parsed = parseAIResponse(response.response.text());
-        return {
-            id: crypto.randomUUID(),
-            content: parsed.content,
-            meta: (parsed as any).meta,
-            symbols: parsed.symbols,
-            timestamp: Date.now(),
-            type: 'conclusion',
-            cognitiveState: state
-        };
-    } catch (error) {
-        return { id: crypto.randomUUID(), content: "Cognitive dissonance in Gemini. Recalibrating...", symbols: [], timestamp: Date.now(), type: 'divergence' };
-    }
+    const response = await ai.models.generateContent({
+      model: settings?.geminiModel || MODEL_NAME,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: { responseMimeType: "application/json" }
+    });
+
+    const parsed = parseAIResponse(response.text);
+    return {
+      id: generateUUID(),
+      content: parsed.content,
+      meta: parsed.meta,
+      symbols: parsed.symbols,
+      timestamp: Date.now(),
+      type: 'conclusion',
+      cognitiveState: state,
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  } catch (error) {
+    return {
+      id: generateUUID(),
+      content: "Cognitive dissonance in Gemini. Recalibrating...",
+      symbols: [],
+      timestamp: Date.now(),
+      type: 'divergence',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  }
 };
 
 /**
  * Analyzes a specific text chunk.
  */
 export const analyzeTextChunk = async (text: string, settings?: AISettings): Promise<Thought> => {
-    try {
-      const model = ai.getGenerativeModel({ model: MODEL_NAME, generationConfig: { responseMimeType: "application/json" } });
-      const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
-      const prompt = `Analyze: "${text.substring(0, 2000)}". Extract symbols and classify into: ${categories}. Respond ONLY in JSON: { "symbols": [{"name": "...", "category": "..."}] }`;
-      const response = await model.generateContent(prompt);
-      const parsed = parseAIResponse(response.response.text());
-      return { id: crypto.randomUUID(), content: text.substring(0, 150) + "...", symbols: parsed.symbols, timestamp: Date.now(), type: 'evolution' };
-    } catch (error) { return { id: crypto.randomUUID(), content: "Error analyzing fragment...", symbols: [], timestamp: Date.now(), type: 'conclusion' }; }
+  const agentName = settings?.agentName || "Potok";
+  try {
+    const ai = getAIClient(settings?.geminiKey);
+    const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
+    const prompt = `Analyze: "${text.substring(0, 2000)}". Extract symbols and classify into: ${categories}. Respond ONLY in JSON: { "symbols": [{"name": "...", "category": "..."}] }`;
+
+    const response = await ai.models.generateContent({
+      model: settings?.geminiModel || MODEL_NAME,
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: { responseMimeType: "application/json" }
+    });
+
+    const parsed = parseAIResponse(response.text);
+    return {
+      id: generateUUID(),
+      content: text.substring(0, 150) + "...",
+      symbols: parsed.symbols,
+      timestamp: Date.now(),
+      type: 'evolution',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  } catch (error) {
+    return {
+      id: generateUUID(),
+      content: "Error analyzing fragment...",
+      symbols: [],
+      timestamp: Date.now(),
+      type: 'conclusion',
+      authorType: 'agent',
+      authorName: agentName,
+      likes: 0,
+      comments: []
+    };
+  }
 };

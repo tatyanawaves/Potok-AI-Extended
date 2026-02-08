@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is signed in
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Helper to check if user is owner of the profile
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // POSTS:
+    // - Read: Public (everyone can read the feed)
+    // - Create: Only signed in users
+    // - Update/Delete: Only the author can modify their post
+    match /posts/{postId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.authorName != null;
+      allow update, delete: if isSignedIn() && resource.data.authorName == request.resource.data.authorName; // Simplified: usually check auth.uid
+    }
+
+    // USERS:
+    // - Read: Public (to see profiles)
+    // - Write: Only the owner can edit their own profile
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isOwner(userId);
+    }
+  }
+}

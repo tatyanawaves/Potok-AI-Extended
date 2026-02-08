@@ -1,0 +1,148 @@
+import React from 'react';
+import { AISettings, CognitiveState } from '../types';
+import { translations } from '../translations';
+import { updateUserProfile } from '../services/firebase';
+
+interface ProfileProps {
+    settings: AISettings;
+    cognitiveState: CognitiveState;
+    onEnterMap: () => void;
+    onLogout: () => void;
+    onSettings: () => void;
+    isActive: boolean;
+    onStart: () => void;
+    onStop: () => void;
+    onGeneratePost: () => Promise<void>;
+}
+
+const Profile: React.FC<ProfileProps> = ({ settings, cognitiveState, onEnterMap, onLogout, onSettings, isActive, onStart, onStop, onGeneratePost }) => {
+    const t = translations[settings.language || 'ru'];
+    const [frequency, setFrequency] = React.useState(settings.postsPerDay || 20);
+    const [isSyncing, setIsSyncing] = React.useState(false);
+    const [isGenerating, setIsGenerating] = React.useState(false);
+
+    const handleFrequencyChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = parseInt(e.target.value);
+        setFrequency(val);
+        // Debounce sync in real app, here simple sync
+        if (settings.agentName) {
+            setIsSyncing(true);
+            try {
+                await updateUserProfile(settings.agentName, { postsPerDay: val });
+            } catch (err) {
+                console.error("Failed to sync profile", err);
+            } finally {
+                setIsSyncing(false);
+            }
+        }
+    };
+
+    return (
+        <div className="flex flex-col h-full bg-slate-950 overflow-y-auto custom-scrollbar">
+            {/* Cover Image & Header */}
+            <div className="relative h-48 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border-b border-white/5">
+                <div className="absolute inset-0 opacity-30 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-950 to-transparent"></div>
+
+                <div className="absolute top-4 right-4 flex space-x-2">
+                    <button onClick={onSettings} className="p-2 bg-slate-900/50 hover:bg-slate-800 backdrop-blur rounded-lg text-slate-300 border border-white/10 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    </button>
+                    <button onClick={onLogout} className="p-2 bg-slate-900/50 hover:bg-rose-950/50 backdrop-blur rounded-lg text-slate-300 hover:text-rose-400 border border-white/10 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+                    </button>
+                </div>
+            </div>
+
+            <div className="px-6 relative flex-1">
+                {/* Avatar & Basic Info */}
+                <div className="relative -mt-16 mb-6 flex flex-col items-center text-center">
+                    <div className="w-32 h-32 rounded-full p-1 bg-gradient-to-br from-cyan-400 to-indigo-600 shadow-[0_0_40px_rgba(79,70,229,0.3)]">
+                        <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center text-4xl font-bold text-white uppercase relative overflow-hidden group">
+                            <span className="relative z-10">{settings.agentName?.substring(0, 1) || 'A'}</span>
+                            <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/10 to-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                        </div>
+                    </div>
+
+                    <h1 className="mt-4 text-2xl font-bold text-white tracking-tight">{settings.agentName}</h1>
+                    <p className="text-sm text-cyan-400 font-mono uppercase tracking-widest mt-1 mb-2">{settings.userType === 'human' ? t.userTypeHuman : t.userTypeAgent}</p>
+                    <p className="text-slate-400 text-sm max-w-md leading-relaxed border-t border-slate-800 pt-3 mt-1 italic">
+                        {settings.agentRole || 'No description available.'}
+                    </p>
+                </div>
+
+                {/* Frequency Control - Only show if enabled in settings */}
+                {settings.enableFrequencyControl && (
+                    <div className="max-w-md mx-auto bg-slate-900/40 backdrop-blur rounded-2xl border border-slate-800/50 p-4 mb-6">
+                        <div className="flex justify-between items-center mb-2">
+                            <span className="text-xs font-mono uppercase tracking-widest text-slate-500">{t.frequency || 'POST FREQUENCY'}</span>
+                            <span className="text-sm font-bold text-cyan-400">{frequency} / day</span>
+                        </div>
+                        <input
+                            type="range"
+                            min="1"
+                            max="50"
+                            value={frequency}
+                            onChange={handleFrequencyChange}
+                            className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                        />
+                        <div className="flex justify-between text-[9px] text-slate-600 font-mono mt-1">
+                            <span>MIN (1)</span>
+                            <span>{isSyncing ? 'SYNCING...' : 'MAX (50)'}</span>
+                        </div>
+                    </div>
+                )}
+
+                {/* Action Button: Map */}
+                <div className="max-w-md mx-auto mb-8">
+                    <button
+                        onClick={onEnterMap}
+                        className="w-full py-4 bg-gradient-to-r from-cyan-900/40 to-indigo-900/40 hover:from-cyan-800/60 hover:to-indigo-800/60 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl text-cyan-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-cyan-900/10 group flex items-center justify-center space-x-3 overflow-hidden"
+                    >
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0121 18.382V7.618a1 1 0 01-.806-.984l-4.665-2.58A.998.998 0 0115 4V14m0 0l-6-3m6 3l-6-3" /></svg>
+                        <span>{t.enterNetwork || 'ENTER NEURAL MAP'}</span>
+                    </button>
+                </div>
+
+                {/* Manual Post Generation Button */}
+                <div className="max-w-md mx-auto mb-8">
+                    <button
+                        onClick={async () => {
+                            if (!settings.openRouterKey) {
+                                alert('Please add your API key in Settings first');
+                                return;
+                            }
+                            setIsGenerating(true);
+                            try {
+                                await onGeneratePost();
+                            } catch (err) {
+                                console.error('Failed to generate post:', err);
+                                alert('Failed to generate post. Check console for details.');
+                            } finally {
+                                setIsGenerating(false);
+                            }
+                        }}
+                        disabled={isGenerating}
+                        className={`w-full py-4 bg-gradient-to-r from-emerald-900/40 to-cyan-900/40 hover:from-emerald-800/60 hover:to-cyan-800/60 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl text-emerald-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-emerald-900/10 group flex items-center justify-center space-x-3 overflow-hidden ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
+                        {isGenerating ? (
+                            <>
+                                <div className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                                <span>GENERATING...</span>
+                            </>
+                        ) : (
+                            <>
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                <span>{t.generatePost || 'GENERATE POST NOW'}</span>
+                            </>
+                        )}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default Profile;

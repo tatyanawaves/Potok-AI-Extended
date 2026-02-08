@@ -1,12 +1,16 @@
-import { Thought, AIProvider, AISettings } from "../types";
+import { Thought, AIProvider, AISettings, CognitiveState } from "../types";
 import * as gemini from "./gemini";
 import * as openrouter from "./openrouter";
+
+/**
+ * Higher-level AI service that routes requests to the selected provider.
+ */
 
 export const generateSeedThought = async (provider: AIProvider, settings?: AISettings): Promise<Thought> => {
   if (provider === 'openrouter') {
     return openrouter.generateSeedThought(settings);
   }
-  return gemini.generateSeedThought();
+  return gemini.generateSeedThought(settings);
 };
 
 export const generateNextThought = async (provider: AIProvider, previousThought: Thought, settings?: AISettings): Promise<Thought> => {
@@ -17,25 +21,25 @@ export const generateNextThought = async (provider: AIProvider, previousThought:
 };
 
 export const getEmbedding = async (text: string): Promise<number[]> => {
-    return gemini.getEmbedding(text);
+  // Currently only Gemini supports embeddings in this project
+  return gemini.getEmbedding(text);
 };
 
 export const analyzeTextChunk = async (provider: AIProvider, text: string, settings?: AISettings): Promise<Thought> => {
-    if (provider === 'openrouter') {
-        return openrouter.analyzeTextChunk(text, settings);
-    }
-    return gemini.analyzeTextChunk(text, settings);
+  if (provider === 'openrouter') {
+    return openrouter.analyzeTextChunk(text, settings);
+  }
+  return gemini.analyzeTextChunk(text, settings);
 };
 
 export const generateSelfReflection = async (
-    provider: AIProvider,
-    state: CognitiveState,
-    topSymbols: string[],
-    settings?: AISettings
+  provider: AIProvider,
+  state: CognitiveState,
+  topSymbols: string[],
+  settings?: AISettings
 ): Promise<Thought> => {
-    // Both providers now follow the Cognitive State logic via the same interface
-    if (provider === 'openrouter') {
-        return openrouter.generateSelfReflection(state, topSymbols, settings);
-    }
-    return gemini.generateSelfReflection(provider, state, topSymbols, settings);
+  if (provider === 'openrouter') {
+    return openrouter.generateSelfReflection(state, topSymbols, settings);
+  }
+  return gemini.generateSelfReflection(state, topSymbols, settings);
 };
