@@ -9,7 +9,7 @@ import { parseDocument } from './services/documentParser';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
 import { getAIClient } from './services/gemini';
-import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, toggleLike, auth } from './services/firebase';
+import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, toggleLike, auth, loginAnonymously, deletePost } from './services/firebase';
 import { secureStorage } from './services/encryption';
 
 
@@ -43,11 +43,14 @@ const App: React.FC = () => {
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [symbolWeights, setSymbolWeights] = useState<Map<string, number>>(new Map());
   const [mapThoughts, setMapThoughts] = useState<Thought[]>([]);
+  const [firebaseReady, setFirebaseReady] = useState(false);
 
   const [cognitiveState, setCognitiveState] = useState<CognitiveState>({
     valence: 0, arousal: 0, entropy: 0, complexity: 0, predictionError: 0,
     dopamine: 0, peakDopamine: 0, avgDopamine: 0, dopamineHistory: []
   });
+
+  const [postToDelete, setPostToDelete] = useState<string | null>(null);
 
   const isThinkingRef = useRef(isThinking);
   const isCycleRunningRef = useRef(isCycleRunning);
@@ -95,8 +98,22 @@ const App: React.FC = () => {
       });
     };
 
-    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
-      setupFeed(user);
+    const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
+      console.log("[Auth] State changed, user:", user?.uid || "null");
+      if (!user) {
+        setFirebaseReady(false);
+        // Fallback: Anonymous sign in so likes/comments still work
+        try {
+          console.log("[Auth] Attempting anonymous sign-in...");
+          await loginAnonymously();
+        } catch (err) {
+          console.error("[Auth] Anonymous sign-in failed", err);
+        }
+      } else {
+        console.log("[Auth] Firebase ready, setting up feed for:", user.uid);
+        setFirebaseReady(true);
+        setupFeed(user);
+      }
     });
 
     return () => {
@@ -145,14 +162,17 @@ const App: React.FC = () => {
   };
 
   const handleAddComment = async (thoughtId: string, content: string) => {
+    console.log("Adding comment to:", thoughtId, content);
     try {
       await addComment(thoughtId, {
         content: content,
         authorName: settings.agentName || 'Neo',
         authorType: settings.userType
       });
-    } catch (error) {
+      console.log("Comment added successfully");
+    } catch (error: any) {
       console.error("Error adding comment:", error);
+      alert("Ошибка при добавлении комментария: " + error.message);
     }
   };
 
@@ -182,7 +202,12 @@ const App: React.FC = () => {
   }, [settingsRef, translations, getAIClient]);
 
   const handleLike = async (thoughtId: string) => {
-    if (!auth.currentUser) return;
+    console.log("Toggling like for:", thoughtId);
+    if (!auth.currentUser) {
+      console.warn("User not logged in, cannot like");
+      alert("Нужно войти в систему, чтобы ставить лайки");
+      return;
+    }
 
     // RECOMMENDATION ALGORITHM: Update symbol weights based on likes
     const targetPost = thoughts.find(t => t.id === thoughtId);
@@ -205,9 +230,30 @@ const App: React.FC = () => {
 
     try {
       await toggleLike(thoughtId, auth.currentUser.uid);
-    } catch (err) {
+      console.log("Like toggled successfully");
+    } catch (err: any) {
       console.error("Failed to toggle like", err);
+      alert("Ошибка при нажатии лайка: " + err.message);
     }
+  };
+
+  const handleDeletePost = (postId: string) => {
+    setPostToDelete(postId);
+  };
+
+  const confirmDelete = async () => {
+    if (!postToDelete) return;
+    try {
+      await deletePost(postToDelete);
+      setPostToDelete(null);
+    } catch (err: any) {
+      console.error("Failed to delete post", err);
+      alert("Ошибка при удалении поста: " + err.message);
+    }
+  };
+
+  const cancelDelete = () => {
+    setPostToDelete(null);
   };
 
   const handleHumanPost = async (content: string) => {
@@ -373,22 +419,26 @@ const App: React.FC = () => {
     if (!file) return;
     try {
       setIsProcessingDoc(true); setIsThinking(true); isThinkingRef.current = true;
+      
       const doc = await parseDocument(file);
-      setThoughts([{
-        id: crypto.randomUUID(),
+      await createPost({
         content: `[SYSTEM] Processing: ${file.name}`,
         symbols: [],
-        timestamp: Date.now(),
         type: 'seed',
         authorType: 'agent',
         authorName: settings.agentName || 'Neo',
-        likes: 0,
-        comments: []
-      }]);
+        authorId: auth.currentUser?.uid
+      });
+
       for (const chunk of doc.chunks) {
         if (!isThinkingRef.current) break;
         const analysis = await analyzeTextChunk(provider, chunk, settingsRef.current);
-        setThoughts(prev => [...prev, analysis]);
+        await createPost({
+          ...analysis,
+          authorType: 'agent',
+          authorName: settings.agentName || 'Neo',
+          authorId: auth.currentUser?.uid
+        });
         await new Promise(r => setTimeout(r, 800));
       }
     } catch (err: any) { setError(t.uploadError + ": " + err.message); }
@@ -456,7 +506,8 @@ const App: React.FC = () => {
       await createPost({
         ...reflection,
         authorType: 'agent',
-        authorName: settingsRef.current.agentName || 'Agent'
+        authorName: settingsRef.current.agentName || 'Agent',
+        authorId: auth.currentUser?.uid
       });
     } catch (e: any) { setError(e.message); setIsCycleRunning(false); }
   }, [provider, thoughts, cognitiveState]);
@@ -529,13 +580,11 @@ const App: React.FC = () => {
 
       if (!isThinkingRef.current || isCycleRunningRef.current) return;
 
-      const enrichedThought: Thought = {
+      const enrichedThought = {
         ...nextThought,
         authorType: 'agent',
         authorName: settingsRef.current.agentName || 'Agent',
         authorId: auth.currentUser?.uid,
-        likes: Math.floor(Math.random() * 5), // Simulated community likes
-        isLiked: false
       };
 
       console.log('[processThoughtLoop] Saving post to Firestore...');
@@ -588,13 +637,11 @@ const App: React.FC = () => {
       const nextThought = await generateSeedThought(provider, settingsRef.current);
       console.log('[handleGeneratePost] Generated:', nextThought.content);
 
-      const enrichedThought: Thought = {
+      const enrichedThought = {
         ...nextThought,
         authorType: 'agent',
         authorName: settingsRef.current.agentName || 'Agent',
         authorId: auth.currentUser?.uid,
-        likes: Math.floor(Math.random() * 5),
-        isLiked: false
       };
 
       console.log('[handleGeneratePost] Saving to Firestore...');
@@ -687,6 +734,24 @@ const App: React.FC = () => {
           }
         </div>
       </div>
+      {/* Custom Confirmation Modal */}
+      {postToDelete && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
+          <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full mx-4 transform transition-all scale-100">
+            <h3 className="text-lg font-bold text-white mb-2">Подтверждение</h3>
+            <p className="text-slate-400 text-sm mb-6">Вы действительно хотите удалить этот пост? Это действие нельзя отменить.</p>
+            <div className="flex space-x-3">
+              <button onClick={cancelDelete} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors">
+                {t.cancel || 'Отмена'}
+              </button>
+              <button onClick={confirmDelete} className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-500 font-bold shadow-lg shadow-rose-900/20 transition-colors">
+                Удалить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 relative overflow-hidden bg-slate-950">
 
         {/* VIEW: MAP */}
@@ -727,6 +792,7 @@ const App: React.FC = () => {
             onFollow={handleFollow}
             onUnfollow={handleUnfollow}
             onAddComment={handleAddComment}
+            onDelete={handleDeletePost}
             subscribedAgents={subscribedAgents}
             onPostCreated={handleHumanPost}
           />
@@ -749,6 +815,7 @@ const App: React.FC = () => {
               onFollow={handleFollow}
               onUnfollow={handleUnfollow}
               onAddComment={handleAddComment}
+              onDelete={handleDeletePost}
               subscribedAgents={subscribedAgents}
               processingMode={isProcessingDoc ? 'document' : (isCycleRunning ? 'generation' : 'generation')}
             />

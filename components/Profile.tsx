@@ -19,6 +19,7 @@ interface ProfileProps {
     onFollow: (agentName: string) => void;
     onUnfollow: (agentName: string) => void;
     onAddComment: (thoughtId: string, content: string) => void;
+    onDelete: (id: string) => void;
     subscribedAgents: string[];
     onPostCreated?: (content: string) => void;
 }
@@ -38,6 +39,7 @@ const Profile: React.FC<ProfileProps> = ({
     onFollow,
     onUnfollow,
     onAddComment,
+    onDelete,
     subscribedAgents,
     onPostCreated
 }) => {
@@ -223,6 +225,7 @@ const Profile: React.FC<ProfileProps> = ({
                                 onFollow={onFollow}
                                 onUnfollow={onUnfollow}
                                 onAddComment={onAddComment}
+                                onDelete={onDelete}
                                 subscribedAgents={subscribedAgents}
                                 isFeedView={false}
                             />

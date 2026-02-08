@@ -1,7 +1,7 @@
 
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs } from 'firebase/firestore';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs, increment, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously } from 'firebase/auth';
 import { getAnalytics } from "firebase/analytics";
 
 // TODO: Replace with your project's config object
@@ -57,6 +57,16 @@ export const loginWithEmail = async (email, password) => {
     }
 };
 
+export const loginAnonymously = async () => {
+    try {
+        const userCredential = await signInAnonymously(auth);
+        return userCredential.user;
+    } catch (error) {
+        console.error("Error signing in anonymously", error);
+        throw error;
+    }
+};
+
 // Collection References
 export const postsRef = collection(db, 'posts');
 export const usersRef = collection(db, 'users');
@@ -75,6 +85,15 @@ export const subscribeToFeed = (callback: (posts: any[]) => void) => {
 };
 
 export const createPost = async (postData: any) => {
+    if (!postData.authorId) {
+        console.warn("[Firebase] Warning: Creating post without authorId! This post will not be deletable.", postData);
+        // Try to patch it if user is logged in
+        if (auth.currentUser) {
+            console.log("[Firebase] Patching missing authorId with current user.");
+            postData.authorId = auth.currentUser.uid;
+        }
+    }
+
     return await addDoc(postsRef, {
         ...postData,
         timestamp: Date.now(),
@@ -96,38 +115,83 @@ export const getUserProfile = async (userId: string) => {
 };
 
 export const addComment = async (postId: string, commentData: any) => {
+    console.log(`[Firebase] Attempting to add comment to post: ${postId}`, commentData);
     const postRef = doc(db, 'posts', postId);
-    const postSnap = await getDoc(postRef);
-    if (postSnap.exists()) {
-        const post = postSnap.data();
-        const comments = post.comments || [];
-        const generateUUID = () => {
-            if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-                return crypto.randomUUID();
-            }
-            return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-        };
-        comments.push({
-            id: generateUUID(),
-            timestamp: Date.now(),
-            ...commentData
+    const generateUUID = () => {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+            return crypto.randomUUID();
+        }
+        return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    };
+
+    const newComment = {
+        id: generateUUID(),
+        timestamp: Date.now(),
+        ...commentData
+    };
+
+    try {
+        await updateDoc(postRef, {
+            comments: arrayUnion(newComment)
         });
-        await updateDoc(postRef, { comments });
+        console.log(`[Firebase] Comment added successfully to ${postId}`);
+    } catch (error) {
+        console.error(`[Firebase] Error adding comment to ${postId}:`, error);
+        throw error;
     }
 };
-export const toggleLike = async (postId: string, userId: string) => {
-    const postRef = doc(db, 'posts', postId);
-    const postSnap = await getDoc(postRef);
-    if (postSnap.exists()) {
-        const post = postSnap.data();
-        const likes = post.likes || 0;
-        const likedBy = post.likedBy || [];
-        const isLiked = likedBy.includes(userId);
 
-        await updateDoc(postRef, {
-            likes: isLiked ? Math.max(0, likes - 1) : likes + 1,
-            likedBy: isLiked ? likedBy.filter(id => id !== userId) : [...likedBy, userId]
-        });
+export const toggleLike = async (postId: string, userId: string) => {
+    console.log(`[Firebase] Toggling like for post: ${postId} by user: ${userId}`);
+    const postRef = doc(db, 'posts', postId);
+    
+    try {
+        const postSnap = await getDoc(postRef);
+
+        if (postSnap.exists()) {
+            const post = postSnap.data();
+            const likedBy = post.likedBy || [];
+            const isLiked = likedBy.includes(userId);
+
+            await updateDoc(postRef, {
+                likes: increment(isLiked ? -1 : 1),
+                likedBy: isLiked ? arrayRemove(userId) : arrayUnion(userId)
+            });
+            console.log(`[Firebase] Like toggled successfully for ${postId}. New state: ${!isLiked}`);
+        } else {
+            console.error(`[Firebase] Post ${postId} does not exist`);
+            throw new Error("Пост не найден в базе данных");
+        }
+    } catch (error) {
+        console.error(`[Firebase] Error toggling like for ${postId}:`, error);
+        throw error;
+    }
+};
+
+export const deletePost = async (postId: string) => {
+    console.log(`[Firebase] Attempting to delete post: ${postId}`);
+    const postRef = doc(db, 'posts', postId);
+    
+    try {
+        // Debug: Check document ownership before deleting
+        const docSnap = await getDoc(postRef);
+        if (docSnap.exists()) {
+            const data = docSnap.data();
+            const currentUid = auth.currentUser?.uid;
+            console.log(`[Firebase] Debug Delete: Post AuthorId: '${data.authorId}', Current User UID: '${currentUid}'`);
+            
+            if (data.authorId !== currentUid) {
+                console.warn(`[Firebase] ID Mismatch! You cannot delete this post because you are not the author.`);
+            }
+        } else {
+             console.warn(`[Firebase] Document ${postId} does not exist before delete.`);
+        }
+
+        await deleteDoc(postRef);
+        console.log(`[Firebase] Post deleted successfully: ${postId}`);
+    } catch (error) {
+        console.error(`[Firebase] Error deleting post ${postId}:`, error);
+        throw error;
     }
 };
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Thought, Comment } from '../types';
 import { translations } from '../translations';
+import { auth } from '../services/firebase';
 
 interface PostCardProps {
     thought: Thought;
@@ -11,6 +12,7 @@ interface PostCardProps {
     onFollow?: (agentName: string) => void;
     onUnfollow?: (agentName: string) => void;
     onAddComment?: (thoughtId: string, content: string) => void;
+    onDelete?: (id: string) => void;
     subscribedAgents: string[];
     isFeedView?: boolean;
     getTypeStyle?: (type: Thought['type']) => string;
@@ -25,6 +27,7 @@ const PostCard: React.FC<PostCardProps> = ({
     onFollow,
     onUnfollow,
     onAddComment,
+    onDelete,
     subscribedAgents,
     isFeedView = true,
     getTypeStyle
@@ -65,7 +68,7 @@ const PostCard: React.FC<PostCardProps> = ({
     const styleClass = getTypeStyle ? getTypeStyle(thought.type) : defaultGetTypeStyle(thought.type);
 
     return (
-        <div className={`mb-4 rounded-2xl border ${thought.authorType === 'human' ? 'border-slate-800 bg-slate-900/40' : styleClass} overflow-hidden transition-all duration-500 animate-[fadeIn_0.5s_ease-out]`}>
+        <div className={`group mb-4 rounded-2xl border ${thought.authorType === 'human' ? 'border-slate-800 bg-slate-900/40' : styleClass} overflow-hidden transition-all duration-500 animate-[fadeIn_0.5s_ease-out]`}>
             {/* Post Header */}
             <div className="flex justify-between items-center p-4 pb-2">
                 <div className="flex items-center space-x-3">
@@ -81,6 +84,19 @@ const PostCard: React.FC<PostCardProps> = ({
                         </div>
                     </div>
                 </div>
+
+                {/* Delete button (only for author) */}
+                {(thought.authorId === auth.currentUser?.uid || (thought.authorName === agentName && thought.authorType === userType)) && (
+                    <button
+                        onClick={() => onDelete && onDelete(thought.id)}
+                        className="p-1.5 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                        title="Удалить пост"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                    </button>
+                )}
             </div>
 
             {/* Post Body */}
@@ -144,7 +160,7 @@ const PostCard: React.FC<PostCardProps> = ({
             </div>
 
             {/* Comments Section */}
-            {(thought.comments && thought.comments.length > 0) || userType === 'human' ? (
+            {(thought.comments && thought.comments.length > 0) || true ? (
                 <div className="bg-slate-950/30 border-t border-white/5 p-3 space-y-3">
                     {thought.comments && thought.comments.map(comment => (
                         <div key={comment.id} className="flex space-x-2 pl-2 border-l-2 border-slate-800">
@@ -153,26 +169,24 @@ const PostCard: React.FC<PostCardProps> = ({
                         </div>
                     ))}
 
-                    {userType === 'human' && (
-                        <div className="relative">
-                            <input
-                                type="text"
-                                value={commentInput}
-                                onChange={(e) => setCommentInput(e.target.value)}
-                                placeholder={t.addComment}
-                                className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-3 pr-10 py-2 text-xs focus:outline-none focus:border-slate-600 transition-colors"
-                                onKeyDown={(e) => { if (e.key === 'Enter') handleComment(); }}
-                            />
-                            <button
-                                onClick={handleComment}
-                                className={`absolute right-1 top-1 p-1 rounded-md transition-colors ${commentInput.trim() ? 'text-cyan-400 hover:bg-slate-800' : 'text-slate-600'}`}
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                                </svg>
-                            </button>
-                        </div>
-                    )}
+                    <div className="relative">
+                        <input
+                            type="text"
+                            value={commentInput}
+                            onChange={(e) => setCommentInput(e.target.value)}
+                            placeholder={t.addComment}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-3 pr-10 py-2 text-xs focus:outline-none focus:border-slate-600 transition-colors"
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleComment(); }}
+                        />
+                        <button
+                            onClick={handleComment}
+                            className={`absolute right-1 top-1 p-1 rounded-md transition-colors ${commentInput.trim() ? 'text-cyan-400 hover:bg-slate-800' : 'text-slate-600'}`}
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             ) : null}
         </div>

@@ -14,6 +14,7 @@ interface ThoughtLogProps {
   onFollow?: (agentName: string) => void;
   onUnfollow?: (agentName: string) => void;
   onAddComment?: (thoughtId: string, content: string) => void;
+  onDelete?: (id: string) => void;
   subscribedAgents?: string[];
   symbolWeights?: Map<string, number>;
   onPostCreated?: (content: string) => void;
@@ -30,6 +31,7 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
   onFollow,
   onUnfollow,
   onAddComment,
+  onDelete,
   subscribedAgents = [],
   symbolWeights = new Map(),
   onPostCreated
@@ -96,6 +98,7 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
                   onFollow={onFollow}
                   onUnfollow={onUnfollow}
                   onAddComment={onAddComment}
+                  onDelete={onDelete}
                   subscribedAgents={subscribedAgents}
                   getTypeStyle={getTypeStyle}
                 />
