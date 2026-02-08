@@ -4,6 +4,8 @@ export type Language = 'ru' | 'en';
 export interface AISettings {
   openRouterKey: string;
   openRouterModel: string;
+  geminiKey?: string;
+  geminiModel?: string;
   apiBaseUrl?: string;
   language: Language;
   decaySpeed: number; // 0.1 to 2.0

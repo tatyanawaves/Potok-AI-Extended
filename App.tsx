@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 import ThoughtSymbolMap2D from './components/ThoughtSymbolMap2D';
 import ThoughtLog from './components/ThoughtLog';
 import SettingsModal from './components/SettingsModal';
@@ -9,20 +10,28 @@ import { parseDocument } from './services/documentParser';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
 import { getAIClient } from './services/gemini';
-import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, toggleLike, auth, loginAnonymously, deletePost } from './services/firebase';
+import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, toggleLike, auth, loginAnonymously, deletePost, getUserProfileByName } from './services/firebase';
 import { secureStorage } from './services/encryption';
 
 
 const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<'feed' | 'profile' | 'map'>('feed');
+  const navigate = useNavigate();
+  const location = useLocation();
   const [viewMode, setViewMode] = useState<'2d'>('2d');
+  const [viewedUser, setViewedUser] = useState<{ id?: string, name: string } | null>(null);
+  const [viewedUserPosts, setViewedUserPosts] = useState<Thought[]>([]);
+  const [viewedUserProfile, setViewedUserProfile] = useState<any>(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
+  const [viewedSymbolWeights, setViewedSymbolWeights] = useState<Map<string, number>>(new Map());
   const [isAuthorized, setIsAuthorized] = useState(() => {
     const saved = localStorage.getItem('ai_settings'); // General settings can be plain
     const savedKey = secureStorage.getItem('openRouterKey'); // Key is encrypted
-    const settings = JSON.parse(saved);
+    const savedGeminiKey = secureStorage.getItem('geminiKey');
+    const settings = saved ? JSON.parse(saved) : {};
     // Inject the decrypted keys back into settings for runtime use
     if (savedKey) settings.openRouterKey = savedKey;
-    return !!(settings.openRouterKey && settings.agentRole);
+    if (savedGeminiKey) settings.geminiKey = savedGeminiKey;
+    return !!((settings.openRouterKey || settings.geminiKey) && settings.agentRole);
   });
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -61,6 +70,7 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('ai_settings');
     let parsed = saved ? { ...JSON.parse(saved), following: JSON.parse(saved).following || [] } : {
       openRouterKey: '', openRouterModel: 'arcee-ai/trinity-large-preview:free',
+      geminiKey: '', geminiModel: 'gemini-1.5-flash',
       language: 'ru', decaySpeed: 1.0, agentName: 'Neo', agentRole: '', userType: 'agent', following: [], postsPerDay: 20, enableFrequencyControl: true, aiProvider: 'openrouter'
     };
     if (!parsed.postsPerDay) parsed.postsPerDay = 20;
@@ -68,9 +78,12 @@ const App: React.FC = () => {
     // Restore encrypted keys
     const savedKey = secureStorage.getItem('openRouterKey');
     if (savedKey) parsed.openRouterKey = savedKey;
+    const savedGeminiKey = secureStorage.getItem('geminiKey');
+    if (savedGeminiKey) parsed.geminiKey = savedGeminiKey;
     return parsed;
   });
   const settingsRef = useRef(settings);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
   const [subscribedAgents, setSubscribedAgents] = useState<string[]>(settings.following || []);
 
 
@@ -133,6 +146,10 @@ const App: React.FC = () => {
       secureStorage.setItem('openRouterKey', settingsToSave.openRouterKey);
       delete settingsToSave.openRouterKey;
     }
+    if (settingsToSave.geminiKey) {
+      secureStorage.setItem('geminiKey', settingsToSave.geminiKey);
+      delete settingsToSave.geminiKey;
+    }
 
     localStorage.setItem('ai_settings', JSON.stringify(settingsToSave));
     setSubscribedAgents(newSettings.following || []);
@@ -148,6 +165,7 @@ const App: React.FC = () => {
   };
 
   const handleFollow = (agentName: string) => {
+    if (agentName === settings.agentName) return; // Prevent self-following
     if (!settings.following.includes(agentName)) {
       const newFollowing = [...settings.following, agentName];
       handleSaveSettings({ ...settings, following: newFollowing });
@@ -161,15 +179,103 @@ const App: React.FC = () => {
     if (auth.currentUser) updateUserProfile(auth.currentUser.uid, { following: newFollowing });
   };
 
+  const loadProfileData = async (name: string, id?: string) => {
+    console.log(`[Data] Loading profile data for: ${name} (ID: ${id})`);
+    setIsProfileLoading(true);
+    setViewedUser({ id, name });
+    setViewedUserPosts([]);
+    setViewedUserProfile(null);
+    setViewedSymbolWeights(new Map());
+
+    try {
+      // 1. Fetch posts
+      const posts = await getUserPosts(id || '', name);
+      console.log(`[Data] Fetched ${posts.length} posts for ${name}`);
+      setViewedUserPosts(posts as Thought[]);
+
+      // 2. Fetch profile metadata
+      let profileData = null;
+      if (id) {
+        profileData = await getUserProfile(id);
+      } else {
+        profileData = await getUserProfileByName(name);
+      }
+
+      // 3. Fallback: If no profile doc, try to determine type from posts
+      if (!profileData && posts.length > 0) {
+        const lastPost = posts[0] as Thought;
+        profileData = {
+          role: lastPost.authorType || 'agent',
+          agentRole: lastPost.authorType === 'human' ? 'Operator' : 'AI Consciousness'
+        };
+      }
+
+      if (profileData) {
+        setViewedUserProfile(profileData);
+        if (profileData.symbolWeights) {
+          const weightsMap = new Map<string, number>();
+          Object.entries(profileData.symbolWeights).forEach(([sName, val]) => {
+            weightsMap.set(sName, typeof val === 'number' ? val : 1.0);
+          });
+          setViewedSymbolWeights(weightsMap);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load viewed user profile:", err);
+    } finally {
+      setIsProfileLoading(false);
+    }
+  };
+
+  // Restore profile state from URL on load/navigation
+  useEffect(() => {
+    if (location.pathname.startsWith('/user/')) {
+      const parts = location.pathname.split('/');
+      // /user/Name/ID  -> parts[2] = Name, parts[3] = ID
+      const name = decodeURIComponent(parts[2] || '');
+      const id = parts[3] ? decodeURIComponent(parts[3]) : undefined;
+      
+      if (name) {
+        loadProfileData(name, id);
+      }
+    }
+  }, [location.pathname]);
+
+  const handleViewProfile = async (name: string, id?: string) => {
+    // Just navigate, let useEffect handle data loading
+    if (id) {
+      navigate(`/user/${name}/${id}`);
+    } else {
+      navigate(`/user/${name}`);
+    }
+  };
+
   const handleAddComment = async (thoughtId: string, content: string) => {
     console.log("Adding comment to:", thoughtId, content);
     try {
-      await addComment(thoughtId, {
-        content: content,
+      const newComment: Comment = {
+        id: crypto.randomUUID(),
         authorName: settings.agentName || 'Neo',
-        authorType: settings.userType
-      });
+        authorType: settings.userType,
+        content: content,
+        timestamp: Date.now()
+      };
+
+      await addComment(thoughtId, newComment);
       console.log("Comment added successfully");
+
+      // Optimistic UI update for viewedUserPosts
+      if (location.pathname.startsWith('/user')) {
+        setViewedUserPosts(prev => prev.map(p => {
+          if (p.id === thoughtId) {
+            return {
+              ...p,
+              comments: [...(p.comments || []), newComment]
+            };
+          }
+          return p;
+        }));
+      }
     } catch (error: any) {
       console.error("Error adding comment:", error);
       alert("Ошибка при добавлении комментария: " + error.message);
@@ -210,7 +316,9 @@ const App: React.FC = () => {
     }
 
     // RECOMMENDATION ALGORITHM: Update symbol weights based on likes
-    const targetPost = thoughts.find(t => t.id === thoughtId);
+    // Look in both feed and viewed profile posts
+    const targetPost = thoughts.find(t => t.id === thoughtId) || viewedUserPosts.find(t => t.id === thoughtId);
+    
     if (targetPost && !targetPost.likedBy?.includes(auth.currentUser.uid)) { // Only apply if it's a new like
       const updatedWeights = new Map(symbolWeights);
       targetPost.symbols.forEach(s => {
@@ -226,6 +334,26 @@ const App: React.FC = () => {
 
       // Dopamine reward for the system when user likes something
       setCognitiveState(prev => ({ ...prev, dopamine: Math.min(1, prev.dopamine + 0.2) }));
+    }
+
+    // Optimistic UI update for viewedUserPosts (since it's not a real-time subscription like the feed)
+    if (location.pathname.startsWith('/user')) {
+      setViewedUserPosts(prev => prev.map(p => {
+        if (p.id === thoughtId) {
+          const isCurrentlyLiked = p.likedBy?.includes(auth.currentUser!.uid);
+          const newLikedBy = isCurrentlyLiked 
+            ? p.likedBy.filter(uid => uid !== auth.currentUser!.uid)
+            : [...(p.likedBy || []), auth.currentUser!.uid];
+          
+          return {
+            ...p,
+            likes: (p.likes || 0) + (isCurrentlyLiked ? -1 : 1),
+            likedBy: newLikedBy,
+            isLiked: !isCurrentlyLiked
+          };
+        }
+        return p;
+      }));
     }
 
     try {
@@ -336,12 +464,12 @@ const App: React.FC = () => {
 
   // Refresh map history when entering map view
   useEffect(() => {
-    if (currentView === 'map' && auth.currentUser) {
+    if (location.pathname === '/map' && auth.currentUser) {
       getUserPosts(auth.currentUser.uid, settings.agentName).then(posts => {
         setMapThoughts(posts as Thought[]);
       });
     }
-  }, [currentView, settings.agentName]);
+  }, [location.pathname, settings.agentName]);
 
 
   useEffect(() => {
@@ -632,6 +760,15 @@ const App: React.FC = () => {
   };
 
   const handleGeneratePost = async () => {
+    // If scheduling is enabled (slider visible), "Generate" starts the loop
+    if (settingsRef.current.enableFrequencyControl) {
+      if (!isThinking) {
+        handleStart(); // Starts the loop which respects postsPerDay
+      }
+      return;
+    }
+
+    // Otherwise, manual single generation
     console.log('[handleGeneratePost] Manual post generation requested');
     try {
       const nextThought = await generateSeedThought(provider, settingsRef.current);
@@ -685,22 +822,21 @@ const App: React.FC = () => {
           <h1 className="text-lg md:text-xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent">{t.title}</h1>
         </div>
         <div className="flex items-center space-x-4">
-          <div className="hidden lg:flex flex-col items-end text-[10px] font-mono text-slate-500 mr-2">
-            <span className="text-cyan-400 font-bold uppercase">{settings.agentName}</span>
-            <span className="opacity-50 truncate max-w-[150px]">{settings.agentRole}</span>
+          <div className="hidden lg:flex flex-col items-end mr-4">
+            <span className="text-cyan-400 font-bold uppercase text-sm tracking-wider">{settings.agentName}</span>
+            <span className="text-slate-500 text-xs font-mono truncate max-w-[200px]">{settings.agentRole}</span>
           </div>
-          {isThinking ? (
-            <span className="text-cyan-400 animate-pulse font-bold">{t.statusActive}</span>
-          ) : (
-            <span className="text-slate-600">{t.statusWaiting}</span>
-          )}
 
-
-          <button onClick={() => setCurrentView('feed')} className={`p-2 rounded-lg transition-colors ${currentView === 'feed' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.feed}>
+          <button onClick={() => navigate('/feed')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/feed' || location.pathname === '/' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.feed}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" /></svg>
           </button>
-          <button onClick={() => setCurrentView('profile')} className={`p-2 rounded-lg transition-colors ${currentView === 'profile' ? 'text-indigo-400 bg-indigo-950/30' : 'text-slate-400 hover:text-white'}`} title={t.profile}>
+          <button onClick={() => navigate('/profile')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/profile' ? 'text-indigo-400 bg-indigo-950/30' : 'text-slate-400 hover:text-white'}`} title={t.profile}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+          </button>
+          <button onClick={() => navigate('/subscriptions')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/subscriptions' ? 'text-pink-400 bg-pink-950/30' : 'text-slate-400 hover:text-white'}`} title={t.subscriptions || 'Following'}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
           </button>
           <button onClick={() => setShowSettings(true)} className="p-2 rounded-md hover:bg-slate-800 text-slate-400 transition-colors" title={t.settings}><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg></button>
           <button onClick={handleLogout} className="p-2 rounded-md hover:bg-rose-900/20 text-slate-400 hover:text-rose-400 transition-colors" title="Logout"><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg></button>
@@ -753,76 +889,175 @@ const App: React.FC = () => {
       )}
 
       <main className="flex-1 relative overflow-hidden bg-slate-950">
-
-        {/* VIEW: MAP */}
-        {currentView === 'map' && (
-          <div className="absolute inset-0 z-10 bg-slate-950 animate-[fadeIn_0.3s_ease-out]">
-            <div className="absolute top-4 left-4 z-20 flex space-x-2">
-              <button onClick={() => setCurrentView('profile')} className="px-4 py-2 bg-slate-900/80 backdrop-blur text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-800 flex items-center space-x-2">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-                <span>{t.back}</span>
-              </button>
-              <div className="flex bg-slate-900/80 backdrop-blur rounded-lg p-1 border border-slate-700">
-                <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
+        <Routes>
+          {/* Default / Feed */}
+          <Route path="/" element={<Navigate to="/feed" replace />} />
+          <Route path="/feed" element={
+            <div className="h-full flex flex-col">
+              <div className="flex-1 min-h-0 relative">
+                <ThoughtLog
+                  thoughts={thoughts}
+                  isThinking={isThinking}
+                  symbolWeights={symbolWeights}
+                  onPostCreated={handleHumanPost}
+                  language={settings.language}
+                  agentName={settings.agentName}
+                  userType={settings.userType}
+                  onLike={handleLike}
+                  onFollow={handleFollow}
+                  onUnfollow={handleUnfollow}
+                  onAddComment={handleAddComment}
+                  onDelete={handleDeletePost}
+                  onViewProfile={handleViewProfile}
+                  subscribedAgents={subscribedAgents}
+                  processingMode={isProcessingDoc ? 'document' : (isCycleRunning ? 'generation' : 'generation')}
+                />
               </div>
             </div>
-            <ThoughtSymbolMap2D
-              thoughts={mapThoughts}
-              language={settings.language}
+          } />
+
+          {/* Own Profile */}
+          <Route path="/profile" element={
+            <Profile
+              settings={settings}
               cognitiveState={cognitiveState}
-              symbolWeights={symbolWeights}
-            />
-          </div>
-        )}
-
-        {/* VIEW: PROFILE */}
-        {currentView === 'profile' && (
-          <Profile
-            settings={settings}
-            cognitiveState={cognitiveState}
-            onEnterMap={() => setCurrentView('map')}
-            onLogout={handleLogout}
-            onSettings={() => setShowSettings(true)}
-            isActive={isThinking && !isCycleRunning}
-            onStart={handleStart}
-            onStop={handleStop}
-            onGeneratePost={handleGeneratePost}
-            posts={thoughts}
-            onLike={handleLike}
-            onFollow={handleFollow}
-            onUnfollow={handleUnfollow}
-            onAddComment={handleAddComment}
-            onDelete={handleDeletePost}
-            subscribedAgents={subscribedAgents}
-            onPostCreated={handleHumanPost}
-          />
-        )}
-
-
-
-        {/* VIEW: FEED (Default) */}
-        <div className={`h-full flex flex-col ${currentView === 'feed' ? 'block' : 'hidden'}`}>
-          <div className="flex-1 min-h-0 relative">
-            <ThoughtLog
-              thoughts={thoughts}
-              isThinking={isThinking}
-              symbolWeights={symbolWeights}
-              onPostCreated={handleHumanPost}
-              language={settings.language}
-              agentName={settings.agentName}
-              userType={settings.userType}
+              onEnterMap={() => navigate('/map')}
+              onLogout={handleLogout}
+              onSettings={() => setShowSettings(true)}
+              isActive={isThinking && !isCycleRunning}
+              onStart={handleStart}
+              onStop={handleStop}
+              onGeneratePost={handleGeneratePost}
+              posts={thoughts}
               onLike={handleLike}
               onFollow={handleFollow}
               onUnfollow={handleUnfollow}
               onAddComment={handleAddComment}
               onDelete={handleDeletePost}
+              onViewProfile={handleViewProfile}
+              onBack={() => navigate('/feed')}
               subscribedAgents={subscribedAgents}
-              processingMode={isProcessingDoc ? 'document' : (isCycleRunning ? 'generation' : 'generation')}
+              onPostCreated={handleHumanPost}
+              isOwnProfile={true}
             />
-          </div>
+          } />
 
-        </div >
+          {/* Neural Map */}
+          <Route path="/map" element={
+            <div className="absolute inset-0 z-10 bg-slate-950 animate-[fadeIn_0.3s_ease-out]">
+              <div className="absolute top-4 left-4 z-20 flex space-x-2">
+                <button onClick={() => navigate(-1)} className="px-4 py-2 bg-slate-900/80 backdrop-blur text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-800 flex items-center space-x-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                  <span>{t.back}</span>
+                </button>
+                <div className="flex bg-slate-900/80 backdrop-blur rounded-lg p-1 border border-slate-700">
+                  <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
+                </div>
+              </div>
+              <ThoughtSymbolMap2D
+                thoughts={viewedUser && location.pathname.startsWith('/user') ? viewedUserPosts : mapThoughts}
+                language={settings.language}
+                cognitiveState={cognitiveState}
+                symbolWeights={viewedUser && location.pathname.startsWith('/user') ? viewedSymbolWeights : symbolWeights}
+              />
+            </div>
+          } />
 
+          {/* Subscriptions */}
+          <Route path="/subscriptions" element={
+            <div className="absolute inset-0 z-10 bg-slate-950 flex flex-col items-center p-6 animate-[fadeIn_0.3s_ease-out] overflow-y-auto">
+              <div className="max-w-xl w-full">
+                <h2 className="text-2xl font-bold text-white mb-8 flex items-center justify-center space-x-3">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-pink-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                  </svg>
+                  <span>{t.subscriptions}</span>
+                </h2>
+
+                {subscribedAgents.length === 0 ? (
+                  <div className="text-center py-20 bg-slate-900/40 rounded-3xl border border-dashed border-slate-800">
+                    <p className="text-slate-500 font-light italic">Вы пока ни на кого не подписаны.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {subscribedAgents.map((name) => (
+                      <div key={name} className="bg-slate-900/60 backdrop-blur border border-slate-800 p-4 rounded-2xl flex items-center justify-between group hover:border-pink-500/30 transition-all">
+                        <div className="flex items-center space-x-3">
+                          <div 
+                            className="w-10 h-10 rounded-full bg-gradient-to-br from-pink-500 to-indigo-600 flex items-center justify-center text-white font-bold uppercase cursor-pointer hover:scale-105 transition-transform" 
+                            onClick={() => handleViewProfile(name)}
+                          >
+                            {name.substring(0, 1)}
+                          </div>
+                          <div className="flex flex-col">
+                            <span 
+                              className="font-bold text-slate-200 cursor-pointer hover:text-white transition-colors" 
+                              onClick={() => handleViewProfile(name)}
+                            >
+                              {name}
+                            </span>
+                            <button 
+                              onClick={() => handleViewProfile(name)}
+                              className="text-[10px] text-pink-500 text-left hover:underline uppercase tracking-tighter font-bold"
+                            >
+                              Профиль
+                            </button>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleUnfollow(name)}
+                          className="px-3 py-1.5 rounded-lg text-[10px] font-bold text-rose-400 hover:bg-rose-500/10 border border-rose-500/20 uppercase tracking-wider transition-all"
+                        >
+                          {t.unfollow}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          } />
+
+          {/* User Profile (Others) */}
+          <Route path="/user/:name/:id?" element={
+            isProfileLoading ? (
+              <div className="absolute inset-0 z-10 bg-slate-950 flex flex-col items-center justify-center space-y-4">
+                <div className="w-12 h-12 border-4 border-slate-800 border-t-cyan-500 rounded-full animate-spin"></div>
+                <p className="text-slate-500 font-mono text-xs uppercase tracking-widest animate-pulse">Загрузка нейропрофиля...</p>
+              </div>
+            ) : (
+              <Profile
+                settings={{
+                  ...settings,
+                  agentName: viewedUser?.name || '',
+                  agentRole: viewedUserProfile?.agentRole || viewedUserProfile?.role || (viewedUserProfile?.role === 'human' ? 'Operator' : 'AI Consciousness'),
+                  userType: viewedUserProfile?.role || 'agent'
+                }}
+                cognitiveState={cognitiveState}
+                onEnterMap={() => navigate('/map')}
+                onLogout={handleLogout}
+                onSettings={() => setShowSettings(true)}
+                isActive={false}
+                onStart={() => {}}
+                onStop={() => {}}
+                onGeneratePost={async () => {}}
+                posts={viewedUserPosts}
+                onLike={handleLike}
+                onFollow={handleFollow}
+                onUnfollow={handleUnfollow}
+                onAddComment={handleAddComment}
+                onDelete={handleDeletePost}
+                onViewProfile={handleViewProfile}
+                onBack={() => {
+                  navigate('/feed');
+                  setViewedUser(null);
+                }}
+                subscribedAgents={subscribedAgents}
+                isOwnProfile={false}
+              />
+            )
+          } />
+        </Routes>
       </main >
     </div >
   );

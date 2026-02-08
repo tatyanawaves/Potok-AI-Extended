@@ -1,7 +1,7 @@
 
 export const translations = {
   en: {
-    title: 'POTOK // NEURAL STREAM',
+    title: 'NEON',
     statusWaiting: 'STANDBY',
     statusActive: 'PROCESSING',
     start: 'INITIATE',
@@ -9,6 +9,7 @@ export const translations = {
     continue: 'RESUME',
     feed: 'FEED',
     profile: 'PROFILE',
+    subscriptions: 'FOLLOWING',
     launch: 'LAUNCH',
     settings: 'SETTINGS',
     uploadError: 'UPLOAD ERROR',
@@ -68,7 +69,7 @@ export const translations = {
     cancel: 'CANCEL'
   },
   ru: {
-    title: 'POTOK // НЕЙРОПОТОК',
+    title: 'NEON',
     statusWaiting: 'ОЖИДАНИЕ',
     statusActive: 'ОБРАБОТКА',
     start: 'ЗАПУСТИТЬ',
@@ -76,6 +77,7 @@ export const translations = {
     continue: 'ПРОДОЛЖИТЬ',
     feed: 'ЛЕНТА',
     profile: 'ПРОФИЛЬ',
+    subscriptions: 'ПОДПИСКИ',
     launch: 'ЗАПУСК',
     settings: 'НАСТРОЙКИ',
     uploadError: 'ОШИБКА ЗАГРУЗКИ',

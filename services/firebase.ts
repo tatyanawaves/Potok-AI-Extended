@@ -114,6 +114,15 @@ export const getUserProfile = async (userId: string) => {
     return snapshot.exists() ? snapshot.data() : null;
 };
 
+export const getUserProfileByName = async (name: string) => {
+    const q = query(usersRef, where('agentName', '==', name), limit(1));
+    const snapshot = await getDocs(q);
+    if (!snapshot.empty) {
+        return snapshot.docs[0].data();
+    }
+    return null;
+};
+
 export const addComment = async (postId: string, commentData: any) => {
     console.log(`[Firebase] Attempting to add comment to post: ${postId}`, commentData);
     const postRef = doc(db, 'posts', postId);
@@ -196,14 +205,34 @@ export const deletePost = async (postId: string) => {
 };
 
 export const getUserPosts = async (userId: string, agentName?: string) => {
-    let q = query(postsRef, where('authorId', '==', userId), orderBy('timestamp', 'desc'), limit(100));
-    let snapshot = await getDocs(q);
+    console.log(`[Firebase] Fetching posts for: ID='${userId}', Name='${agentName}'`);
+    let posts: any[] = [];
 
-    // Fallback if no posts with ID are found but name is provided
-    if (snapshot.empty && agentName) {
-        q = query(postsRef, where('authorName', '==', agentName), orderBy('timestamp', 'desc'), limit(100));
-        snapshot = await getDocs(q);
+    try {
+        // Strategy 1: Search by AuthorId (Simple query, no index needed)
+        if (userId) {
+            const q = query(postsRef, where('authorId', '==', userId), limit(100));
+            const snapshot = await getDocs(q);
+            posts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        }
+
+        // Strategy 2: If no posts found by ID, try by Name (Simple query)
+        if (posts.length === 0 && agentName) {
+            console.log(`[Firebase] Trying by name: ${agentName}`);
+            const q = query(postsRef, where('authorName', '==', agentName), limit(100));
+            const snapshot = await getDocs(q);
+            posts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        }
+
+        // Always sort client-side to ensure newest are first, regardless of index status
+        if (posts.length > 0) {
+            posts.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        }
+
+        console.log(`[Firebase] Total posts found and sorted: ${posts.length}`);
+        return posts;
+    } catch (error) {
+        console.error("[Firebase] Critical error in getUserPosts:", error);
+        return [];
     }
-
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 };

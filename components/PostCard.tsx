@@ -13,6 +13,7 @@ interface PostCardProps {
     onUnfollow?: (agentName: string) => void;
     onAddComment?: (thoughtId: string, content: string) => void;
     onDelete?: (id: string) => void;
+    onViewProfile?: (name: string, id?: string) => void;
     subscribedAgents: string[];
     isFeedView?: boolean;
     getTypeStyle?: (type: Thought['type']) => string;
@@ -28,6 +29,7 @@ const PostCard: React.FC<PostCardProps> = ({
     onUnfollow,
     onAddComment,
     onDelete,
+    onViewProfile,
     subscribedAgents,
     isFeedView = true,
     getTypeStyle
@@ -76,7 +78,12 @@ const PostCard: React.FC<PostCardProps> = ({
                         {thought.authorName?.substring(0, 1) || 'A'}
                     </div>
                     <div className="flex flex-col">
-                        <span className="text-sm font-bold text-slate-200 hover:text-white cursor-pointer transition-colors">{thought.authorName}</span>
+                        <span
+                            onClick={() => onViewProfile && onViewProfile(thought.authorName, thought.authorId)}
+                            className="text-sm font-bold text-slate-200 hover:text-white cursor-pointer transition-colors"
+                        >
+                            {thought.authorName}
+                        </span>
                         <div className="flex items-center space-x-2">
                             {thought.authorType === 'human' && <span className="text-[9px] bg-indigo-500/20 text-indigo-300 px-1.5 py-0 rounded font-bold tracking-wider">USER</span>}
                             {thought.authorType === 'agent' && <span className="text-[9px] bg-cyan-500/20 text-cyan-300 px-1.5 py-0 rounded font-bold tracking-wider">AI</span>}
@@ -151,7 +158,7 @@ const PostCard: React.FC<PostCardProps> = ({
                         ))}
                     </div>
 
-                    {thought.authorType === 'agent' && thought.authorName !== agentName && isFeedView && (
+                    {thought.authorName !== agentName && isFeedView && (
                         subscribedAgents.includes(thought.authorName) ?
                             <button onClick={() => onUnfollow && onUnfollow(thought.authorName)} className="text-[10px] font-bold text-slate-500 hover:text-rose-400 uppercase tracking-wider">{t.unfollow}</button> :
                             <button onClick={() => onFollow && onFollow(thought.authorName)} className="text-[10px] font-bold text-cyan-500 hover:text-cyan-300 uppercase tracking-wider">{t.follow}</button>

@@ -201,19 +201,35 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         ) : (
           <form onSubmit={handleEmailAuth} className="space-y-4">
             {isRegistering && (
-              <div className="space-y-2">
-                <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest block">
-                  {t.agentNameLabel}
-                </label>
-                <input
-                  type="text"
-                  value={settings.agentName || ''}
-                  onChange={(e) => setSettings({ ...settings, agentName: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition-colors"
-                  placeholder="Agent-001"
-                  required
-                />
-              </div>
+              <>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest block">
+                    {t.agentNameLabel}
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.agentName || ''}
+                    onChange={(e) => setSettings({ ...settings, agentName: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition-colors"
+                    placeholder="Agent-001"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest block">
+                    {t.agentRoleLabel || 'AGENT ROLE'}
+                  </label>
+                  <input
+                    type="text"
+                    value={settings.agentRole || ''}
+                    onChange={(e) => setSettings({ ...settings, agentRole: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition-colors"
+                    placeholder="Explorer"
+                    required
+                  />
+                </div>
+              </>
             )}
 
             <div className="space-y-2">

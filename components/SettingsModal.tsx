@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AISettings, Language } from '../types';
+import { AISettings, Language, AIProvider } from '../types';
 import { translations } from '../translations';
 
 interface SettingsModalProps {
@@ -9,8 +9,11 @@ interface SettingsModalProps {
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose }) => {
-  const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey);
-  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel);
+  const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
+  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || 'arcee-ai/trinity-large-preview:free');
+  const [geminiKey, setGeminiKey] = useState(settings.geminiKey || '');
+  const [geminiModel, setGeminiModel] = useState(settings.geminiModel || 'gemini-1.5-flash');
+  const [aiProvider, setAiProvider] = useState<AIProvider>(settings.aiProvider || 'openrouter');
   const [apiBaseUrl, setApiBaseUrl] = useState(settings.apiBaseUrl || '');
   const [language, setLanguage] = useState<Language>(settings.language || 'ru');
   const [decaySpeed, setDecaySpeed] = useState(settings.decaySpeed || 1.0);
@@ -24,13 +27,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
     onSave({
       openRouterKey,
       openRouterModel,
+      geminiKey,
+      geminiModel,
+      aiProvider,
       apiBaseUrl,
       language,
       decaySpeed,
       agentName,
       agentRole,
       enableFrequencyControl,
-      aiProvider: 'openrouter',
       postsPerDay: settings.postsPerDay,
       userType: settings.userType,
       following: settings.following
@@ -106,34 +111,87 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             />
           </div>
 
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              {t.aiProviderLabel || 'AI Provider'}
+            </label>
+            <div className="flex space-x-2">
+              <button
+                type="button"
+                onClick={() => setAiProvider('openrouter')}
+                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'openrouter' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
+              >
+                OPENROUTER
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiProvider('gemini')}
+                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'gemini' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
+              >
+                GOOGLE GEMINI
+              </button>
+            </div>
+          </div>
+
           {settings.userType === 'agent' && (
             <>
-              <div className="space-y-2">
-                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                  OpenRouter {t.apiKeyLabel}
-                </label>
-                <input
-                  type="password"
-                  value={openRouterKey}
-                  onChange={(e) => setOpenRouterKey(e.target.value)}
-                  placeholder="sk-or-v1-..."
-                  autoComplete="current-password"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                />
-              </div>
+              {aiProvider === 'openrouter' ? (
+                <>
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      OpenRouter {t.apiKeyLabel}
+                    </label>
+                    <input
+                      type="password"
+                      value={openRouterKey}
+                      onChange={(e) => setOpenRouterKey(e.target.value)}
+                      placeholder="sk-or-v1-..."
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                    />
+                  </div>
 
-              <div className="space-y-2">
-                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                  OpenRouter Model
-                </label>
-                <input
-                  type="text"
-                  value={openRouterModel}
-                  onChange={(e) => setOpenRouterModel(e.target.value)}
-                  placeholder="author/model:free"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                />
-              </div>
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      OpenRouter Model
+                    </label>
+                    <input
+                      type="text"
+                      value={openRouterModel}
+                      onChange={(e) => setOpenRouterModel(e.target.value)}
+                      placeholder="author/model:free"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      Gemini {t.apiKeyLabel}
+                    </label>
+                    <input
+                      type="password"
+                      value={geminiKey}
+                      onChange={(e) => setGeminiKey(e.target.value)}
+                      placeholder="AIza..."
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      Gemini Model
+                    </label>
+                    <input
+                      type="text"
+                      value={geminiModel}
+                      onChange={(e) => setGeminiModel(e.target.value)}
+                      placeholder="gemini-1.5-flash"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="space-y-2">
                 <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">

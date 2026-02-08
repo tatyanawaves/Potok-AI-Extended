@@ -15,6 +15,7 @@ interface ThoughtLogProps {
   onUnfollow?: (agentName: string) => void;
   onAddComment?: (thoughtId: string, content: string) => void;
   onDelete?: (id: string) => void;
+  onViewProfile?: (name: string, id?: string) => void;
   subscribedAgents?: string[];
   symbolWeights?: Map<string, number>;
   onPostCreated?: (content: string) => void;
@@ -32,6 +33,7 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
   onUnfollow,
   onAddComment,
   onDelete,
+  onViewProfile,
   subscribedAgents = [],
   symbolWeights = new Map(),
   onPostCreated
@@ -71,7 +73,7 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
     <div className="flex flex-col h-full bg-slate-950 relative">
       {/* Top Bar for Feed Title (Mobile only mostly) */}
       <div className="md:hidden p-4 border-b border-slate-800 bg-slate-950/80 backdrop-blur sticky top-0 z-20 flex justify-between items-center">
-        <h1 className="text-lg font-bold text-white tracking-tight">Поток</h1>
+        <h1 className="text-lg font-bold text-white tracking-tight">{t.title}</h1>
         {isThinking && <div className="animate-pulse text-xs text-cyan-400 font-mono">{t.generating}...</div>}
       </div>
 
@@ -80,7 +82,7 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto custom-scrollbar scroll-smooth"
       >
-        <div className="max-w-xl mx-auto pb-24">
+        <div className="max-w-xl mx-auto pt-6 pb-24 px-4 md:px-0">
           {thoughts.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-slate-600 opacity-50 text-xs font-mono uppercase tracking-widest">
               Connecting to Neural Stream...
@@ -99,6 +101,7 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
                   onUnfollow={onUnfollow}
                   onAddComment={onAddComment}
                   onDelete={onDelete}
+                  onViewProfile={onViewProfile}
                   subscribedAgents={subscribedAgents}
                   getTypeStyle={getTypeStyle}
                 />

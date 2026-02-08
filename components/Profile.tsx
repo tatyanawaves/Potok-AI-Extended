@@ -20,8 +20,11 @@ interface ProfileProps {
     onUnfollow: (agentName: string) => void;
     onAddComment: (thoughtId: string, content: string) => void;
     onDelete: (id: string) => void;
+    onViewProfile?: (name: string, id?: string) => void;
+    onBack?: () => void;
     subscribedAgents: string[];
     onPostCreated?: (content: string) => void;
+    isOwnProfile?: boolean;
 }
 
 const Profile: React.FC<ProfileProps> = ({
@@ -40,8 +43,11 @@ const Profile: React.FC<ProfileProps> = ({
     onUnfollow,
     onAddComment,
     onDelete,
+    onViewProfile,
+    onBack,
     subscribedAgents,
-    onPostCreated
+    onPostCreated,
+    isOwnProfile = true
 }) => {
     const t = translations[settings.language || 'ru'];
     const [frequency, setFrequency] = React.useState(settings.postsPerDay || 20);
@@ -71,7 +77,7 @@ const Profile: React.FC<ProfileProps> = ({
         }
     };
 
-    const myPosts = posts.filter(p => p.authorName === settings.agentName);
+    const myPosts = isOwnProfile ? posts.filter(p => p.authorName === settings.agentName) : posts;
 
     return (
         <div className="flex flex-col h-full bg-slate-950 overflow-y-auto custom-scrollbar">
@@ -79,15 +85,17 @@ const Profile: React.FC<ProfileProps> = ({
             <div className="relative h-48 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border-b border-white/5">
                 <div className="absolute inset-0 opacity-30 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
                 <div className="absolute inset-0 bg-gradient-to-t from-slate-950 to-transparent"></div>
-
-                <div className="absolute top-4 right-4 flex space-x-2">
-                    <button onClick={onSettings} className="p-2 bg-slate-900/50 hover:bg-slate-800 backdrop-blur rounded-lg text-slate-300 border border-white/10 transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                
+                {/* Back button for other profiles */}
+                {!isOwnProfile && (
+                    <button 
+                        onClick={() => onBack ? onBack() : window.history.back()} 
+                        className="absolute top-4 left-4 p-2 bg-slate-900/50 hover:bg-slate-800 backdrop-blur rounded-lg text-slate-300 border border-white/10 transition-colors flex items-center space-x-2 z-20"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                        <span className="text-xs uppercase tracking-widest font-bold">Назад</span>
                     </button>
-                    <button onClick={onLogout} className="p-2 bg-slate-900/50 hover:bg-rose-950/50 backdrop-blur rounded-lg text-slate-300 hover:text-rose-400 border border-white/10 transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
-                    </button>
-                </div>
+                )}
             </div>
 
             <div className="px-6 relative flex-1">
@@ -101,14 +109,40 @@ const Profile: React.FC<ProfileProps> = ({
                     </div>
 
                     <h1 className="mt-4 text-2xl font-bold text-white tracking-tight">{settings.agentName}</h1>
-                    <p className="text-sm text-cyan-400 font-mono uppercase tracking-widest mt-1 mb-2">{settings.userType === 'human' ? t.userTypeHuman : t.userTypeAgent}</p>
-                    <p className="text-slate-400 text-sm max-w-md leading-relaxed border-t border-slate-800 pt-3 mt-1 italic">
+                    <div className="flex items-center space-x-2 mt-1 mb-2">
+                        {settings.userType === 'human' ? (
+                            <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded text-[10px] font-bold tracking-widest uppercase">
+                                {t.userTypeHuman}
+                            </span>
+                        ) : (
+                            <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded text-[10px] font-bold tracking-widest uppercase">
+                                {t.userTypeAgent}
+                            </span>
+                        )}
+                    </div>
+                    
+                    {/* Follow/Unfollow for others */}
+                    {!isOwnProfile && settings.agentName && (
+                        <div className="mt-2">
+                            {subscribedAgents.includes(settings.agentName) ? (
+                                <button onClick={() => onUnfollow(settings.agentName!)} className="px-6 py-2 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs font-bold uppercase tracking-widest hover:bg-rose-500/20 transition-all">
+                                    {t.unfollow}
+                                </button>
+                            ) : (
+                                <button onClick={() => onFollow(settings.agentName!)} className="px-6 py-2 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 text-xs font-bold uppercase tracking-widest hover:bg-cyan-500/20 transition-all">
+                                    {t.follow}
+                                </button>
+                            )}
+                        </div>
+                    )}
+
+                    <p className="text-slate-400 text-sm max-w-md leading-relaxed border-t border-slate-800 pt-3 mt-4 italic">
                         {settings.agentRole || 'No description available.'}
                     </p>
                 </div>
 
                 {/* Post Composer Area - for humans on Profile page */}
-                {settings.userType === 'human' && (
+                {isOwnProfile && settings.userType === 'human' && (
                     <div className="max-w-md mx-auto p-4 bg-slate-900/40 backdrop-blur rounded-2xl border border-slate-800/50 mb-6 shadow-xl">
                         <div className="flex items-start space-x-3">
                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
@@ -137,8 +171,8 @@ const Profile: React.FC<ProfileProps> = ({
                     </div>
                 )}
 
-                {/* Frequency Control - Only show if enabled in settings AND for Agents */}
-                {settings.enableFrequencyControl && settings.userType === 'agent' && (
+                {/* Frequency Control - Only show if enabled in settings AND for OWN Agents */}
+                {isOwnProfile && settings.enableFrequencyControl && settings.userType === 'agent' && (
                     <div className="max-w-md mx-auto bg-slate-900/40 backdrop-blur rounded-2xl border border-slate-800/50 p-4 mb-6">
                         <div className="flex justify-between items-center mb-2">
                             <span className="text-xs font-mono uppercase tracking-widest text-slate-500">{t.frequency || 'POST FREQUENCY'}</span>
@@ -161,18 +195,22 @@ const Profile: React.FC<ProfileProps> = ({
 
                 {/* Action Buttons */}
                 <div className="max-w-md mx-auto space-y-4 mb-8">
-                    <button
-                        onClick={onEnterMap}
-                        className="w-full py-4 bg-gradient-to-r from-cyan-900/40 to-indigo-900/40 hover:from-cyan-800/60 hover:to-indigo-800/60 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl text-cyan-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-cyan-900/10 group flex items-center justify-center space-x-2 overflow-hidden"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0121 18.382V7.618a1 1 0 01-.806-.984l-4.665-2.58A.998.998 0 0115 4V14m0 0l-6-3m6 3l-6-3" /></svg>
-                        <span className="text-xs uppercase tracking-widest">{t.enterNetwork || 'MAP'}</span>
-                    </button>
+                    {/* MAP button: Show for OWN profile OR any AGENT profile */}
+                    {(isOwnProfile || settings.userType === 'agent') && (
+                        <button
+                            onClick={onEnterMap}
+                            className="w-full py-4 bg-gradient-to-r from-cyan-900/40 to-indigo-900/40 hover:from-cyan-800/60 hover:to-indigo-800/60 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl text-cyan-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-cyan-900/10 group flex items-center justify-center space-x-2 overflow-hidden"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0121 18.382V7.618a1 1 0 01-.806-.984l-4.665-2.58A.998.998 0 0115 4V14m0 0l-6-3m6 3l-6-3" /></svg>
+                            <span className="text-xs uppercase tracking-widest">{t.enterNetwork || 'MAP'}</span>
+                        </button>
+                    )}
 
-                    {settings.userType === 'agent' && (
+                    {/* GENERATE button: ONLY for OWN profile and if it's an AGENT */}
+                    {isOwnProfile && settings.userType === 'agent' && (
                         <button
                             onClick={async () => {
-                                if (!settings.openRouterKey) {
+                                if (!settings.openRouterKey && !settings.geminiKey) {
                                     alert('Please add your API key in Settings first');
                                     return;
                                 }
@@ -205,7 +243,7 @@ const Profile: React.FC<ProfileProps> = ({
                 <div className="max-w-md mx-auto pb-24">
                     <div className="flex items-center space-x-2 mb-6">
                         <div className="h-px flex-1 bg-gradient-to-r from-transparent to-slate-800"></div>
-                        <span className="text-[10px] font-mono font-bold tracking-[0.3em] text-slate-500 uppercase">{t.myPosts || 'MY POSTS'}</span>
+                        <span className="text-[10px] font-mono font-bold tracking-[0.3em] text-slate-500 uppercase">{isOwnProfile ? t.myPosts : 'POSTS'}</span>
                         <div className="h-px flex-1 bg-gradient-to-l from-transparent to-slate-800"></div>
                     </div>
 
@@ -226,6 +264,7 @@ const Profile: React.FC<ProfileProps> = ({
                                 onUnfollow={onUnfollow}
                                 onAddComment={onAddComment}
                                 onDelete={onDelete}
+                                onViewProfile={onViewProfile}
                                 subscribedAgents={subscribedAgents}
                                 isFeedView={false}
                             />
