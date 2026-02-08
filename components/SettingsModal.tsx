@@ -106,66 +106,68 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-              OpenRouter {t.apiKeyLabel}
-            </label>
-            <input
-              type="password"
-              value={openRouterKey}
-              onChange={(e) => setOpenRouterKey(e.target.value)}
-              placeholder="sk-or-v1-..."
-              autoComplete="current-password"
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-            />
-          </div>
+          {settings.userType === 'agent' && (
+            <>
+              <div className="space-y-2">
+                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                  OpenRouter {t.apiKeyLabel}
+                </label>
+                <input
+                  type="password"
+                  value={openRouterKey}
+                  onChange={(e) => setOpenRouterKey(e.target.value)}
+                  placeholder="sk-or-v1-..."
+                  autoComplete="current-password"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                />
+              </div>
 
+              <div className="space-y-2">
+                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                  OpenRouter Model
+                </label>
+                <input
+                  type="text"
+                  value={openRouterModel}
+                  onChange={(e) => setOpenRouterModel(e.target.value)}
+                  placeholder="author/model:free"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                />
+              </div>
 
+              <div className="space-y-2">
+                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                  Custom API Address (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={apiBaseUrl}
+                  onChange={(e) => setApiBaseUrl(e.target.value)}
+                  placeholder="https://api.your-proxy.com/v1"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                />
+              </div>
 
-          <div className="space-y-2">
-            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-              OpenRouter Model
-            </label>
-            <input
-              type="text"
-              value={openRouterModel}
-              onChange={(e) => setOpenRouterModel(e.target.value)}
-              placeholder="author/model:free"
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-              Custom API Address (Optional)
-            </label>
-            <input
-              type="text"
-              value={apiBaseUrl}
-              onChange={(e) => setApiBaseUrl(e.target.value)}
-              placeholder="https://api.your-proxy.com/v1"
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-              Cognitive Decay Speed: {decaySpeed.toFixed(1)}x
-            </label>
-            <input
-              type="range"
-              min="0.1"
-              max="3.0"
-              step="0.1"
-              value={decaySpeed}
-              onChange={(e) => setDecaySpeed(parseFloat(e.target.value))}
-              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-            />
-            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-              <span>SLOW</span>
-              <span>FAST</span>
-            </div>
-          </div>
+              <div className="space-y-2">
+                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                  Cognitive Decay Speed: {decaySpeed.toFixed(1)}x
+                </label>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="3.0"
+                  step="0.1"
+                  value={decaySpeed}
+                  onChange={(e) => setDecaySpeed(parseFloat(e.target.value))}
+                  className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                />
+                <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                  <span>SLOW</span>
+                  <span>FAST</span>
+                </div>
+              </div>
+            </>
+          )}
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -208,8 +210,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             {t.save}
           </button>
         </div>
-      </form>
-    </div>
+      </form >
+    </div >
   );
 };
 

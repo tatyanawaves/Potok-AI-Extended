@@ -9,7 +9,7 @@ import { parseDocument } from './services/documentParser';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
 import { getAIClient } from './services/gemini';
-import { updateUserProfile, createPost, subscribeToFeed, addComment, toggleLike, auth } from './services/firebase';
+import { updateUserProfile, getUserProfile, createPost, subscribeToFeed, addComment, toggleLike, auth } from './services/firebase';
 import { secureStorage } from './services/encryption';
 
 
@@ -158,15 +158,19 @@ const App: React.FC = () => {
 
     // RECOMMENDATION ALGORITHM: Update symbol weights based on likes
     const targetPost = thoughts.find(t => t.id === thoughtId);
-    if (targetPost && !targetPost.isLiked) { // Only apply if it's a new like
+    if (targetPost && !targetPost.likedBy?.includes(auth.currentUser.uid)) { // Only apply if it's a new like
+      const updatedWeights = new Map(symbolWeights);
       targetPost.symbols.forEach(s => {
-        setSymbolWeights(prevWeights => {
-          const newWeights = new Map(prevWeights);
-          const current = (newWeights.get(s.name) as number | undefined) || 1.0;
-          newWeights.set(s.name, Math.min(5.0, current + 0.5));
-          return newWeights;
-        });
+        const current = (updatedWeights.get(s.name) as number) || 1.0;
+        updatedWeights.set(s.name, Math.min(5.0, current + 0.5));
       });
+
+      setSymbolWeights(updatedWeights);
+
+      // Persist weights
+      const weightsObj = Object.fromEntries(updatedWeights);
+      updateUserProfile(auth.currentUser.uid, { symbolWeights: weightsObj });
+
       // Dopamine reward for the system when user likes something
       setCognitiveState(prev => ({ ...prev, dopamine: Math.min(1, prev.dopamine + 0.2) }));
     }
@@ -209,6 +213,33 @@ const App: React.FC = () => {
       }
     }
   }, [thoughts, settings.userType, settings.agentName, settings.following, handleAgentComment]);
+
+  // Individual Symbol Map: Load weights for current user
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
+      if (user) {
+        try {
+          const profile = await getUserProfile(user.uid);
+          if (profile && profile.symbolWeights) {
+            // Convert object fields back to Map
+            const weightsMap = new Map<string, number>();
+            Object.entries(profile.symbolWeights).forEach(([name, val]) => {
+              weightsMap.set(name, typeof val === 'number' ? val : 1.0);
+            });
+            setSymbolWeights(weightsMap);
+          } else {
+            setSymbolWeights(new Map());
+          }
+        } catch (err) {
+          console.error("Failed to load symbol weights:", err);
+        }
+      } else {
+        setSymbolWeights(new Map());
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
 
 
   useEffect(() => {
@@ -612,7 +643,12 @@ const App: React.FC = () => {
                 <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
               </div>
             </div>
-            <ThoughtSymbolMap2D thoughts={thoughts} language={settings.language} cognitiveState={cognitiveState} />
+            <ThoughtSymbolMap2D
+              thoughts={thoughts}
+              language={settings.language}
+              cognitiveState={cognitiveState}
+              symbolWeights={symbolWeights}
+            />
           </div>
         )}
 
@@ -628,6 +664,13 @@ const App: React.FC = () => {
             onStart={handleStart}
             onStop={handleStop}
             onGeneratePost={handleGeneratePost}
+            posts={thoughts}
+            onLike={handleLike}
+            onFollow={handleFollow}
+            onUnfollow={handleUnfollow}
+            onAddComment={handleAddComment}
+            subscribedAgents={subscribedAgents}
+            onPostCreated={handleHumanPost}
           />
         )}
 

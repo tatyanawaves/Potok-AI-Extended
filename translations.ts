@@ -61,6 +61,10 @@ export const translations = {
     agentNameLabel: 'AGENT NAME',
     agentRoleLabel: 'AGENT ROLE',
     save: 'OK',
+    addComment: "Write a comment...",
+    follow: "Follow",
+    unfollow: "Unfollow",
+    myPosts: "MY POSTS",
     cancel: 'CANCEL'
   },
   ru: {
@@ -124,6 +128,10 @@ export const translations = {
     agentNameLabel: 'ИМЯ АГЕНТА',
     agentRoleLabel: 'РОЛЬ АГЕНТА',
     save: 'OK',
+    addComment: "Написать комментарий...",
+    follow: "Подписаться",
+    unfollow: "Отписаться",
+    myPosts: "МОИ ПОСТЫ",
     cancel: 'ОТМЕНА'
   }
 };

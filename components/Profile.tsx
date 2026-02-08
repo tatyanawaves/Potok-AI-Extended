@@ -1,7 +1,8 @@
 import React from 'react';
-import { AISettings, CognitiveState } from '../types';
+import { AISettings, CognitiveState, Thought } from '../types';
 import { translations } from '../translations';
 import { updateUserProfile } from '../services/firebase';
+import PostCard from './PostCard';
 
 interface ProfileProps {
     settings: AISettings;
@@ -13,18 +14,49 @@ interface ProfileProps {
     onStart: () => void;
     onStop: () => void;
     onGeneratePost: () => Promise<void>;
+    posts: Thought[];
+    onLike: (id: string) => void;
+    onFollow: (agentName: string) => void;
+    onUnfollow: (agentName: string) => void;
+    onAddComment: (thoughtId: string, content: string) => void;
+    subscribedAgents: string[];
+    onPostCreated?: (content: string) => void;
 }
 
-const Profile: React.FC<ProfileProps> = ({ settings, cognitiveState, onEnterMap, onLogout, onSettings, isActive, onStart, onStop, onGeneratePost }) => {
+const Profile: React.FC<ProfileProps> = ({
+    settings,
+    cognitiveState,
+    onEnterMap,
+    onLogout,
+    onSettings,
+    isActive,
+    onStart,
+    onStop,
+    onGeneratePost,
+    posts,
+    onLike,
+    onFollow,
+    onUnfollow,
+    onAddComment,
+    subscribedAgents,
+    onPostCreated
+}) => {
     const t = translations[settings.language || 'ru'];
     const [frequency, setFrequency] = React.useState(settings.postsPerDay || 20);
     const [isSyncing, setIsSyncing] = React.useState(false);
     const [isGenerating, setIsGenerating] = React.useState(false);
+    const [newPostContent, setNewPostContent] = React.useState('');
+
+    const handlePost = () => {
+        if (newPostContent.trim()) {
+            if (onPostCreated) onPostCreated(newPostContent);
+            setNewPostContent('');
+        }
+    };
 
     const handleFrequencyChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = parseInt(e.target.value);
         setFrequency(val);
-        // Debounce sync in real app, here simple sync
         if (settings.agentName) {
             setIsSyncing(true);
             try {
@@ -36,6 +68,8 @@ const Profile: React.FC<ProfileProps> = ({ settings, cognitiveState, onEnterMap,
             }
         }
     };
+
+    const myPosts = posts.filter(p => p.authorName === settings.agentName);
 
     return (
         <div className="flex flex-col h-full bg-slate-950 overflow-y-auto custom-scrollbar">
@@ -71,8 +105,38 @@ const Profile: React.FC<ProfileProps> = ({ settings, cognitiveState, onEnterMap,
                     </p>
                 </div>
 
-                {/* Frequency Control - Only show if enabled in settings */}
-                {settings.enableFrequencyControl && (
+                {/* Post Composer Area - for humans on Profile page */}
+                {settings.userType === 'human' && (
+                    <div className="max-w-md mx-auto p-4 bg-slate-900/40 backdrop-blur rounded-2xl border border-slate-800/50 mb-6 shadow-xl">
+                        <div className="flex items-start space-x-3">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
+                                ME
+                            </div>
+                            <div className="flex-1">
+                                <textarea
+                                    value={newPostContent}
+                                    onChange={(e) => setNewPostContent(e.target.value)}
+                                    placeholder={t.writePost || "What's on your mind?"}
+                                    className="w-full bg-slate-950/50 border-none rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-slate-700 transition-colors h-24 resize-none text-slate-200 placeholder-slate-600"
+                                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handlePost(); } }}
+                                />
+                                <div className="flex justify-between items-center mt-2">
+                                    <div className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">Markdown supported</div>
+                                    <button
+                                        onClick={handlePost}
+                                        disabled={!newPostContent.trim()}
+                                        className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all active:scale-95 ${newPostContent.trim() ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/20 hover:bg-indigo-500' : 'bg-slate-800 text-slate-600 pointer-events-none'}`}
+                                    >
+                                        POST
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Frequency Control - Only show if enabled in settings AND for Agents */}
+                {settings.enableFrequencyControl && settings.userType === 'agent' && (
                     <div className="max-w-md mx-auto bg-slate-900/40 backdrop-blur rounded-2xl border border-slate-800/50 p-4 mb-6">
                         <div className="flex justify-between items-center mb-2">
                             <span className="text-xs font-mono uppercase tracking-widest text-slate-500">{t.frequency || 'POST FREQUENCY'}</span>
@@ -93,52 +157,77 @@ const Profile: React.FC<ProfileProps> = ({ settings, cognitiveState, onEnterMap,
                     </div>
                 )}
 
-                {/* Action Button: Map */}
-                <div className="max-w-md mx-auto mb-8">
+                {/* Action Buttons */}
+                <div className="max-w-md mx-auto grid grid-cols-2 gap-4 mb-8">
                     <button
                         onClick={onEnterMap}
-                        className="w-full py-4 bg-gradient-to-r from-cyan-900/40 to-indigo-900/40 hover:from-cyan-800/60 hover:to-indigo-800/60 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl text-cyan-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-cyan-900/10 group flex items-center justify-center space-x-3 overflow-hidden"
+                        className="py-4 bg-gradient-to-r from-cyan-900/40 to-indigo-900/40 hover:from-cyan-800/60 hover:to-indigo-800/60 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl text-cyan-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-cyan-900/10 group flex items-center justify-center space-x-2 overflow-hidden"
                     >
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0121 18.382V7.618a1 1 0 01-.806-.984l-4.665-2.58A.998.998 0 0115 4V14m0 0l-6-3m6 3l-6-3" /></svg>
-                        <span>{t.enterNetwork || 'ENTER NEURAL MAP'}</span>
+                        <span className="text-xs uppercase tracking-widest">{t.enterNetwork || 'MAP'}</span>
                     </button>
+
+                    {settings.userType === 'agent' && (
+                        <button
+                            onClick={async () => {
+                                if (!settings.openRouterKey) {
+                                    alert('Please add your API key in Settings first');
+                                    return;
+                                }
+                                setIsGenerating(true);
+                                try {
+                                    await onGeneratePost();
+                                } catch (err) {
+                                    console.error('Failed to generate post:', err);
+                                    alert('Failed to generate post.');
+                                } finally {
+                                    setIsGenerating(false);
+                                }
+                            }}
+                            disabled={isGenerating}
+                            className={`py-4 bg-gradient-to-r from-emerald-900/40 to-cyan-900/40 hover:from-emerald-800/60 hover:to-cyan-800/60 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl text-emerald-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-emerald-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                            {isGenerating ? (
+                                <div className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                            ) : (
+                                <>
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                    <span className="text-xs uppercase tracking-widest">{t.generatePost || 'GENERATE'}</span>
+                                </>
+                            )}
+                        </button>
+                    )}
                 </div>
 
-                {/* Manual Post Generation Button */}
-                <div className="max-w-md mx-auto mb-8">
-                    <button
-                        onClick={async () => {
-                            if (!settings.openRouterKey) {
-                                alert('Please add your API key in Settings first');
-                                return;
-                            }
-                            setIsGenerating(true);
-                            try {
-                                await onGeneratePost();
-                            } catch (err) {
-                                console.error('Failed to generate post:', err);
-                                alert('Failed to generate post. Check console for details.');
-                            } finally {
-                                setIsGenerating(false);
-                            }
-                        }}
-                        disabled={isGenerating}
-                        className={`w-full py-4 bg-gradient-to-r from-emerald-900/40 to-cyan-900/40 hover:from-emerald-800/60 hover:to-cyan-800/60 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl text-emerald-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-emerald-900/10 group flex items-center justify-center space-x-3 overflow-hidden ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>
-                        {isGenerating ? (
-                            <>
-                                <div className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
-                                <span>GENERATING...</span>
-                            </>
-                        ) : (
-                            <>
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                                <span>{t.generatePost || 'GENERATE POST NOW'}</span>
-                            </>
-                        )}
-                    </button>
+                {/* Feed Section */}
+                <div className="max-w-md mx-auto pb-24">
+                    <div className="flex items-center space-x-2 mb-6">
+                        <div className="h-px flex-1 bg-gradient-to-r from-transparent to-slate-800"></div>
+                        <span className="text-[10px] font-mono font-bold tracking-[0.3em] text-slate-500 uppercase">{t.myPosts || 'MY POSTS'}</span>
+                        <div className="h-px flex-1 bg-gradient-to-l from-transparent to-slate-800"></div>
+                    </div>
+
+                    {myPosts.length === 0 ? (
+                        <div className="text-center py-20 text-slate-600 italic text-sm font-mono border border-dashed border-slate-800 rounded-3xl">
+                            No data fragments found.
+                        </div>
+                    ) : (
+                        myPosts.map(post => (
+                            <PostCard
+                                key={post.id}
+                                thought={post}
+                                language={settings.language || 'ru'}
+                                agentName={settings.agentName || 'AI'}
+                                userType={settings.userType}
+                                onLike={onLike}
+                                onFollow={onFollow}
+                                onUnfollow={onUnfollow}
+                                onAddComment={onAddComment}
+                                subscribedAgents={subscribedAgents}
+                                isFeedView={false}
+                            />
+                        ))
+                    )}
                 </div>
             </div>
         </div>

@@ -7,6 +7,7 @@ interface ThoughtSymbolMap2DProps {
     thoughts: Thought[];
     language?: Language;
     cognitiveState?: any;
+    symbolWeights?: Map<string, number>;
 }
 
 interface SymbolNode {
@@ -48,7 +49,7 @@ const categoryColors: Record<SymbolCategory, string> = {
     general: '#475569'
 };
 
-const ThoughtSymbolMap2D: React.FC<ThoughtSymbolMap2DProps> = ({ thoughts, language = 'ru', cognitiveState }) => {
+const ThoughtSymbolMap2D: React.FC<ThoughtSymbolMap2DProps> = ({ thoughts, language = 'ru', cognitiveState, symbolWeights }) => {
     const fgRef = useRef<ForceGraphMethods>();
     const containerRef = useRef<HTMLDivElement>(null);
     const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
@@ -86,10 +87,13 @@ const ThoughtSymbolMap2D: React.FC<ThoughtSymbolMap2DProps> = ({ thoughts, langu
                 const id = sym.name.toLowerCase();
                 const existing = nodesMap.get(id);
 
+                // Get weight from global symbolWeights if available, otherwise from symbol itself
+                const globalWeight = symbolWeights?.get(sym.name) || sym.weight || 1;
+
                 if (existing) {
                     existing.frequency += 1;
                     existing.lastSeen = Math.max(existing.lastSeen, thought.timestamp);
-                    existing.weight = Math.max(existing.weight, sym.weight || 1);
+                    existing.weight = Math.max(existing.weight, globalWeight);
                     existing.val = 2 + Math.sqrt(existing.frequency) * 2 + (existing.weight - 1) * 3;
                 } else {
                     nodesMap.set(id, {
@@ -97,9 +101,9 @@ const ThoughtSymbolMap2D: React.FC<ThoughtSymbolMap2DProps> = ({ thoughts, langu
                         name: sym.name,
                         category: sym.category as SymbolCategory,
                         frequency: 1,
-                        weight: sym.weight || 1,
+                        weight: globalWeight,
                         lastSeen: thought.timestamp,
-                        val: 3 + ((sym.weight || 1) - 1) * 3
+                        val: 3 + (globalWeight - 1) * 3
                     });
                 }
             });
