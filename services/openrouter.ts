@@ -23,13 +23,6 @@ const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], 
   }
 };
 
-const generateUUID = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-};
-
 const MAX_POST_LENGTH = 280;
 
 export const generateSeedThought = async (settings?: AISettings): Promise<Thought> => {
@@ -83,7 +76,6 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
     const truncatedContent = parsed.content.substring(0, MAX_POST_LENGTH);
 
     return {
-      id: generateUUID(),
       content: truncatedContent,
       symbols: parsed.symbols,
       timestamp: Date.now(),
@@ -92,7 +84,7 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   } catch (error) {
     console.error('[OpenRouter] Initialization Error:', error);
     throw new Error(`${t.openRouterInitError}: ${error instanceof Error ? error.message : String(error)}`);
@@ -150,7 +142,6 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
     if (parsed.content.length < 50) type = 'conclusion';
 
     return {
-      id: generateUUID(),
       content: parsed.content,
       symbols: parsed.symbols,
       timestamp: Date.now(),
@@ -159,10 +150,9 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   } catch (error) {
     return {
-      id: generateUUID(),
       content: t.fallbackError,
       symbols: [],
       timestamp: Date.now(),
@@ -171,7 +161,7 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   }
 };
 
@@ -214,7 +204,6 @@ export const generateSelfReflection = async (
     const parsed = parseAIResponse(data.choices[0].message.content);
 
     return {
-      id: generateUUID(),
       content: parsed.content,
       symbols: parsed.symbols,
       timestamp: Date.now(),
@@ -224,10 +213,9 @@ export const generateSelfReflection = async (
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   } catch (error) {
     return {
-      id: generateUUID(),
       content: "State dissonance detected.",
       symbols: [],
       timestamp: Date.now(),
@@ -236,7 +224,7 @@ export const generateSelfReflection = async (
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   }
 };
 
@@ -271,7 +259,6 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
     const parsed = parseAIResponse(data.choices[0].message.content);
 
     return {
-      id: generateUUID(),
       content: text.substring(0, 150) + "...",
       symbols: parsed.symbols,
       timestamp: Date.now(),
@@ -280,10 +267,9 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   } catch (error) {
     return {
-      id: generateUUID(),
       content: "Analysis failed.",
       symbols: [],
       timestamp: Date.now(),
@@ -292,6 +278,6 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   }
 };

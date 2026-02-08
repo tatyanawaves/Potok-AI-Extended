@@ -54,7 +54,7 @@ export interface Comment {
 }
 
 export interface Thought {
-  id: string;
+  id?: string;
   content: string;
   timestamp: number;
   type: 'seed' | 'evolution' | 'divergence' | 'conclusion' | 'desire' | 'feeling' | 'reflex' | 'goal' | 'human_post';

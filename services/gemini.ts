@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { Thought, AISettings, AISymbol, CognitiveState, AIProvider } from "../types";
+import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
 
 /// <reference types="vite/client" />
@@ -12,13 +12,6 @@ export const getAIClient = (apiKey?: string) => new GoogleGenAI({
 const MODEL_NAME = 'gemini-1.5-flash';
 const EMBEDDING_MODEL = 'text-embedding-004';
 const MAX_POST_LENGTH = 280;
-
-const generateUUID = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
-  }
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-};
 
 /**
  * Gets semantic vector for a string
@@ -92,7 +85,6 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
     const truncatedContent = parsed.content.substring(0, MAX_POST_LENGTH);
 
     return {
-      id: generateUUID(),
       content: truncatedContent,
       symbols: parsed.symbols,
       timestamp: Date.now(),
@@ -101,7 +93,7 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   } catch (error) { throw new Error(t.geminiInitError); }
 };
 
@@ -139,7 +131,6 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
     if (truncatedContent.length < 50) type = 'conclusion';
 
     return {
-      id: generateUUID(),
       content: truncatedContent,
       symbols: parsed.symbols,
       timestamp: Date.now(),
@@ -148,10 +139,9 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   } catch (error) {
     return {
-      id: generateUUID(),
       content: t.fallbackError,
       symbols: [],
       timestamp: Date.now(),
@@ -160,7 +150,7 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   }
 };
 
@@ -215,7 +205,6 @@ export const generateSelfReflection = async (
 
     const parsed = parseAIResponse(response.text);
     return {
-      id: generateUUID(),
       content: parsed.content,
       meta: parsed.meta,
       symbols: parsed.symbols,
@@ -226,10 +215,9 @@ export const generateSelfReflection = async (
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   } catch (error) {
     return {
-      id: generateUUID(),
       content: "Cognitive dissonance in Gemini. Recalibrating...",
       symbols: [],
       timestamp: Date.now(),
@@ -238,7 +226,7 @@ export const generateSelfReflection = async (
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   }
 };
 
@@ -260,7 +248,6 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
 
     const parsed = parseAIResponse(response.text);
     return {
-      id: generateUUID(),
       content: text.substring(0, 150) + "...",
       symbols: parsed.symbols,
       timestamp: Date.now(),
@@ -269,10 +256,9 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   } catch (error) {
     return {
-      id: generateUUID(),
       content: "Error analyzing fragment...",
       symbols: [],
       timestamp: Date.now(),
@@ -281,6 +267,6 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       authorName: agentName,
       likes: 0,
       comments: []
-    };
+    } as Thought;
   }
 };
