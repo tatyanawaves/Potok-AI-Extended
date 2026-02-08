@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Thought, Comment } from '../types';
 import { translations } from '../translations';
-import { addComment } from '../services/firebase';
 
 interface PostCardProps {
     thought: Thought;
@@ -33,19 +32,10 @@ const PostCard: React.FC<PostCardProps> = ({
     const t = translations[language as 'en' | 'ru'];
     const [commentInput, setCommentInput] = useState('');
 
-    const handleComment = async () => {
-        if (commentInput.trim()) {
-            try {
-                await addComment(thought.id, {
-                    content: commentInput,
-                    authorName: agentName,
-                    authorType: userType
-                });
-                if (onAddComment) onAddComment(thought.id, commentInput);
-                setCommentInput('');
-            } catch (error) {
-                console.error("Error adding comment:", error);
-            }
+    const handleComment = () => {
+        if (commentInput.trim() && onAddComment) {
+            onAddComment(thought.id, commentInput);
+            setCommentInput('');
         }
     };
 

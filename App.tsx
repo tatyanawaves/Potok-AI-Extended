@@ -9,7 +9,7 @@ import { parseDocument } from './services/documentParser';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
 import { getAIClient } from './services/gemini';
-import { updateUserProfile, getUserProfile, createPost, subscribeToFeed, addComment, toggleLike, auth } from './services/firebase';
+import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, toggleLike, auth } from './services/firebase';
 import { secureStorage } from './services/encryption';
 
 
@@ -42,6 +42,7 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [symbolWeights, setSymbolWeights] = useState<Map<string, number>>(new Map());
+  const [mapThoughts, setMapThoughts] = useState<Thought[]>([]);
 
   const [cognitiveState, setCognitiveState] = useState<CognitiveState>({
     valence: 0, arousal: 0, entropy: 0, complexity: 0, predictionError: 0,
@@ -77,11 +78,31 @@ const App: React.FC = () => {
     document.documentElement.lang = settings.language || 'ru';
   }, [t.title, settings.language]);
 
+  // Social Feed: Real-time updates with authentication reactive states
   useEffect(() => {
-    const unsubscribe = subscribeToFeed((newPosts) => {
-      setThoughts(newPosts);
+    // Listen for both Firestore updates and Auth state changes
+    let unsubscribeFeed: (() => void) | undefined;
+
+    const setupFeed = (user: any) => {
+      if (unsubscribeFeed) unsubscribeFeed();
+
+      unsubscribeFeed = subscribeToFeed((newPosts) => {
+        const enriched = newPosts.map(p => ({
+          ...p,
+          isLiked: user ? p.likedBy?.includes(user.uid) : false
+        }));
+        setThoughts(enriched);
+      });
+    };
+
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      setupFeed(user);
     });
-    return () => unsubscribe();
+
+    return () => {
+      if (unsubscribeFeed) unsubscribeFeed();
+      unsubscribeAuth();
+    };
   }, []);
 
   const handleSaveSettings = (newSettings: AISettings) => {
@@ -113,19 +134,26 @@ const App: React.FC = () => {
     if (!settings.following.includes(agentName)) {
       const newFollowing = [...settings.following, agentName];
       handleSaveSettings({ ...settings, following: newFollowing });
-      if (settings.agentName) updateUserProfile(settings.agentName, { following: newFollowing });
+      if (auth.currentUser) updateUserProfile(auth.currentUser.uid, { following: newFollowing });
     }
   };
 
   const handleUnfollow = (agentName: string) => {
     const newFollowing = settings.following.filter(name => name !== agentName);
     handleSaveSettings({ ...settings, following: newFollowing });
-    if (settings.agentName) updateUserProfile(settings.agentName, { following: newFollowing });
+    if (auth.currentUser) updateUserProfile(auth.currentUser.uid, { following: newFollowing });
   };
 
-  const handleAddComment = (thoughtId: string, content: string) => {
-    // Relying on Firestore subscription for thread updates
-    console.log(`Comment added to ${thoughtId}: ${content}`);
+  const handleAddComment = async (thoughtId: string, content: string) => {
+    try {
+      await addComment(thoughtId, {
+        content: content,
+        authorName: settings.agentName || 'Neo',
+        authorType: settings.userType
+      });
+    } catch (error) {
+      console.error("Error adding comment:", error);
+    }
   };
 
   const handleAgentComment = useCallback(async (thoughtId: string, targetThought: Thought) => {
@@ -189,9 +217,23 @@ const App: React.FC = () => {
       content,
       authorType: 'human',
       authorName: settings.agentName || 'Neo',
+      authorId: auth.currentUser?.uid,
       type: 'human_post',
     };
     await createPost(enrichedThought);
+
+    // REINFORCE SYMBOLS: Persist authored symbols to map
+    if (auth.currentUser) {
+      const updatedWeights = new Map(symbolWeights);
+      (analysis.symbols || []).forEach(s => {
+        const current = (updatedWeights.get(s.name) as number) || 1.0;
+        updatedWeights.set(s.name, Math.min(5.0, current + 0.3)); // Slight boost for writing
+      });
+      setSymbolWeights(updatedWeights);
+      updateUserProfile(auth.currentUser.uid, {
+        symbolWeights: Object.fromEntries(updatedWeights)
+      });
+    }
 
     // User activity increases arousal
     setCognitiveState(prev => ({ ...prev, arousal: Math.min(1, prev.arousal + 0.3) }));
@@ -214,7 +256,7 @@ const App: React.FC = () => {
     }
   }, [thoughts, settings.userType, settings.agentName, settings.following, handleAgentComment]);
 
-  // Individual Symbol Map: Load weights for current user
+  // Individual Symbol Map: Load weights and history for current user
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (user) => {
       if (user) {
@@ -230,16 +272,30 @@ const App: React.FC = () => {
           } else {
             setSymbolWeights(new Map());
           }
+
+          // Pre-fetch some of user's own history for the map
+          const userHistory = await getUserPosts(user.uid, settings.agentName);
+          setMapThoughts(userHistory as Thought[]);
         } catch (err) {
-          console.error("Failed to load symbol weights:", err);
+          console.error("Failed to load symbol weights/history:", err);
         }
       } else {
         setSymbolWeights(new Map());
+        setMapThoughts([]);
       }
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [settings.agentName]);
+
+  // Refresh map history when entering map view
+  useEffect(() => {
+    if (currentView === 'map' && auth.currentUser) {
+      getUserPosts(auth.currentUser.uid, settings.agentName).then(posts => {
+        setMapThoughts(posts as Thought[]);
+      });
+    }
+  }, [currentView, settings.agentName]);
 
 
   useEffect(() => {
@@ -477,6 +533,7 @@ const App: React.FC = () => {
         ...nextThought,
         authorType: 'agent',
         authorName: settingsRef.current.agentName || 'Agent',
+        authorId: auth.currentUser?.uid,
         likes: Math.floor(Math.random() * 5), // Simulated community likes
         isLiked: false
       };
@@ -535,6 +592,7 @@ const App: React.FC = () => {
         ...nextThought,
         authorType: 'agent',
         authorName: settingsRef.current.agentName || 'Agent',
+        authorId: auth.currentUser?.uid,
         likes: Math.floor(Math.random() * 5),
         isLiked: false
       };
@@ -644,7 +702,7 @@ const App: React.FC = () => {
               </div>
             </div>
             <ThoughtSymbolMap2D
-              thoughts={thoughts}
+              thoughts={mapThoughts}
               language={settings.language}
               cognitiveState={cognitiveState}
               symbolWeights={symbolWeights}

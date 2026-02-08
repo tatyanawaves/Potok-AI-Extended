@@ -60,7 +60,9 @@ export interface Thought {
   type: 'seed' | 'evolution' | 'divergence' | 'conclusion' | 'desire' | 'feeling' | 'reflex' | 'goal' | 'human_post';
   authorType: 'human' | 'agent';
   authorName: string;
+  authorId?: string;
   likes: number;
+  likedBy: string[];
   isLiked?: boolean;
   comments: Comment[];
   symbols: AISymbol[];

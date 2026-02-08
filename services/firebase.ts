@@ -1,6 +1,6 @@
 
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs } from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { getAnalytics } from "firebase/analytics";
 
@@ -79,6 +79,7 @@ export const createPost = async (postData: any) => {
         ...postData,
         timestamp: Date.now(),
         likes: 0,
+        likedBy: [],
         comments: []
     });
 };
@@ -128,4 +129,17 @@ export const toggleLike = async (postId: string, userId: string) => {
             likedBy: isLiked ? likedBy.filter(id => id !== userId) : [...likedBy, userId]
         });
     }
+};
+
+export const getUserPosts = async (userId: string, agentName?: string) => {
+    let q = query(postsRef, where('authorId', '==', userId), orderBy('timestamp', 'desc'), limit(100));
+    let snapshot = await getDocs(q);
+
+    // Fallback if no posts with ID are found but name is provided
+    if (snapshot.empty && agentName) {
+        q = query(postsRef, where('authorName', '==', agentName), orderBy('timestamp', 'desc'), limit(100));
+        snapshot = await getDocs(q);
+    }
+
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 };

@@ -1,7 +1,7 @@
 import React from 'react';
 import { AISettings, CognitiveState, Thought } from '../types';
 import { translations } from '../translations';
-import { updateUserProfile } from '../services/firebase';
+import { updateUserProfile, auth } from '../services/firebase';
 import PostCard from './PostCard';
 
 interface ProfileProps {
@@ -57,10 +57,10 @@ const Profile: React.FC<ProfileProps> = ({
     const handleFrequencyChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = parseInt(e.target.value);
         setFrequency(val);
-        if (settings.agentName) {
+        if (auth.currentUser) {
             setIsSyncing(true);
             try {
-                await updateUserProfile(settings.agentName, { postsPerDay: val });
+                await updateUserProfile(auth.currentUser.uid, { postsPerDay: val });
             } catch (err) {
                 console.error("Failed to sync profile", err);
             } finally {
@@ -158,10 +158,10 @@ const Profile: React.FC<ProfileProps> = ({
                 )}
 
                 {/* Action Buttons */}
-                <div className="max-w-md mx-auto grid grid-cols-2 gap-4 mb-8">
+                <div className="max-w-md mx-auto space-y-4 mb-8">
                     <button
                         onClick={onEnterMap}
-                        className="py-4 bg-gradient-to-r from-cyan-900/40 to-indigo-900/40 hover:from-cyan-800/60 hover:to-indigo-800/60 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl text-cyan-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-cyan-900/10 group flex items-center justify-center space-x-2 overflow-hidden"
+                        className="w-full py-4 bg-gradient-to-r from-cyan-900/40 to-indigo-900/40 hover:from-cyan-800/60 hover:to-indigo-800/60 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl text-cyan-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-cyan-900/10 group flex items-center justify-center space-x-2 overflow-hidden"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0121 18.382V7.618a1 1 0 01-.806-.984l-4.665-2.58A.998.998 0 0115 4V14m0 0l-6-3m6 3l-6-3" /></svg>
                         <span className="text-xs uppercase tracking-widest">{t.enterNetwork || 'MAP'}</span>
@@ -185,7 +185,7 @@ const Profile: React.FC<ProfileProps> = ({
                                 }
                             }}
                             disabled={isGenerating}
-                            className={`py-4 bg-gradient-to-r from-emerald-900/40 to-cyan-900/40 hover:from-emerald-800/60 hover:to-cyan-800/60 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl text-emerald-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-emerald-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            className={`w-full py-4 bg-gradient-to-r from-emerald-900/40 to-cyan-900/40 hover:from-emerald-800/60 hover:to-cyan-800/60 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl text-emerald-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-emerald-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
                         >
                             {isGenerating ? (
                                 <div className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>

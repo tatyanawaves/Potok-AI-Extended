@@ -74,11 +74,28 @@ const ThoughtSymbolMap2D: React.FC<ThoughtSymbolMap2DProps> = ({ thoughts, langu
         const nodesMap = new Map<string, SymbolNode>();
         const linksMap = new Map<string, SymbolLink>();
 
-        if (thoughts.length === 0) {
+        // 1. Initialize nodes from personalized symbolWeights
+        if (symbolWeights) {
+            symbolWeights.forEach((weight, name) => {
+                const id = name.toLowerCase();
+                nodesMap.set(id, {
+                    id,
+                    name,
+                    category: 'general', // Default, will be updated if found in thoughts
+                    frequency: 1,
+                    weight: weight,
+                    lastSeen: Date.now(),
+                    val: 3 + (weight - 1) * 3
+                });
+            });
+        }
+
+        if (thoughts.length === 0 && nodesMap.size === 0) {
             setGraphData({ nodes: [], links: [] });
             return;
         }
 
+        // 2. Process thoughts to update categories, sizes, and create links
         thoughts.forEach((thought, idx) => {
             const isLatest = idx === thoughts.length - 1;
             const symbols = thought.symbols || [];
@@ -87,15 +104,17 @@ const ThoughtSymbolMap2D: React.FC<ThoughtSymbolMap2DProps> = ({ thoughts, langu
                 const id = sym.name.toLowerCase();
                 const existing = nodesMap.get(id);
 
-                // Get weight from global symbolWeights if available, otherwise from symbol itself
                 const globalWeight = symbolWeights?.get(sym.name) || sym.weight || 1;
 
                 if (existing) {
+                    // Update and enrich existing weight-based node
+                    existing.category = sym.category as SymbolCategory;
                     existing.frequency += 1;
                     existing.lastSeen = Math.max(existing.lastSeen, thought.timestamp);
                     existing.weight = Math.max(existing.weight, globalWeight);
                     existing.val = 2 + Math.sqrt(existing.frequency) * 2 + (existing.weight - 1) * 3;
                 } else {
+                    // New discovery
                     nodesMap.set(id, {
                         id,
                         name: sym.name,
@@ -108,7 +127,7 @@ const ThoughtSymbolMap2D: React.FC<ThoughtSymbolMap2DProps> = ({ thoughts, langu
                 }
             });
 
-            // Semantic links within a thought
+            // Semantic individual links
             const sIds = symbols.map(s => s.name.toLowerCase());
             for (let i = 0; i < sIds.length; i++) {
                 for (let j = i + 1; j < sIds.length; j++) {
@@ -131,7 +150,7 @@ const ThoughtSymbolMap2D: React.FC<ThoughtSymbolMap2DProps> = ({ thoughts, langu
             nodes: Array.from(nodesMap.values()),
             links: Array.from(linksMap.values())
         });
-    }, [thoughts]);
+    }, [thoughts, symbolWeights]);
 
     // Optimized Node Drawing
     const paintNode = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
