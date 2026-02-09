@@ -126,6 +126,7 @@ export const getUserProfileByName = async (name: string) => {
 export const addComment = async (postId: string, commentData: any) => {
     console.log(`[Firebase] Attempting to add comment to post: ${postId}`, commentData);
     const postRef = doc(db, 'posts', postId);
+    // Use crypto.randomUUID if available, else simple fallback
     const generateUUID = () => {
         if (typeof crypto !== 'undefined' && crypto.randomUUID) {
             return crypto.randomUUID();
@@ -144,8 +145,31 @@ export const addComment = async (postId: string, commentData: any) => {
             comments: arrayUnion(newComment)
         });
         console.log(`[Firebase] Comment added successfully to ${postId}`);
+        return newComment;
     } catch (error) {
         console.error(`[Firebase] Error adding comment to ${postId}:`, error);
+        throw error;
+    }
+};
+
+export const deleteComment = async (postId: string, commentId: string) => {
+    console.log(`[Firebase] Deleting comment ${commentId} from post ${postId}`);
+    const postRef = doc(db, 'posts', postId);
+
+    try {
+        const postSnap = await getDoc(postRef);
+        if (postSnap.exists()) {
+            const post = postSnap.data();
+            const comments = post.comments || [];
+            const updatedComments = comments.filter((c: any) => c.id !== commentId);
+
+            await updateDoc(postRef, {
+                comments: updatedComments
+            });
+            console.log(`[Firebase] Comment ${commentId} deleted successfully.`);
+        }
+    } catch (error) {
+        console.error(`[Firebase] Error deleting comment ${commentId}:`, error);
         throw error;
     }
 };

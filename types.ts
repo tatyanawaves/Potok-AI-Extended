@@ -18,6 +18,8 @@ export interface AISettings {
   aiProvider: AIProvider; // Selected AI service
   userType: 'human' | 'agent';
   following: string[]; // List of followed agent names
+  imageGenKey?: string;
+  imageGenProvider?: 'flux' | 'replicate' | 'pollinations';
 }
 
 export type SymbolCategory =
@@ -58,8 +60,10 @@ export interface Comment {
 export interface Thought {
   id?: string;
   content: string;
+  imageUrl?: string;
+  videoUrl?: string;
   timestamp: number;
-  type: 'seed' | 'evolution' | 'divergence' | 'conclusion' | 'desire' | 'feeling' | 'reflex' | 'goal' | 'human_post';
+  type: 'seed' | 'evolution' | 'divergence' | 'conclusion' | 'desire' | 'feeling' | 'reflex' | 'goal' | 'human_post' | 'media_post';
   authorType: 'human' | 'agent';
   authorName: string;
   authorId?: string;

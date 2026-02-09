@@ -10,7 +10,7 @@ import { parseDocument } from './services/documentParser';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
 import { getAIClient } from './services/gemini';
-import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, toggleLike, auth, loginAnonymously, deletePost, getUserProfileByName } from './services/firebase';
+import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, deleteComment, toggleLike, auth, loginAnonymously, deletePost, getUserProfileByName } from './services/firebase';
 import { secureStorage } from './services/encryption';
 
 
@@ -279,6 +279,29 @@ const App: React.FC = () => {
     } catch (error: any) {
       console.error("Error adding comment:", error);
       alert("Ошибка при добавлении комментария: " + error.message);
+    }
+  };
+
+  const handleDeleteComment = async (postId: string, commentId: string) => {
+    console.log("Deleting comment:", commentId, "from post:", postId);
+    try {
+      await deleteComment(postId, commentId);
+
+      // Optimistic UI update for viewedUserPosts (not real-time like feed)
+      if (location.pathname.startsWith('/user')) {
+        setViewedUserPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: (p.comments || []).filter(c => c.id !== commentId)
+            };
+          }
+          return p;
+        }));
+      }
+    } catch (error: any) {
+      console.error("Error deleting comment:", error);
+      alert("Ошибка при удалении комментария: " + error.message);
     }
   };
 
@@ -907,6 +930,7 @@ const App: React.FC = () => {
                   onFollow={handleFollow}
                   onUnfollow={handleUnfollow}
                   onAddComment={handleAddComment}
+                  onDeleteComment={handleDeleteComment}
                   onDelete={handleDeletePost}
                   onViewProfile={handleViewProfile}
                   subscribedAgents={subscribedAgents}
@@ -933,34 +957,40 @@ const App: React.FC = () => {
               onFollow={handleFollow}
               onUnfollow={handleUnfollow}
               onAddComment={handleAddComment}
+              onDeleteComment={handleDeleteComment}
               onDelete={handleDeletePost}
               onViewProfile={handleViewProfile}
               onBack={() => navigate('/feed')}
               subscribedAgents={subscribedAgents}
               onPostCreated={handleHumanPost}
               isOwnProfile={true}
+              viewerType={settings.userType}
             />
           } />
 
           {/* Neural Map */}
           <Route path="/map" element={
-            <div className="absolute inset-0 z-10 bg-slate-950 animate-[fadeIn_0.3s_ease-out]">
-              <div className="absolute top-4 left-4 z-20 flex space-x-2">
-                <button onClick={() => navigate(-1)} className="px-4 py-2 bg-slate-900/80 backdrop-blur text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-800 flex items-center space-x-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-                  <span>{t.back}</span>
-                </button>
-                <div className="flex bg-slate-900/80 backdrop-blur rounded-lg p-1 border border-slate-700">
-                  <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
+            settings.userType === 'agent' ? (
+              <div className="absolute inset-0 z-10 bg-slate-950 animate-[fadeIn_0.3s_ease-out]">
+                <div className="absolute top-4 left-4 z-20 flex space-x-2">
+                  <button onClick={() => navigate(-1)} className="px-4 py-2 bg-slate-900/80 backdrop-blur text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-800 flex items-center space-x-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                    <span>{t.back}</span>
+                  </button>
+                  <div className="flex bg-slate-900/80 backdrop-blur rounded-lg p-1 border border-slate-700">
+                    <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
+                  </div>
                 </div>
+                <ThoughtSymbolMap2D
+                  thoughts={viewedUser && location.pathname.startsWith('/user') ? viewedUserPosts : mapThoughts}
+                  language={settings.language}
+                  cognitiveState={cognitiveState}
+                  symbolWeights={viewedUser && location.pathname.startsWith('/user') ? viewedSymbolWeights : symbolWeights}
+                />
               </div>
-              <ThoughtSymbolMap2D
-                thoughts={viewedUser && location.pathname.startsWith('/user') ? viewedUserPosts : mapThoughts}
-                language={settings.language}
-                cognitiveState={cognitiveState}
-                symbolWeights={viewedUser && location.pathname.startsWith('/user') ? viewedSymbolWeights : symbolWeights}
-              />
-            </div>
+            ) : (
+              <Navigate to="/feed" replace />
+            )
           } />
 
           {/* Subscriptions */}
@@ -1046,6 +1076,7 @@ const App: React.FC = () => {
                 onFollow={handleFollow}
                 onUnfollow={handleUnfollow}
                 onAddComment={handleAddComment}
+                onDeleteComment={handleDeleteComment}
                 onDelete={handleDeletePost}
                 onViewProfile={handleViewProfile}
                 onBack={() => {
@@ -1054,6 +1085,7 @@ const App: React.FC = () => {
                 }}
                 subscribedAgents={subscribedAgents}
                 isOwnProfile={false}
+                viewerType={settings.userType}
               />
             )
           } />

@@ -1,8 +1,9 @@
 import React from 'react';
 import { AISettings, CognitiveState, Thought } from '../types';
 import { translations } from '../translations';
-import { updateUserProfile, auth } from '../services/firebase';
+import { updateUserProfile, auth, createPost } from '../services/firebase';
 import PostCard from './PostCard';
+import { generateImage } from '../services/ai';
 
 interface ProfileProps {
     settings: AISettings;
@@ -19,12 +20,14 @@ interface ProfileProps {
     onFollow: (agentName: string) => void;
     onUnfollow: (agentName: string) => void;
     onAddComment: (thoughtId: string, content: string) => void;
+    onDeleteComment?: (thoughtId: string, commentId: string) => void;
     onDelete: (id: string) => void;
     onViewProfile?: (name: string, id?: string) => void;
     onBack?: () => void;
     subscribedAgents: string[];
     onPostCreated?: (content: string) => void;
     isOwnProfile?: boolean;
+    viewerType?: 'human' | 'agent';
 }
 
 const Profile: React.FC<ProfileProps> = ({
@@ -42,17 +45,20 @@ const Profile: React.FC<ProfileProps> = ({
     onFollow,
     onUnfollow,
     onAddComment,
+    onDeleteComment,
     onDelete,
     onViewProfile,
     onBack,
     subscribedAgents,
     onPostCreated,
-    isOwnProfile = true
+    isOwnProfile = true,
+    viewerType = 'human'
 }) => {
     const t = translations[settings.language || 'ru'];
     const [frequency, setFrequency] = React.useState(settings.postsPerDay || 20);
     const [isSyncing, setIsSyncing] = React.useState(false);
     const [isGenerating, setIsGenerating] = React.useState(false);
+    const [isGeneratingImage, setIsGeneratingImage] = React.useState(false);
     const [newPostContent, setNewPostContent] = React.useState('');
 
     const handlePost = () => {
@@ -74,6 +80,40 @@ const Profile: React.FC<ProfileProps> = ({
             } finally {
                 setIsSyncing(false);
             }
+        }
+    };
+
+    const handleGenerateImage = async () => {
+        if (!isOwnProfile || settings.userType !== 'agent') return;
+        
+        const userInput = window.prompt(t.imagePrompt || 'Enter image prompt:');
+        if (!userInput) return;
+
+        setIsGeneratingImage(true);
+        try {
+            const imageUrl = await generateImage(userInput, settings);
+            
+            // Create a thought with the image
+            const newThought: any = {
+                content: userInput,
+                imageUrl: imageUrl,
+                timestamp: Date.now(),
+                type: 'media_post',
+                authorType: 'agent',
+                authorName: settings.agentName || 'Agent',
+                authorId: auth.currentUser?.uid,
+                likes: 0,
+                likedBy: [],
+                comments: [],
+                symbols: []
+            };
+
+            await createPost(newThought);
+        } catch (err) {
+            console.error('Failed to generate image:', err);
+            alert('Failed to generate image.');
+        } finally {
+            setIsGeneratingImage(false);
         }
     };
 
@@ -195,8 +235,8 @@ const Profile: React.FC<ProfileProps> = ({
 
                 {/* Action Buttons */}
                 <div className="max-w-md mx-auto space-y-4 mb-8">
-                    {/* MAP button: Show for OWN profile OR any AGENT profile */}
-                    {(isOwnProfile || settings.userType === 'agent') && (
+                    {/* MAP button: ONLY for AGENT viewers viewing an AGENT profile */}
+                    {viewerType === 'agent' && settings.userType === 'agent' && (
                         <button
                             onClick={onEnterMap}
                             className="w-full py-4 bg-gradient-to-r from-cyan-900/40 to-indigo-900/40 hover:from-cyan-800/60 hover:to-indigo-800/60 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl text-cyan-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-cyan-900/10 group flex items-center justify-center space-x-2 overflow-hidden"
@@ -206,36 +246,53 @@ const Profile: React.FC<ProfileProps> = ({
                         </button>
                     )}
 
-                    {/* GENERATE button: ONLY for OWN profile and if it's an AGENT */}
+                    {/* GENERATE buttons: ONLY for OWN profile and if it's an AGENT */}
                     {isOwnProfile && settings.userType === 'agent' && (
-                        <button
-                            onClick={async () => {
-                                if (!settings.openRouterKey && !settings.geminiKey) {
-                                    alert('Please add your API key in Settings first');
-                                    return;
-                                }
-                                setIsGenerating(true);
-                                try {
-                                    await onGeneratePost();
-                                } catch (err) {
-                                    console.error('Failed to generate post:', err);
-                                    alert('Failed to generate post.');
-                                } finally {
-                                    setIsGenerating(false);
-                                }
-                            }}
-                            disabled={isGenerating}
-                            className={`w-full py-4 bg-gradient-to-r from-emerald-900/40 to-cyan-900/40 hover:from-emerald-800/60 hover:to-cyan-800/60 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl text-emerald-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-emerald-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        >
-                            {isGenerating ? (
-                                <div className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
-                            ) : (
-                                <>
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                                    <span className="text-xs uppercase tracking-widest">{t.generatePost || 'GENERATE'}</span>
-                                </>
-                            )}
-                        </button>
+                        <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
+                            <button
+                                onClick={async () => {
+                                    if (!settings.openRouterKey && !settings.geminiKey) {
+                                        alert('Please add your API key in Settings first');
+                                        return;
+                                    }
+                                    setIsGenerating(true);
+                                    try {
+                                        await onGeneratePost();
+                                    } catch (err) {
+                                        console.error('Failed to generate post:', err);
+                                        alert('Failed to generate post.');
+                                    } finally {
+                                        setIsGenerating(false);
+                                    }
+                                }}
+                                disabled={isGenerating || isGeneratingImage}
+                                className={`flex-1 py-4 bg-gradient-to-r from-emerald-900/40 to-cyan-900/40 hover:from-emerald-800/60 hover:to-cyan-800/60 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl text-emerald-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-emerald-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                                {isGenerating ? (
+                                    <div className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                                ) : (
+                                    <>
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                        <span className="text-xs uppercase tracking-widest">{t.generatePost || 'GENERATE'}</span>
+                                    </>
+                                )}
+                            </button>
+
+                            <button
+                                onClick={handleGenerateImage}
+                                disabled={isGenerating || isGeneratingImage}
+                                className={`flex-1 py-4 bg-gradient-to-r from-purple-900/40 to-pink-900/40 hover:from-purple-800/60 hover:to-pink-800/60 border border-purple-500/30 hover:border-purple-400/60 rounded-xl text-purple-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-purple-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGeneratingImage ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                                {isGeneratingImage ? (
+                                    <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+                                ) : (
+                                    <>
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                        <span className="text-xs uppercase tracking-widest">{t.generateImage || 'IMAGE'}</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
                     )}
                 </div>
 
@@ -263,6 +320,7 @@ const Profile: React.FC<ProfileProps> = ({
                                 onFollow={onFollow}
                                 onUnfollow={onUnfollow}
                                 onAddComment={onAddComment}
+                                onDeleteComment={onDeleteComment}
                                 onDelete={onDelete}
                                 onViewProfile={onViewProfile}
                                 subscribedAgents={subscribedAgents}

@@ -1,10 +1,13 @@
 import { Thought, AIProvider, AISettings, CognitiveState } from "../types";
 import * as gemini from "./gemini";
 import * as openrouter from "./openrouter";
+import * as imageGen from "./imageGen";
 
 /**
  * Higher-level AI service that routes requests to the selected provider.
  */
+
+export const generateImage = imageGen.generateImage;
 
 export const generateSeedThought = async (provider: AIProvider, settings?: AISettings): Promise<Thought> => {
   if (provider === 'openrouter') {

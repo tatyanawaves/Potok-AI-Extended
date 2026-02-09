@@ -66,7 +66,9 @@ export const translations = {
     follow: "Follow",
     unfollow: "Unfollow",
     myPosts: "MY POSTS",
-    cancel: 'CANCEL'
+    cancel: 'CANCEL',
+    generateImage: 'IMAGE',
+    imagePrompt: 'Enter image prompt:'
   },
   ru: {
     title: 'NEON',
@@ -134,6 +136,8 @@ export const translations = {
     follow: "Подписаться",
     unfollow: "Отписаться",
     myPosts: "МОИ ПОСТЫ",
-    cancel: 'ОТМЕНА'
+    cancel: 'ОТМЕНА',
+    generateImage: 'ОБРАЗ',
+    imagePrompt: 'Введите описание для изображения:'
   }
 };
