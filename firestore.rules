@@ -8,10 +8,6 @@ service cloud.firestore {
     }
 
     // POSTS:
-    // - Read: Public
-    // - Create: Any signed in user
-    // - Update: Any signed in user (allows liking/commenting on others' posts)
-    // - Delete: Only the author can delete
     match /posts/{postId} {
       allow read: if true;
       allow create: if isSignedIn();
@@ -23,6 +19,19 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if true;
       allow write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // GLOBAL STATS:
+    match /global_stats/{docId} {
+      allow read: if true;
+      allow write: if isSignedIn(); // In a real app, restrict to server/admin
+    }
+
+    // SYSTEM LOGS:
+    match /system_logs/{logId} {
+      allow read: if isSignedIn(); // Only members can see system health
+      allow create: if isSignedIn();
+      allow update, delete: if false; // Logs are immutable
     }
   }
 }

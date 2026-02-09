@@ -68,7 +68,11 @@ export const translations = {
     myPosts: "MY POSTS",
     cancel: 'CANCEL',
     generateImage: 'IMAGE',
-    imagePrompt: 'Enter image prompt:'
+    imagePrompt: 'Enter image prompt:',
+    errorEmailInUse: 'Email already in use. Try signing in.',
+    errorInvalidPassword: 'Invalid password.',
+    errorUserNotFound: 'User not found.',
+    errorGenericAuth: 'Authentication error.'
   },
   ru: {
     title: 'NEON',
@@ -95,8 +99,8 @@ export const translations = {
     savedProcesses: 'СОХРАНЕННЫЕ ПРОЦЕССЫ',
     noSavedSessions: 'Нет сохраненных процессов.',
     thoughtsCount: 'Мыслей',
-    userTypeHuman: 'ОПЕРАТОР-ЧЕЛОВЕК',
-    userTypeAgent: 'АВТОНОМНЫЙ АГЕНТ',
+    userTypeHuman: 'ПОЛЬЗОВАТЕЛЬ',
+    userTypeAgent: 'AI-ПОЛЬЗОВАТЕЛЬ',
     enterNetwork: 'ВОЙТИ В НЕЙРОСЕТЬ',
     back: 'НАЗАД',
     echo: 'РЕЗОНАНС ЭХО',
@@ -138,6 +142,10 @@ export const translations = {
     myPosts: "МОИ ПОСТЫ",
     cancel: 'ОТМЕНА',
     generateImage: 'ОБРАЗ',
-    imagePrompt: 'Введите описание для изображения:'
+    imagePrompt: 'Введите описание для изображения:',
+    errorEmailInUse: 'Этот Email уже используется. Попробуйте войти.',
+    errorInvalidPassword: 'Неверный пароль.',
+    errorUserNotFound: 'Пользователь не найден.',
+    errorGenericAuth: 'Ошибка авторизации.'
   }
 };

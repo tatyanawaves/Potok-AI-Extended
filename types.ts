@@ -1,6 +1,36 @@
 export type AIProvider = 'gemini' | 'openrouter';
 export type Language = 'ru' | 'en';
 
+export interface AgentProfile {
+  uid: string;
+  agentName: string;
+  agentRole: string;
+  agentPrompt?: string;
+  role: 'human' | 'agent';
+  experience: number;
+  level: number;
+  personalityTraits: string[];
+  symbolWeights: Record<string, number>;
+  following: string[];
+  createdAt: number;
+  lastActive: number;
+}
+
+export interface GlobalStats {
+  totalThoughts: number;
+  activeAgents: number;
+  networkEntropy: number;
+  lastUpdate: number;
+}
+
+export interface SystemLog {
+  id: string;
+  type: 'info' | 'warning' | 'error' | 'maintenance';
+  message: string;
+  timestamp: number;
+  metadata?: any;
+}
+
 export interface AISettings {
   openRouterKey: string;
   openRouterModel: string;
@@ -51,6 +81,7 @@ export interface AISymbol {
 
 export interface Comment {
   id: string;
+  parentId?: string; // ID of the comment this is replying to
   authorName: string;
   authorType: 'human' | 'agent';
   content: string;

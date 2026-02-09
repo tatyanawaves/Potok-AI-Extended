@@ -7,13 +7,13 @@ import { getAnalytics } from "firebase/analytics";
 // TODO: Replace with your project's config object
 // You can get this from the Firebase Console -> Project Settings -> General -> Your apps
 const firebaseConfig = {
-    apiKey: "AIzaSyCt9A6-2ON2mDcS14h6q_cWC2TyUUdhgyA",
-    authDomain: "potok-33.firebaseapp.com",
-    projectId: "potok-33",
-    storageBucket: "potok-33.firebasestorage.app",
-    messagingSenderId: "165805440425",
-    appId: "1:165805440425:web:7d035685411b65060118b8",
-    measurementId: "G-RW2MNFK64T"
+  apiKey: "AIzaSyA7v4-9qGp-3rLSaATnLBqi46m_Wvliado",
+  authDomain: "neon-extended.firebaseapp.com",
+  projectId: "neon-extended",
+  storageBucket: "neon-extended.firebasestorage.app",
+  messagingSenderId: "1055952798197",
+  appId: "1:1055952798197:web:8b48b234ff8c55652160bc",
+  measurementId: "G-ML9RYX1NPG"
 };
 
 // Initialize Firebase
@@ -70,6 +70,37 @@ export const loginAnonymously = async () => {
 // Collection References
 export const postsRef = collection(db, 'posts');
 export const usersRef = collection(db, 'users');
+export const statsRef = collection(db, 'global_stats');
+export const logsRef = collection(db, 'system_logs');
+
+// --- Global Stats ---
+
+export const updateGlobalStats = async (data: Partial<{ totalThoughts: number, activeAgents: number, networkEntropy: number }>) => {
+    const statsDoc = doc(db, 'global_stats', 'network_status');
+    const updateData: any = { ...data, lastUpdate: Date.now() };
+    
+    // Convert regular numbers to increments if needed, or just set
+    if (data.totalThoughts) updateData.totalThoughts = increment(data.totalThoughts);
+    
+    await setDoc(statsDoc, updateData, { merge: true });
+};
+
+export const getGlobalStats = async () => {
+    const statsDoc = doc(db, 'global_stats', 'network_status');
+    const snapshot = await getDoc(statsDoc);
+    return snapshot.exists() ? snapshot.data() : null;
+};
+
+// --- System Logs ---
+
+export const addSystemLog = async (message: string, type: 'info' | 'warning' | 'error' | 'maintenance' = 'info', metadata?: any) => {
+    await addDoc(logsRef, {
+        message,
+        type,
+        metadata,
+        timestamp: Date.now()
+    });
+};
 
 // Helpers for Social Features
 
@@ -94,18 +125,31 @@ export const createPost = async (postData: any) => {
         }
     }
 
-    return await addDoc(postsRef, {
+    const docRef = await addDoc(postsRef, {
         ...postData,
         timestamp: Date.now(),
         likes: 0,
         likedBy: [],
         comments: []
     });
+
+    // Increment global counter asynchronously
+    updateGlobalStats({ totalThoughts: 1 }).catch(err => console.error("Failed to update stats:", err));
+
+    return docRef;
 };
 
 export const updateUserProfile = async (userId: string, data: any) => {
     const userDoc = doc(db, 'users', userId);
-    await setDoc(userDoc, data, { merge: true });
+    // Remove undefined fields to prevent Firestore errors
+    const cleanData = Object.keys(data).reduce((acc: any, key) => {
+        if (data[key] !== undefined) {
+            acc[key] = data[key];
+        }
+        return acc;
+    }, {});
+    
+    await setDoc(userDoc, cleanData, { merge: true });
 };
 
 export const getUserProfile = async (userId: string) => {

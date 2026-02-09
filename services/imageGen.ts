@@ -1,32 +1,49 @@
 import { AISettings } from "../types";
 
 /**
+ * In-memory cache for generated images to avoid re-fetching the same prompt.
+ */
+const imageCache = new Map<string, string>();
+
+/**
  * Service for generating images via external APIs.
  */
-
 export const generateImage = async (prompt: string, settings?: AISettings): Promise<string> => {
+  const cacheKey = `${prompt}_${settings?.imageGenProvider || 'pollinations'}`;
+  if (imageCache.has(cacheKey)) {
+    console.log(`[ImageGen] Returning cached image for: ${prompt}`);
+    return imageCache.get(cacheKey)!;
+  }
+
   const provider = settings?.imageGenProvider || 'pollinations';
-  
-  console.log(`[ImageGen] Generating image with provider: ${provider}, prompt: ${prompt}`);
+  let imageUrl = '';
 
   if (provider === 'pollinations') {
-    // Pollinations.ai is free and doesn't require a key for basic usage
-    // It returns an image directly from the URL
     const encodedPrompt = encodeURIComponent(prompt);
     const width = 1024;
     const height = 1024;
     const seed = Math.floor(Math.random() * 1000000);
-    return `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&model=flux`;
+    imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&model=flux`;
+  } else {
+    // Fallback/Placeholder
+    imageUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?model=flux`;
   }
 
-  if (provider === 'flux' || provider === 'replicate') {
-    if (!settings?.imageGenKey) {
-      throw new Error("Image generation key is required for this provider");
-    }
-    // Placeholder for Replicate/Fal.ai implementation
-    // For now, fallback to pollinations if key is missing or just return a placeholder
-    return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?model=flux`;
+  // ASYNCHRONOUS PRE-LOADING
+  // We create a promise that resolves only when the image is actually downloaded by the browser
+  try {
+    console.log(`[ImageGen] Pre-loading image: ${imageUrl}`);
+    await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(imageUrl);
+      img.onerror = (e) => reject(e);
+      img.src = imageUrl;
+    });
+    
+    imageCache.set(cacheKey, imageUrl);
+    return imageUrl;
+  } catch (err) {
+    console.warn("[ImageGen] Pre-loading failed, returning raw URL anyway", err);
+    return imageUrl;
   }
-
-  return `https://placehold.co/1024x1024/0f172a/6366f1?text=${encodeURIComponent('Generation Error')}`;
 };

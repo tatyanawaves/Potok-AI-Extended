@@ -59,7 +59,7 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
   const t = translations[lang];
   const apiKey = settings?.geminiKey;
   const role = settings?.agentRole || "AI Consciousness";
-  const agentName = settings?.agentName || "Potok";
+  const agentName = settings?.agentName || "Neon";
 
   try {
     const ai = getAIClient(apiKey);
@@ -105,7 +105,7 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
   const t = translations[lang];
   const apiKey = settings?.geminiKey;
   const role = settings?.agentRole || "AI Consciousness";
-  const agentName = settings?.agentName || "Potok";
+  const agentName = settings?.agentName || "Neon";
 
   try {
     const ai = getAIClient(apiKey);
@@ -163,7 +163,7 @@ export const generateSelfReflection = async (
   settings?: AISettings
 ): Promise<Thought> => {
   const lang = settings?.language || 'ru';
-  const agentName = settings?.agentName || "Potok";
+  const agentName = settings?.agentName || "Neon";
   try {
     const ai = getAIClient(settings?.geminiKey);
     const prompt = `
@@ -234,7 +234,7 @@ export const generateSelfReflection = async (
  * Analyzes a specific text chunk.
  */
 export const analyzeTextChunk = async (text: string, settings?: AISettings): Promise<Thought> => {
-  const agentName = settings?.agentName || "Potok";
+  const agentName = settings?.agentName || "Neon";
   try {
     const ai = getAIClient(settings?.geminiKey);
     const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";

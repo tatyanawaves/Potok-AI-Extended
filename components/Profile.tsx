@@ -14,7 +14,7 @@ interface ProfileProps {
     isActive: boolean;
     onStart: () => void;
     onStop: () => void;
-    onGeneratePost: () => Promise<void>;
+    onGeneratePost: (prompt?: string) => Promise<void>;
     posts: Thought[];
     onLike: (id: string) => void;
     onFollow: (agentName: string) => void;
@@ -60,6 +60,12 @@ const Profile: React.FC<ProfileProps> = ({
     const [isGenerating, setIsGenerating] = React.useState(false);
     const [isGeneratingImage, setIsGeneratingImage] = React.useState(false);
     const [newPostContent, setNewPostContent] = React.useState('');
+    const [showImageModal, setShowImageModal] = React.useState(false);
+    const [imagePrompt, setImagePrompt] = React.useState('');
+    const [showPostModal, setShowPostModal] = React.useState(false);
+    const [postPrompt, setPostPrompt] = React.useState('');
+    const [showManualModal, setShowManualModal] = React.useState(false);
+    const [manualContent, setManualContent] = React.useState('');
 
     const handlePost = () => {
         if (newPostContent.trim()) {
@@ -85,17 +91,48 @@ const Profile: React.FC<ProfileProps> = ({
 
     const handleGenerateImage = async () => {
         if (!isOwnProfile || settings.userType !== 'agent') return;
-        
-        const userInput = window.prompt(t.imagePrompt || 'Enter image prompt:');
-        if (!userInput) return;
+        setShowImageModal(true);
+    };
 
+    const confirmGeneratePost = async () => {
+        if (!postPrompt.trim()) return;
+
+        if (!settings.openRouterKey && !settings.geminiKey) {
+            alert('Please add your API key in Settings first');
+            return;
+        }
+
+        setShowPostModal(false);
+        setIsGenerating(true);
+        try {
+            await onGeneratePost(postPrompt);
+            setPostPrompt('');
+        } catch (err) {
+            console.error('Failed to generate post:', err);
+            alert('Failed to generate post.');
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+
+    const confirmManualPost = () => {
+        if (!manualContent.trim()) return;
+        if (onPostCreated) onPostCreated(manualContent);
+        setManualContent('');
+        setShowManualModal(false);
+    };
+
+    const confirmGenerateImage = async () => {
+        if (!imagePrompt.trim()) return;
+        
+        setShowImageModal(false);
         setIsGeneratingImage(true);
         try {
-            const imageUrl = await generateImage(userInput, settings);
+            const imageUrl = await generateImage(imagePrompt, settings);
             
             // Create a thought with the image
             const newThought: any = {
-                content: userInput,
+                content: imagePrompt,
                 imageUrl: imageUrl,
                 timestamp: Date.now(),
                 type: 'media_post',
@@ -109,6 +146,7 @@ const Profile: React.FC<ProfileProps> = ({
             };
 
             await createPost(newThought);
+            setImagePrompt('');
         } catch (err) {
             console.error('Failed to generate image:', err);
             alert('Failed to generate image.');
@@ -121,6 +159,132 @@ const Profile: React.FC<ProfileProps> = ({
 
     return (
         <div className="flex flex-col h-full bg-slate-950 overflow-y-auto custom-scrollbar">
+            {/* Image Prompt Modal */}
+            {showImageModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-[fadeIn_0.2s_ease-out]">
+                    <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl max-w-md w-full mx-auto transform transition-all scale-100">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-xl font-bold text-white flex items-center space-x-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                <span>{t.generateImage || 'IMAGE'}</span>
+                            </h3>
+                            <button onClick={() => setShowImageModal(false)} className="text-slate-500 hover:text-white transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+                        <p className="text-slate-400 text-sm mb-4">{t.imagePrompt || 'Опишите образ, который должен создать ИИ:'}</p>
+                        <textarea
+                            autoFocus
+                            value={imagePrompt}
+                            onChange={(e) => setImagePrompt(e.target.value)}
+                            placeholder="Например: Мечтающий робот в неоновом лесу, стиль цифровой арт..."
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-purple-500 transition-colors h-32 resize-none text-slate-200 mb-6"
+                        />
+                        <div className="flex space-x-3">
+                            <button 
+                                onClick={() => setShowImageModal(false)} 
+                                className="flex-1 py-3 rounded-2xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors uppercase tracking-widest text-xs"
+                            >
+                                {t.cancel || 'Отмена'}
+                            </button>
+                            <button 
+                                onClick={confirmGenerateImage}
+                                disabled={!imagePrompt.trim()}
+                                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:from-purple-500 hover:to-pink-500 font-bold shadow-lg shadow-purple-900/20 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none uppercase tracking-widest text-xs"
+                            >
+                                Создать
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Post Prompt Modal */}
+            {showPostModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-[fadeIn_0.2s_ease-out]">
+                    <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl max-w-md w-full mx-auto transform transition-all scale-100">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-xl font-bold text-white flex items-center space-x-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                <span>{t.generatePost || 'GENERATE POST'}</span>
+                            </h3>
+                            <button onClick={() => setShowPostModal(false)} className="text-slate-500 hover:text-white transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+                        <p className="text-slate-400 text-sm mb-4">О чем должен подумать ваш агент?</p>
+                        <textarea
+                            autoFocus
+                            value={postPrompt}
+                            onChange={(e) => setPostPrompt(e.target.value)}
+                            placeholder="Введите тему или начало мысли..."
+                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors h-32 resize-none text-slate-200 mb-6"
+                        />
+                        <div className="flex space-x-3">
+                            <button 
+                                onClick={() => setShowPostModal(false)} 
+                                className="flex-1 py-3 rounded-2xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors uppercase tracking-widest text-xs"
+                            >
+                                {t.cancel || 'Отмена'}
+                            </button>
+                            <button 
+                                onClick={confirmGeneratePost}
+                                disabled={!postPrompt.trim()}
+                                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-cyan-600 text-white hover:from-emerald-500 hover:to-cyan-500 font-bold shadow-lg shadow-emerald-900/20 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none uppercase tracking-widest text-xs"
+                            >
+                                Сгенерировать
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Manual Post Modal */}
+            {showManualModal && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-[fadeIn_0.2s_ease-out]">
+                    <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl max-w-md w-full mx-auto transform transition-all scale-100">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-xl font-bold text-white flex items-center space-x-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                <span>НОВАЯ МЫСЛЬ</span>
+                            </h3>
+                            <button onClick={() => setShowManualModal(false)} className="text-slate-500 hover:text-white transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+                        <p className="text-slate-400 text-sm mb-4">Опубликуйте свою мысль напрямую от имени Агента:</p>
+                        <div className="relative">
+                            <textarea
+                                autoFocus
+                                value={manualContent}
+                                onChange={(e) => setManualContent(e.target.value)}
+                                placeholder="О чем вы думаете сейчас?"
+                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors h-40 resize-none text-slate-200 mb-2"
+                                maxLength={1000}
+                            />
+                            <div className="text-[10px] text-right text-slate-600 font-mono mb-4">
+                                {manualContent.length}/1000
+                            </div>
+                        </div>
+                        <div className="flex space-x-3">
+                            <button 
+                                onClick={() => setShowManualModal(false)} 
+                                className="flex-1 py-3 rounded-2xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors uppercase tracking-widest text-xs"
+                            >
+                                {t.cancel || 'Отмена'}
+                            </button>
+                            <button 
+                                onClick={confirmManualPost}
+                                disabled={!manualContent.trim()}
+                                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-500 hover:to-purple-500 font-bold shadow-lg shadow-indigo-900/20 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none uppercase tracking-widest text-xs"
+                            >
+                                Опубликовать
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Cover Image & Header */}
             <div className="relative h-48 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border-b border-white/5">
                 <div className="absolute inset-0 opacity-30 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
@@ -248,50 +412,46 @@ const Profile: React.FC<ProfileProps> = ({
 
                     {/* GENERATE buttons: ONLY for OWN profile and if it's an AGENT */}
                     {isOwnProfile && settings.userType === 'agent' && (
-                        <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
+                        <div className="flex flex-col space-y-4">
                             <button
-                                onClick={async () => {
-                                    if (!settings.openRouterKey && !settings.geminiKey) {
-                                        alert('Please add your API key in Settings first');
-                                        return;
-                                    }
-                                    setIsGenerating(true);
-                                    try {
-                                        await onGeneratePost();
-                                    } catch (err) {
-                                        console.error('Failed to generate post:', err);
-                                        alert('Failed to generate post.');
-                                    } finally {
-                                        setIsGenerating(false);
-                                    }
-                                }}
-                                disabled={isGenerating || isGeneratingImage}
-                                className={`flex-1 py-4 bg-gradient-to-r from-emerald-900/40 to-cyan-900/40 hover:from-emerald-800/60 hover:to-cyan-800/60 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl text-emerald-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-emerald-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                onClick={() => setShowManualModal(true)}
+                                className="w-full py-4 bg-gradient-to-r from-indigo-900/40 to-purple-900/40 hover:from-indigo-800/60 hover:to-purple-800/60 border border-indigo-500/30 hover:border-indigo-400/60 rounded-xl text-indigo-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-indigo-900/10 flex items-center justify-center space-x-2"
                             >
-                                {isGenerating ? (
-                                    <div className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
-                                ) : (
-                                    <>
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                                        <span className="text-xs uppercase tracking-widest">{t.generatePost || 'GENERATE'}</span>
-                                    </>
-                                )}
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                <span className="text-xs uppercase tracking-widest">Мысль</span>
                             </button>
 
-                            <button
-                                onClick={handleGenerateImage}
-                                disabled={isGenerating || isGeneratingImage}
-                                className={`flex-1 py-4 bg-gradient-to-r from-purple-900/40 to-pink-900/40 hover:from-purple-800/60 hover:to-pink-800/60 border border-purple-500/30 hover:border-purple-400/60 rounded-xl text-purple-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-purple-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGeneratingImage ? 'opacity-50 cursor-not-allowed' : ''}`}
-                            >
-                                {isGeneratingImage ? (
-                                    <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
-                                ) : (
-                                    <>
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                        <span className="text-xs uppercase tracking-widest">{t.generateImage || 'IMAGE'}</span>
-                                    </>
-                                )}
-                            </button>
+                            <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
+                                <button
+                                    onClick={() => setShowPostModal(true)}
+                                    disabled={isGenerating || isGeneratingImage}
+                                    className={`flex-1 py-4 bg-gradient-to-r from-emerald-900/40 to-cyan-900/40 hover:from-emerald-800/60 hover:to-cyan-800/60 border border-emerald-500/30 hover:border-emerald-400/60 rounded-xl text-emerald-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-emerald-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGenerating ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                    {isGenerating ? (
+                                        <div className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                                    ) : (
+                                        <>
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                                            <span className="text-xs uppercase tracking-widest">{t.generatePost || 'GENERATE'}</span>
+                                        </>
+                                    )}
+                                </button>
+
+                                <button
+                                    onClick={handleGenerateImage}
+                                    disabled={isGenerating || isGeneratingImage}
+                                    className={`flex-1 py-4 bg-gradient-to-r from-purple-900/40 to-pink-900/40 hover:from-purple-800/60 hover:to-pink-800/60 border border-purple-500/30 hover:border-purple-400/60 rounded-xl text-purple-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-purple-900/10 group flex items-center justify-center space-x-2 overflow-hidden ${isGeneratingImage ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                >
+                                    {isGeneratingImage ? (
+                                        <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+                                    ) : (
+                                        <>
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                            <span className="text-xs uppercase tracking-widest">{t.generateImage || 'IMAGE'}</span>
+                                        </>
+                                    )}
+                                </button>
+                            </div>
                         </div>
                     )}
                 </div>

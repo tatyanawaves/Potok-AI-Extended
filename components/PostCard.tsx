@@ -11,7 +11,7 @@ interface PostCardProps {
     onLike?: (id: string) => void;
     onFollow?: (agentName: string) => void;
     onUnfollow?: (agentName: string) => void;
-    onAddComment?: (thoughtId: string, content: string) => void;
+    onAddComment?: (thoughtId: string, content: string, parentId?: string) => void;
     onDeleteComment?: (thoughtId: string, commentId: string) => void;
     onDelete?: (id: string) => void;
     onViewProfile?: (name: string, id?: string) => void;
@@ -19,6 +19,189 @@ interface PostCardProps {
     isFeedView?: boolean;
     getTypeStyle?: (type: Thought['type']) => string;
 }
+
+const ImageWithLoader: React.FC<{ src: string, alt: string, authorName: string }> = ({ src, alt, authorName }) => {
+    const [isLoaded, setIsLoaded] = useState(false);
+    const [error, setError] = useState(false);
+
+    return (
+        <div className="relative w-full h-full bg-slate-900 flex items-center justify-center">
+            {!isLoaded && !error && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center space-y-3 z-10">
+                    <div className="w-8 h-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                    <span className="text-[10px] font-mono text-purple-400 uppercase tracking-[0.2em] animate-pulse">Rendering Image...</span>
+                </div>
+            )}
+            {error ? (
+                <div className="flex flex-col items-center text-slate-600 space-y-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                    <span className="text-[10px] uppercase font-bold tracking-widest">Neural Link Timeout</span>
+                </div>
+            ) : (
+                <img 
+                    src={src} 
+                    alt={alt} 
+                    onLoad={() => setIsLoaded(true)}
+                    onError={() => setError(true)}
+                    className={`w-full h-full object-cover transition-all duration-1000 ${isLoaded ? 'opacity-100 scale-100' : 'opacity-0 scale-110'}`}
+                />
+            )}
+            <div className={`absolute top-2 right-2 px-2 py-0.5 bg-black/50 backdrop-blur rounded text-[8px] font-bold text-white/70 uppercase tracking-widest border border-white/10 transition-opacity duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}>
+                Captured by {authorName}
+            </div>
+        </div>
+    );
+};
+
+interface CommentItemProps {
+    comment: Comment;
+    allComments: Comment[];
+    language: string;
+    agentName: string;
+    onAddComment?: (thoughtId: string, content: string, parentId?: string) => void;
+    onDeleteComment?: (thoughtId: string, commentId: string) => void;
+    onViewProfile?: (name: string, id?: string) => void;
+    thoughtId: string;
+    depth?: number;
+}
+
+const CommentItem: React.FC<CommentItemProps> = ({ 
+    comment, 
+    allComments, 
+    language, 
+    agentName, 
+    onAddComment, 
+    onDeleteComment, 
+    onViewProfile, 
+    thoughtId,
+    depth = 0 
+}) => {
+    const [isExpanded, setIsExpanded] = useState(true);
+    const [isReplying, setIsReplying] = useState(false);
+    const [replyContent, setReplyContent] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const t = translations[language as 'en' | 'ru'];
+
+    const replies = allComments.filter(c => c.parentId === comment.id);
+    const hasReplies = replies.length > 0;
+
+    const handleReply = async () => {
+        if (!replyContent.trim() || !onAddComment) return;
+        setIsSubmitting(true);
+        try {
+            await onAddComment(thoughtId, replyContent, comment.id);
+            setReplyContent('');
+            setIsReplying(false);
+            setIsExpanded(true);
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    return (
+        <div className={`flex flex-col space-y-2 ${depth > 0 ? 'ml-4 mt-2 border-l border-slate-800 pl-3' : ''}`}>
+            <div className="group/comment flex items-start space-x-2 relative">
+                {/* Arrow for Expand/Collapse */}
+                {hasReplies && (
+                    <button 
+                        onClick={() => setIsExpanded(!isExpanded)}
+                        className="absolute -left-6 top-1 p-1 text-slate-600 hover:text-cyan-400 transition-all transform"
+                    >
+                        <svg 
+                            xmlns="http://www.w3.org/2000/svg" 
+                            className={`h-3 w-3 transition-transform duration-300 ${isExpanded ? 'rotate-180' : 'rotate-0'}`} 
+                            fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                        >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 15l7-7 7 7" />
+                        </svg>
+                    </button>
+                )}
+
+                <div className="flex-1">
+                    <div className="flex items-center space-x-2">
+                        <span 
+                            className={`text-[10px] font-bold cursor-pointer hover:underline ${comment.authorType === 'human' ? 'text-indigo-400' : 'text-purple-400'}`}
+                            onClick={() => onViewProfile && onViewProfile(comment.authorName)}
+                        >
+                            {comment.authorName}
+                        </span>
+                        <span className="text-[8px] text-slate-600 font-mono">
+                            {new Date(comment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                    </div>
+                    <p className="text-xs text-slate-400 break-words mt-0.5">{comment.content}</p>
+                    
+                    <div className="flex items-center space-x-3 mt-1 opacity-0 group-hover/comment:opacity-100 transition-opacity">
+                        <button 
+                            onClick={() => setIsReplying(!isReplying)}
+                            className="text-[9px] font-bold text-slate-500 hover:text-cyan-400 uppercase tracking-tighter"
+                        >
+                            {isReplying ? t.cancel : 'Ответить'}
+                        </button>
+                        
+                        {hasReplies && (
+                            <div className="flex items-center space-x-1 text-[9px] font-mono text-slate-600">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                                <span>{replies.length}</span>
+                            </div>
+                        )}
+
+                        {onDeleteComment && (comment.authorName === agentName) && (
+                            <button
+                                onClick={() => onDeleteComment(thoughtId, comment.id)}
+                                className="p-1 text-slate-600 hover:text-rose-500 transition-all"
+                                title="Удалить"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        )}
+                    </div>
+
+                    {isReplying && (
+                        <div className="mt-2 flex space-x-2 animate-[fadeIn_0.2s_ease-out]">
+                            <input 
+                                autoFocus
+                                type="text"
+                                value={replyContent}
+                                onChange={(e) => setReplyContent(e.target.value)}
+                                className="flex-1 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-cyan-500 text-slate-200"
+                                placeholder={`Ответ ${comment.authorName}...`}
+                                onKeyDown={(e) => e.key === 'Enter' && handleReply()}
+                            />
+                            <button 
+                                onClick={handleReply}
+                                disabled={!replyContent.trim() || isSubmitting}
+                                className="px-2 py-1 bg-cyan-600 text-white text-[9px] font-bold rounded hover:bg-cyan-500 disabled:opacity-50"
+                            >
+                                {isSubmitting ? '...' : 'OK'}
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Render children recursively */}
+            {hasReplies && isExpanded && (
+                <div className="flex flex-col space-y-2">
+                    {replies.sort((a, b) => a.timestamp - b.timestamp).map(reply => (
+                        <CommentItem 
+                            key={reply.id} 
+                            comment={reply} 
+                            allComments={allComments}
+                            language={language}
+                            agentName={agentName}
+                            onAddComment={onAddComment}
+                            onDeleteComment={onDeleteComment}
+                            onViewProfile={onViewProfile}
+                            thoughtId={thoughtId}
+                            depth={depth + 1}
+                        />
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
 
 const PostCard: React.FC<PostCardProps> = ({
     thought,
@@ -104,7 +287,12 @@ const PostCard: React.FC<PostCardProps> = ({
                         </span>
                         <div className="flex items-center space-x-2">
                             {thought.authorType === 'human' && <span className="text-[9px] bg-indigo-500/20 text-indigo-300 px-1.5 py-0 rounded font-bold tracking-wider">USER</span>}
-                            {thought.authorType === 'agent' && <span className="text-[9px] bg-cyan-500/20 text-cyan-300 px-1.5 py-0 rounded font-bold tracking-wider">AI</span>}
+                            {thought.authorType === 'agent' && (
+                                <>
+                                    <span className="text-[9px] bg-cyan-500/20 text-cyan-300 px-1.5 py-0 rounded font-bold tracking-wider">AI</span>
+                                    <span className="text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0 rounded font-bold tracking-wider">USER</span>
+                                </>
+                            )}
                             <span className="text-[10px] text-slate-500">· {new Date(thought.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
                     </div>
@@ -132,16 +320,12 @@ const PostCard: React.FC<PostCardProps> = ({
             {/* Media Content */}
             {thought.imageUrl && (
                 <div className="px-4 mt-3">
-                    <div className="relative rounded-xl overflow-hidden border border-white/5 bg-slate-950 aspect-square sm:aspect-video">
-                        <img 
+                    <div className="relative rounded-xl overflow-hidden border border-white/5 bg-slate-950 aspect-square sm:aspect-video group/image">
+                        <ImageWithLoader 
                             src={thought.imageUrl} 
                             alt="AI Generated Content" 
-                            className="w-full h-full object-cover transition-transform duration-700 hover:scale-105"
-                            loading="lazy"
+                            authorName={thought.authorName}
                         />
-                        <div className="absolute top-2 right-2 px-2 py-0.5 bg-black/50 backdrop-blur rounded text-[8px] font-bold text-white/70 uppercase tracking-widest border border-white/10">
-                            Generated by {thought.authorName}
-                        </div>
                     </div>
                 </div>
             )}
@@ -188,7 +372,7 @@ const PostCard: React.FC<PostCardProps> = ({
 
                 <div className="flex items-center space-x-3">
                     <div className="flex flex-wrap gap-2 mt-2 sm:mt-0">
-                        {thought.symbols && thought.symbols.slice(0, 5).map((s, i) => (
+                        {thought.type !== 'human_post' && thought.symbols && thought.symbols.slice(0, 5).map((s, i) => (
                             <span key={i} className="text-[10px] text-slate-500 bg-slate-800/50 px-1.5 py-0.5 rounded hover:text-cyan-400 cursor-pointer transition-colors">#{s.name}</span>
                         ))}
                     </div>
@@ -203,45 +387,37 @@ const PostCard: React.FC<PostCardProps> = ({
 
             {/* Comments Section */}
             {(thought.comments && thought.comments.length > 0) || true ? (
-                <div className="bg-slate-950/30 border-t border-white/5 p-3 space-y-3">
-                    {thought.comments && thought.comments.slice(0, visibleComments).map(comment => (
-                        <div key={comment.id} className="group/comment flex items-start space-x-2 pl-2 border-l-2 border-slate-800 hover:border-slate-600 transition-colors">
-                            <div className="flex-1">
-                                <span 
-                                    className={`text-[10px] font-bold cursor-pointer hover:underline ${comment.authorType === 'human' ? 'text-indigo-400' : 'text-cyan-400'}`}
-                                    onClick={() => onViewProfile && onViewProfile(comment.authorName)}
-                                >
-                                    {comment.authorName}
-                                </span>
-                                <p className="text-xs text-slate-400 break-words mt-0.5">{comment.content}</p>
-                            </div>
-                            
-                            {/* Delete Comment Button */}
-                            {onDeleteComment && (comment.authorName === agentName || thought.authorName === agentName) && (
-                                <button
-                                    onClick={() => handleDeleteComment(comment.id)}
-                                    className="opacity-0 group-hover/comment:opacity-100 p-1 text-slate-600 hover:text-rose-500 transition-all"
-                                    title="Удалить комментарий"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                </button>
-                            )}
-                        </div>
-                    ))}
+                <div className="bg-slate-950/30 border-t border-white/5 p-3 space-y-4">
+                    {/* Filter root comments (no parentId or parentId is missing from thought.comments) */}
+                    {thought.comments && thought.comments
+                        .filter(c => !c.parentId || !thought.comments.find(pc => pc.id === c.parentId))
+                        .sort((a, b) => a.timestamp - b.timestamp)
+                        .slice(0, visibleComments)
+                        .map(comment => (
+                            <CommentItem 
+                                key={comment.id} 
+                                comment={comment} 
+                                allComments={thought.comments}
+                                language={language}
+                                agentName={agentName}
+                                onAddComment={onAddComment}
+                                onDeleteComment={onDeleteComment}
+                                onViewProfile={onViewProfile}
+                                thoughtId={thought.id}
+                            />
+                        ))}
 
                     {/* Pagination Button */}
-                    {thought.comments && thought.comments.length > visibleComments && (
+                    {thought.comments && thought.comments.filter(c => !c.parentId).length > visibleComments && (
                         <button 
                             onClick={() => setVisibleComments(prev => prev + 5)}
                             className="text-[10px] text-slate-500 hover:text-cyan-400 font-mono w-full text-left pl-2 pt-1 pb-2 transition-colors"
                         >
-                            Show {Math.min(5, thought.comments.length - visibleComments)} more comments ({thought.comments.length - visibleComments} remaining)
+                            Show more threads ({thought.comments.filter(c => !c.parentId).length - visibleComments} remaining)
                         </button>
                     )}
 
-                    <div className="relative">
+                    <div className="relative pt-2">
                         <input
                             type="text"
                             value={commentInput}
@@ -252,7 +428,7 @@ const PostCard: React.FC<PostCardProps> = ({
                             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleComment(); }}
                             disabled={isSubmittingComment}
                         />
-                        <div className="absolute right-1 top-1 flex items-center space-x-1 h-full pb-2 pr-1">
+                        <div className="absolute right-1 bottom-1 flex items-center space-x-1 h-10 pr-1">
                             <span className={`text-[8px] font-mono ${commentInput.length > 450 ? 'text-amber-500' : 'text-slate-600'}`}>
                                 {commentInput.length}/500
                             </span>

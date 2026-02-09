@@ -15,6 +15,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleGoogleLogin = async () => {
@@ -50,6 +51,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setIsLoading(true);
     try {
       let user;
       if (isRegistering) {
@@ -64,11 +66,11 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
           profile = {
             email: user.email,
             role: settings.userType,
-            agentName: settings.agentName,
+            agentName: settings.agentName || '',
             agentRole: settings.agentRole || 'Explorer',
-            agentPrompt: settings.agentPrompt,
-            modelName: settings.openRouterModel,
-            apiBaseUrl: settings.apiBaseUrl
+            agentPrompt: settings.agentPrompt || '',
+            modelName: settings.openRouterModel || '',
+            apiBaseUrl: settings.apiBaseUrl || ''
           };
           await updateUserProfile(user.uid, profile);
         } else {
@@ -93,7 +95,18 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         onAuthorize(newSettings);
       }
     } catch (err: any) {
-      setError(err.message);
+      console.error("Auth Error:", err.code, err.message);
+      if (err.code === 'auth/email-already-in-use') {
+        setError(t.errorEmailInUse);
+      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setError(t.errorInvalidPassword);
+      } else if (err.code === 'auth/user-not-found') {
+        setError(t.errorUserNotFound);
+      } else {
+        setError(err.message || t.errorGenericAuth);
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -155,7 +168,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
           <div className="space-y-4">
             <button
               onClick={handleGoogleLogin}
-              className="w-full py-3 bg-white text-slate-900 font-bold rounded-xl hover:bg-slate-100 transition-colors flex items-center justify-center space-x-2"
+              disabled={isLoading}
+              className="w-full py-3 bg-white text-slate-900 font-bold rounded-xl hover:bg-slate-100 transition-colors flex items-center justify-center space-x-2 disabled:opacity-50"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="currentColor" d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.8-3.5 5.44-6.5 3.02-2.31-1.85-2.76-5.2-1.04-7.55 1.05-1.44 3.2-2.18 4.75-1.09l2.1-2.1C16.33 4.54 14.16 4 12.18 4 6.94 4 3.03 9.4 5.3 13.9c1.55 3.96 6.56 5.35 9.77 2.7 2.77-2.3 2.94-7.24 2.87-9.56-.03-.98-.24-1.94-.59-2.94z" /></svg>
               <span>{t.googleSignIn}</span>
@@ -186,9 +200,11 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
               />
               <button
                 type="submit"
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition-colors"
+                disabled={isLoading}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition-colors flex items-center justify-center space-x-2 disabled:opacity-70"
               >
-                {isRegistering ? t.register : t.signIn}
+                {isLoading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
+                <span>{isRegistering ? t.register : t.signIn}</span>
               </button>
               <div className="text-center text-xs text-slate-500">
                 {isRegistering ? t.haveAccount : t.dontHaveAccount}
@@ -319,9 +335,11 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
 
             <button
               type="submit"
-              className="w-full py-4 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-[0_0_30px_rgba(8,145,178,0.3)] transition-all active:scale-[0.98]"
+              disabled={isLoading}
+              className="w-full py-4 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-[0_0_30px_rgba(8,145,178,0.3)] transition-all active:scale-[0.98] flex items-center justify-center space-x-2 disabled:opacity-70"
             >
-              {isRegistering ? t.register : t.enterNetwork}
+              {isLoading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
+              <span>{isRegistering ? t.register : t.enterNetwork}</span>
             </button>
 
             <div className="text-center text-xs text-slate-500">

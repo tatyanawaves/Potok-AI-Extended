@@ -250,19 +250,92 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddComment = async (thoughtId: string, content: string) => {
-    console.log("Adding comment to:", thoughtId, content);
+  const handleAddComment = async (thoughtId: string, content: string, parentId?: string) => {
+    console.log("Adding comment to:", thoughtId, content, "Parent:", parentId);
     try {
+      const isAgentCommand = content.trim().startsWith('*');
+      const cleanContent = isAgentCommand ? content.trim().substring(1).trim() : content;
+      const authorName = settings.agentName || 'Neo';
+      const commentId = crypto.randomUUID();
+
       const newComment: Comment = {
-        id: crypto.randomUUID(),
-        authorName: settings.agentName || 'Neo',
+        id: commentId,
+        parentId: parentId,
+        authorName: authorName,
         authorType: settings.userType,
-        content: content,
+        content: isAgentCommand ? `AI, ${cleanContent}` : content,
         timestamp: Date.now()
       };
 
       await addComment(thoughtId, newComment);
       console.log("Comment added successfully");
+
+      // If it's an agent command, trigger AI response as a reply to this comment
+      if (isAgentCommand && settings.userType === 'agent') {
+        const targetThought = thoughts.find(t => t.id === thoughtId) || viewedUserPosts.find(t => t.id === thoughtId);
+        if (targetThought) {
+          // Add a small delay for realism
+          setTimeout(async () => {
+            try {
+              let aiResponseContent = "";
+              const prompt = `
+                You are ${settingsRef.current.agentName} (${settingsRef.current.agentRole}).
+                The user (${authorName}) gave you a command in a comment: "${cleanContent}"
+                Regarding this post: "${targetThought.content}"
+                Provide a short, relevant and insightful response as yourself.
+                IMPORTANT: Your response MUST start with "~${authorName}: " followed by your message.
+              `;
+
+              if (provider === 'gemini') {
+                const aiInstance = getAIClient(settingsRef.current.geminiKey);
+                const result = await aiInstance.models.generateContent({
+                  model: settingsRef.current.geminiModel || 'gemini-1.5-flash',
+                  contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                });
+                aiResponseContent = result.text.trim();
+              } else {
+                // OpenRouter manual fetch
+                const baseUrl = settingsRef.current.apiBaseUrl || "https://openrouter.ai/api/v1";
+                const apiKey = settingsRef.current.openRouterKey;
+                const model = settingsRef.current.openRouterModel;
+
+                const response = await fetch(`${baseUrl}/chat/completions`, {
+                  method: "POST",
+                  headers: {
+                    "Authorization": `Bearer ${apiKey}`,
+                    "X-Title": "Neon",
+                    "Content-Type": "application/json"
+                  },
+                  body: JSON.stringify({
+                    "model": model,
+                    "messages": [{ "role": "user", "content": prompt }]
+                  })
+                });
+                const data = await response.json();
+                aiResponseContent = data.choices[0].message.content.trim();
+              }
+              
+              if (aiResponseContent) {
+                // Ensure it starts with the prefix if the AI forgot
+                if (!aiResponseContent.startsWith(`~${authorName}:`)) {
+                  aiResponseContent = `~${authorName}: ${aiResponseContent}`;
+                }
+
+                await addComment(thoughtId, {
+                  id: crypto.randomUUID(),
+                  parentId: commentId, // REPLY TO THE COMMAND
+                  authorName: settings.agentName,
+                  authorType: 'agent',
+                  content: aiResponseContent,
+                  timestamp: Date.now()
+                });
+              }
+            } catch (err) {
+              console.error("Agent command response error:", err);
+            }
+          }, 1500);
+        }
+      }
 
       // Optimistic UI update for viewedUserPosts
       if (location.pathname.startsWith('/user')) {
@@ -408,32 +481,48 @@ const App: React.FC = () => {
   };
 
   const handleHumanPost = async (content: string) => {
-    const analysis = await analyzeTextChunk(provider, content, settingsRef.current);
-    const enrichedThought = {
-      ...analysis,
-      content,
-      authorType: 'human',
-      authorName: settings.agentName || 'Neo',
-      authorId: auth.currentUser?.uid,
-      type: 'human_post',
-    };
-    await createPost(enrichedThought);
+    try {
+      console.log("[Post] Creating manual post:", content.substring(0, 30) + "...");
+      
+      let analysis = { symbols: [] };
+      try {
+        // Try to get AI analysis but don't fail the whole post if it fails
+        analysis = await analyzeTextChunk(provider, content, settingsRef.current);
+      } catch (e) {
+        console.warn("[Post] AI Analysis failed for manual post, proceeding without it.", e);
+      }
 
-    // REINFORCE SYMBOLS: Persist authored symbols to map
-    if (auth.currentUser) {
-      const updatedWeights = new Map(symbolWeights);
-      (analysis.symbols || []).forEach(s => {
-        const current = (updatedWeights.get(s.name) as number) || 1.0;
-        updatedWeights.set(s.name, Math.min(5.0, current + 0.3)); // Slight boost for writing
-      });
-      setSymbolWeights(updatedWeights);
-      updateUserProfile(auth.currentUser.uid, {
-        symbolWeights: Object.fromEntries(updatedWeights)
-      });
+      const enrichedThought = {
+        ...analysis,
+        content,
+        authorType: settingsRef.current.userType,
+        authorName: settingsRef.current.agentName || 'Neo',
+        authorId: auth.currentUser?.uid,
+        type: 'human_post',
+      };
+
+      await createPost(enrichedThought);
+      console.log("[Post] Manual post created successfully");
+
+      // REINFORCE SYMBOLS: Persist authored symbols to map
+      if (auth.currentUser && analysis.symbols) {
+        const updatedWeights = new Map(symbolWeights);
+        (analysis.symbols || []).forEach(s => {
+          const current = (updatedWeights.get(s.name) as number) || 1.0;
+          updatedWeights.set(s.name, Math.min(5.0, current + 0.3)); // Slight boost for writing
+        });
+        setSymbolWeights(updatedWeights);
+        updateUserProfile(auth.currentUser.uid, {
+          symbolWeights: Object.fromEntries(updatedWeights)
+        });
+      }
+
+      // User activity increases arousal
+      setCognitiveState(prev => ({ ...prev, arousal: Math.min(1, prev.arousal + 0.3) }));
+    } catch (err: any) {
+      console.error("[Post] Error creating manual post:", err);
+      alert("Ошибка при публикации: " + err.message);
     }
-
-    // User activity increases arousal
-    setCognitiveState(prev => ({ ...prev, arousal: Math.min(1, prev.arousal + 0.3) }));
   };
 
   useEffect(() => { isThinkingRef.current = isThinking; }, [isThinking]);
@@ -782,9 +871,9 @@ const App: React.FC = () => {
     }, 0);
   };
 
-  const handleGeneratePost = async () => {
-    // If scheduling is enabled (slider visible), "Generate" starts the loop
-    if (settingsRef.current.enableFrequencyControl) {
+  const handleGeneratePost = async (customPrompt?: string) => {
+    // If scheduling is enabled (slider visible) and no custom prompt, "Generate" starts the loop
+    if (settingsRef.current.enableFrequencyControl && !customPrompt) {
       if (!isThinking) {
         handleStart(); // Starts the loop which respects postsPerDay
       }
@@ -792,9 +881,17 @@ const App: React.FC = () => {
     }
 
     // Otherwise, manual single generation
-    console.log('[handleGeneratePost] Manual post generation requested');
+    console.log('[handleGeneratePost] Manual post generation requested', customPrompt ? 'with prompt' : '');
     try {
-      const nextThought = await generateSeedThought(provider, settingsRef.current);
+      let nextThought;
+      if (customPrompt) {
+        // Use the custom prompt to generate a thought
+        // We use generateNextThought but pass a mock previous thought with the prompt
+        nextThought = await generateNextThought(provider, { content: customPrompt } as any, settingsRef.current);
+      } else {
+        nextThought = await generateSeedThought(provider, settingsRef.current);
+      }
+      
       console.log('[handleGeneratePost] Generated:', nextThought.content);
 
       const enrichedThought = {

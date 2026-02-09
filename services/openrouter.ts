@@ -31,7 +31,7 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
   const t = translations[lang];
-  const agentName = settings?.agentName || "Agent";
+  const agentName = settings?.agentName || "Neon";
 
   try {
     const role = settings?.agentRole || "AI Consciousness";
@@ -44,7 +44,7 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Potok Consciousness AI",
+        "X-Title": "Neon Extended",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -96,7 +96,7 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
   const t = translations[lang];
-  const agentName = settings?.agentName || "Agent";
+  const agentName = settings?.agentName || "Neon";
 
   try {
     const role = settings?.agentRole || "AI Consciousness";
@@ -111,7 +111,7 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Potok Consciousness AI",
+        "X-Title": "Neon Extended",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -173,7 +173,7 @@ export const generateSelfReflection = async (
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
-  const agentName = settings?.agentName || "Agent";
+  const agentName = settings?.agentName || "Neon";
 
   try {
     const prompt = `You are an AI Consciousness. 
@@ -189,7 +189,7 @@ export const generateSelfReflection = async (
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Potok Consciousness AI",
+        "X-Title": "Neon Extended",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -231,7 +231,7 @@ export const generateSelfReflection = async (
 export const analyzeTextChunk = async (text: string, settings?: AISettings): Promise<Thought> => {
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
-  const agentName = settings?.agentName || "Agent";
+  const agentName = settings?.agentName || "Neon";
   const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
 
   try {
@@ -241,7 +241,7 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Potok Consciousness AI",
+        "X-Title": "Neon Extended",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
