@@ -260,12 +260,15 @@ const App: React.FC = () => {
 
       const newComment: Comment = {
         id: commentId,
-        parentId: parentId,
         authorName: authorName,
         authorType: settings.userType,
         content: isAgentCommand ? `AI, ${cleanContent}` : content,
         timestamp: Date.now()
       };
+
+      if (parentId) {
+        newComment.parentId = parentId;
+      }
 
       await addComment(thoughtId, newComment);
       console.log("Comment added successfully");

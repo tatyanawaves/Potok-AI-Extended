@@ -184,12 +184,20 @@ export const addComment = async (postId: string, commentData: any) => {
         ...commentData
     };
 
+    // Remove undefined fields (like parentId for root comments)
+    const cleanComment = Object.keys(newComment).reduce((acc: any, key) => {
+        if (newComment[key] !== undefined) {
+            acc[key] = newComment[key];
+        }
+        return acc;
+    }, {});
+
     try {
         await updateDoc(postRef, {
-            comments: arrayUnion(newComment)
+            comments: arrayUnion(cleanComment)
         });
         console.log(`[Firebase] Comment added successfully to ${postId}`);
-        return newComment;
+        return cleanComment;
     } catch (error) {
         console.error(`[Firebase] Error adding comment to ${postId}:`, error);
         throw error;
