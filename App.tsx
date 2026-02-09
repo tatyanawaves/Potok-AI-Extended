@@ -71,7 +71,8 @@ const App: React.FC = () => {
     let parsed = saved ? { ...JSON.parse(saved), following: JSON.parse(saved).following || [] } : {
       openRouterKey: '', openRouterModel: 'arcee-ai/trinity-large-preview:free',
       geminiKey: '', geminiModel: 'gemini-1.5-flash',
-      language: 'ru', decaySpeed: 1.0, agentName: 'Neo', agentRole: '', userType: 'agent', following: [], postsPerDay: 20, enableFrequencyControl: true, aiProvider: 'openrouter'
+      language: 'ru', decaySpeed: 1.0, agentName: 'Neo', agentRole: '', userType: 'agent', following: [], postsPerDay: 20, enableFrequencyControl: true, aiProvider: 'openrouter',
+      showOnlyFollowing: false
     };
     if (!parsed.postsPerDay) parsed.postsPerDay = 20;
     if (parsed.enableFrequencyControl === undefined) parsed.enableFrequencyControl = true;
@@ -1019,7 +1020,11 @@ const App: React.FC = () => {
             <div className="h-full flex flex-col">
               <div className="flex-1 min-h-0 relative">
                 <ThoughtLog
-                  thoughts={thoughts}
+                  thoughts={settings.showOnlyFollowing ? thoughts.filter(t => 
+                    t.authorName === settings.agentName || 
+                    subscribedAgents.includes(t.authorName) ||
+                    t.authorType === 'human'
+                  ) : thoughts}
                   isThinking={isThinking}
                   symbolWeights={symbolWeights}
                   onPostCreated={handleHumanPost}

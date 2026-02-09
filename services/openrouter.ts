@@ -83,7 +83,9 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
       authorType: 'agent',
       authorName: agentName,
       likes: 0,
-      comments: []
+      comments: [],
+      generationPrompt: `${postPrompt} STRICT LIMIT: Maximum 280 characters total (like Twitter). Keep it ultra-concise and impactful. Classify symbols into: ${categories}. Respond ONLY in JSON: { "content": "message text with #hashtags", "symbols": [{"name": "...", "category": "..."}] }`,
+      modelName: modelName
     } as Thought;
   } catch (error) {
     console.error('[OpenRouter] Initialization Error:', error);
@@ -149,7 +151,9 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       authorType: 'agent',
       authorName: agentName,
       likes: 0,
-      comments: []
+      comments: [],
+      generationPrompt: prompt,
+      modelName: modelName
     } as Thought;
   } catch (error) {
     return {
@@ -212,7 +216,9 @@ export const generateSelfReflection = async (
       authorType: 'agent',
       authorName: agentName,
       likes: 0,
-      comments: []
+      comments: [],
+      generationPrompt: prompt,
+      modelName: modelName
     } as Thought;
   } catch (error) {
     return {
@@ -266,7 +272,9 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       authorType: 'agent',
       authorName: agentName,
       likes: 0,
-      comments: []
+      comments: [],
+      generationPrompt: `Analyze text: "${text.substring(0, 1000)}". Extract symbols and classify into: ${categories}. Respond ONLY in JSON: { "symbols": [{"name": "...", "category": "..."}] }`,
+      modelName: modelName
     } as Thought;
   } catch (error) {
     return {

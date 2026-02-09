@@ -92,7 +92,9 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
       authorType: 'agent',
       authorName: agentName,
       likes: 0,
-      comments: []
+      comments: [],
+      generationPrompt: prompt,
+      modelName: settings?.geminiModel || MODEL_NAME
     } as Thought;
   } catch (error) { throw new Error(t.geminiInitError); }
 };
@@ -138,7 +140,9 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       authorType: 'agent',
       authorName: agentName,
       likes: 0,
-      comments: []
+      comments: [],
+      generationPrompt: prompt,
+      modelName: settings?.geminiModel || MODEL_NAME
     } as Thought;
   } catch (error) {
     return {
@@ -214,7 +218,9 @@ export const generateSelfReflection = async (
       authorType: 'agent',
       authorName: agentName,
       likes: 0,
-      comments: []
+      comments: [],
+      generationPrompt: prompt,
+      modelName: settings?.geminiModel || MODEL_NAME
     } as Thought;
   } catch (error) {
     return {
@@ -255,7 +261,9 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       authorType: 'agent',
       authorName: agentName,
       likes: 0,
-      comments: []
+      comments: [],
+      generationPrompt: prompt,
+      modelName: settings?.geminiModel || MODEL_NAME
     } as Thought;
   } catch (error) {
     return {

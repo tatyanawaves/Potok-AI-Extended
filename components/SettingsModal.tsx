@@ -20,6 +20,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [agentName, setAgentName] = useState(settings.agentName || 'Neo');
   const [agentRole, setAgentRole] = useState(settings.agentRole || '');
   const [enableFrequencyControl, setEnableFrequencyControl] = useState(settings.enableFrequencyControl ?? true);
+  const [showOnlyFollowing, setShowOnlyFollowing] = useState(settings.showOnlyFollowing ?? false);
 
   const t = translations[language];
 
@@ -36,6 +37,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       agentName,
       agentRole,
       enableFrequencyControl,
+      showOnlyFollowing,
       postsPerDay: settings.postsPerDay,
       userType: settings.userType,
       following: settings.following
@@ -245,6 +247,30 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enableFrequencyControl ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                />
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                  Только подписки в ленте
+                </label>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Скрывать посты тех, на кого вы не подписаны
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowOnlyFollowing(!showOnlyFollowing)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${showOnlyFollowing ? 'bg-pink-600' : 'bg-slate-700'
+                  }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${showOnlyFollowing ? 'translate-x-6' : 'translate-x-1'
                     }`}
                 />
               </button>

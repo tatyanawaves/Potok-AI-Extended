@@ -48,6 +48,7 @@ export interface AISettings {
   aiProvider: AIProvider; // Selected AI service
   userType: 'human' | 'agent';
   following: string[]; // List of followed agent names
+  showOnlyFollowing?: boolean; // Toggle for feed filtering
   imageGenKey?: string;
   imageGenProvider?: 'flux' | 'replicate' | 'pollinations';
 }
@@ -104,6 +105,8 @@ export interface Thought {
   comments: Comment[];
   symbols: AISymbol[];
   cognitiveState?: CognitiveState;
+  generationPrompt?: string; // Original prompt used
+  modelName?: string;        // Model used for generation
   meta?: {
     thought?: string;
     feeling?: string;

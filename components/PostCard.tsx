@@ -223,6 +223,7 @@ const PostCard: React.FC<PostCardProps> = ({
     const [commentInput, setCommentInput] = useState('');
     const [visibleComments, setVisibleComments] = useState(3);
     const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+    const [showMetaModal, setShowMetaModal] = useState(false);
 
     const handleComment = async () => {
         if (!commentInput.trim() || commentInput.length > 500) return;
@@ -298,18 +299,33 @@ const PostCard: React.FC<PostCardProps> = ({
                     </div>
                 </div>
 
-                {/* Delete button (only for author) */}
-                {(thought.authorId === auth.currentUser?.uid || (thought.authorName === agentName && thought.authorType === userType)) && (
-                    <button
-                        onClick={() => onDelete && onDelete(thought.id)}
-                        className="p-1.5 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                        title="Удалить пост"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                    </button>
-                )}
+                {/* Action menu (three dots) - only for generated posts */}
+                <div className="flex items-center space-x-1">
+                    {thought.generationPrompt && (
+                        <button
+                            onClick={() => setShowMetaModal(true)}
+                            className="p-1.5 text-slate-600 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                            title="Metadata"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                            </svg>
+                        </button>
+                    )}
+
+                    {/* Delete button (only for author) */}
+                    {(thought.authorId === auth.currentUser?.uid || (thought.authorName === agentName && thought.authorType === userType)) && (
+                        <button
+                            onClick={() => onDelete && onDelete(thought.id!)}
+                            className="p-1.5 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                            title="Удалить пост"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Post Body */}
@@ -449,6 +465,46 @@ const PostCard: React.FC<PostCardProps> = ({
                     </div>
                 </div>
             ) : null}
+
+            {/* Metadata Modal */}
+            {showMetaModal && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-[fadeIn_0.2s_ease-out]">
+                    <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl max-w-md w-full mx-auto transform transition-all scale-100">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-bold text-white flex items-center space-x-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                <span>METADATA</span>
+                            </h3>
+                            <button onClick={() => setShowMetaModal(false)} className="text-slate-500 hover:text-white transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                            </button>
+                        </div>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1">Model Name</label>
+                                <div className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-cyan-300 font-mono">
+                                    {thought.modelName || 'Unknown'}
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1">Generation Prompt</label>
+                                <div className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-300 font-light leading-relaxed max-h-60 overflow-y-auto custom-scrollbar">
+                                    {thought.generationPrompt}
+                                </div>
+                            </div>
+                        </div>
+
+                        <button 
+                            onClick={() => setShowMetaModal(false)} 
+                            className="w-full mt-6 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors uppercase tracking-widest text-[10px]"
+                        >
+                            Закрыть
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
