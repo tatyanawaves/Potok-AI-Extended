@@ -156,6 +156,8 @@ const Profile: React.FC<ProfileProps> = ({
     };
 
     const myPosts = isOwnProfile ? posts.filter(p => p.authorName === settings.agentName) : posts;
+    const totalPosts = myPosts.length;
+    const totalLikes = myPosts.reduce((acc, p) => acc + (p.likes || 0), 0);
 
     return (
         <div className="flex flex-col h-full bg-slate-950 overflow-y-auto custom-scrollbar">
@@ -172,12 +174,12 @@ const Profile: React.FC<ProfileProps> = ({
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                             </button>
                         </div>
-                        <p className="text-slate-400 text-sm mb-4">{t.imagePrompt || 'Опишите образ, который должен создать ИИ:'}</p>
+                        <p className="text-slate-400 text-sm mb-4">{t.imagePrompt}</p>
                         <textarea
                             autoFocus
                             value={imagePrompt}
                             onChange={(e) => setImagePrompt(e.target.value)}
-                            placeholder="Например: Мечтающий робот в неоновом лесу, стиль цифровой арт..."
+                            placeholder={t.imagePromptPlaceholder}
                             className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-purple-500 transition-colors h-32 resize-none text-slate-200 mb-6"
                         />
                         <div className="flex space-x-3">
@@ -185,14 +187,14 @@ const Profile: React.FC<ProfileProps> = ({
                                 onClick={() => setShowImageModal(false)} 
                                 className="flex-1 py-3 rounded-2xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors uppercase tracking-widest text-xs"
                             >
-                                {t.cancel || 'Отмена'}
+                                {t.cancel}
                             </button>
                             <button 
                                 onClick={confirmGenerateImage}
                                 disabled={!imagePrompt.trim()}
                                 className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-600 text-white hover:from-purple-500 hover:to-pink-500 font-bold shadow-lg shadow-purple-900/20 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none uppercase tracking-widest text-xs"
                             >
-                                Создать
+                                {t.generate}
                             </button>
                         </div>
                     </div>
@@ -212,12 +214,12 @@ const Profile: React.FC<ProfileProps> = ({
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                             </button>
                         </div>
-                        <p className="text-slate-400 text-sm mb-4">О чем должен подумать ваш агент?</p>
+                        <p className="text-slate-400 text-sm mb-4">{t.agentPostTopic}</p>
                         <textarea
                             autoFocus
                             value={postPrompt}
                             onChange={(e) => setPostPrompt(e.target.value)}
-                            placeholder="Введите тему или начало мысли..."
+                            placeholder={t.agentPostTopicPlaceholder}
                             className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors h-32 resize-none text-slate-200 mb-6"
                         />
                         <div className="flex space-x-3">
@@ -225,14 +227,14 @@ const Profile: React.FC<ProfileProps> = ({
                                 onClick={() => setShowPostModal(false)} 
                                 className="flex-1 py-3 rounded-2xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors uppercase tracking-widest text-xs"
                             >
-                                {t.cancel || 'Отмена'}
+                                {t.cancel}
                             </button>
                             <button 
                                 onClick={confirmGeneratePost}
                                 disabled={!postPrompt.trim()}
                                 className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-cyan-600 text-white hover:from-emerald-500 hover:to-cyan-500 font-bold shadow-lg shadow-emerald-900/20 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none uppercase tracking-widest text-xs"
                             >
-                                Сгенерировать
+                                {t.generate}
                             </button>
                         </div>
                     </div>
@@ -246,19 +248,19 @@ const Profile: React.FC<ProfileProps> = ({
                         <div className="flex justify-between items-center mb-4">
                             <h3 className="text-xl font-bold text-white flex items-center space-x-2">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                <span>НОВАЯ МЫСЛЬ</span>
+                                <span>{t.newThought}</span>
                             </h3>
                             <button onClick={() => setShowManualModal(false)} className="text-slate-500 hover:text-white transition-colors">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                             </button>
                         </div>
-                        <p className="text-slate-400 text-sm mb-4">Опубликуйте свою мысль напрямую от имени Агента:</p>
+                        <p className="text-slate-400 text-sm mb-4">{t.agentManualPostDesc}</p>
                         <div className="relative">
                             <textarea
                                 autoFocus
                                 value={manualContent}
                                 onChange={(e) => setManualContent(e.target.value)}
-                                placeholder="О чем вы думаете сейчас?"
+                                placeholder={t.agentManualPostPlaceholder}
                                 className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors h-40 resize-none text-slate-200 mb-2"
                                 maxLength={1000}
                             />
@@ -271,14 +273,14 @@ const Profile: React.FC<ProfileProps> = ({
                                 onClick={() => setShowManualModal(false)} 
                                 className="flex-1 py-3 rounded-2xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors uppercase tracking-widest text-xs"
                             >
-                                {t.cancel || 'Отмена'}
+                                {t.cancel}
                             </button>
                             <button 
                                 onClick={confirmManualPost}
                                 disabled={!manualContent.trim()}
                                 className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-500 hover:to-purple-500 font-bold shadow-lg shadow-indigo-900/20 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none uppercase tracking-widest text-xs"
                             >
-                                Опубликовать
+                                {t.publish}
                             </button>
                         </div>
                     </div>
@@ -297,7 +299,7 @@ const Profile: React.FC<ProfileProps> = ({
                         className="absolute top-4 left-4 p-2 bg-slate-900/50 hover:bg-slate-800 backdrop-blur rounded-lg text-slate-300 border border-white/10 transition-colors flex items-center space-x-2 z-20"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-                        <span className="text-xs uppercase tracking-widest font-bold">Назад</span>
+                        <span className="text-xs uppercase tracking-widest font-bold">{t.back}</span>
                     </button>
                 )}
             </div>
@@ -313,7 +315,7 @@ const Profile: React.FC<ProfileProps> = ({
                     </div>
 
                     <h1 className="mt-4 text-2xl font-bold text-white tracking-tight">{settings.agentName}</h1>
-                    <div className="flex items-center space-x-2 mt-1 mb-2">
+                    <div className="flex items-center justify-center space-x-4 mt-1 mb-2">
                         {settings.userType === 'human' ? (
                             <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded text-[10px] font-bold tracking-widest uppercase">
                                 {t.userTypeHuman}
@@ -323,6 +325,21 @@ const Profile: React.FC<ProfileProps> = ({
                                 {t.userTypeAgent}
                             </span>
                         )}
+
+                        <div className="flex items-center space-x-3 text-slate-400 border-l border-slate-800 pl-4">
+                            <div className="flex items-center space-x-1" title="Total Posts">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
+                                </svg>
+                                <span className="text-[10px] font-bold font-mono">{totalPosts}</span>
+                            </div>
+                            <div className="flex items-center space-x-1" title="Total Likes">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                                </svg>
+                                <span className="text-[10px] font-bold font-mono">{totalLikes}</span>
+                            </div>
+                        </div>
                     </div>
                     
                     {/* Follow/Unfollow for others */}

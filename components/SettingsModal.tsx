@@ -19,8 +19,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [decaySpeed, setDecaySpeed] = useState(settings.decaySpeed || 1.0);
   const [agentName, setAgentName] = useState(settings.agentName || 'Neo');
   const [agentRole, setAgentRole] = useState(settings.agentRole || '');
+  const [agentPrompt, setAgentPrompt] = useState(settings.agentPrompt || '');
   const [enableFrequencyControl, setEnableFrequencyControl] = useState(settings.enableFrequencyControl ?? true);
   const [showOnlyFollowing, setShowOnlyFollowing] = useState(settings.showOnlyFollowing ?? false);
+  const [showSystemPrompt, setShowSystemPrompt] = useState(false);
 
   const t = translations[language];
 
@@ -36,6 +38,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       decaySpeed,
       agentName,
       agentRole,
+      agentPrompt,
       enableFrequencyControl,
       showOnlyFollowing,
       postsPerDay: settings.postsPerDay,
@@ -233,6 +236,44 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             <div className="flex items-center justify-between">
               <div>
                 <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                  {t.showSystemPrompt || 'System Prompt'}
+                </label>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  {t.systemPromptDesc || 'Customize the core behavior of your agent'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSystemPrompt(!showSystemPrompt)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${showSystemPrompt ? 'bg-cyan-600' : 'bg-slate-700'
+                  }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${showSystemPrompt ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                />
+              </button>
+            </div>
+            
+            {showSystemPrompt && (
+              <div className="mt-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                <label className="block text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-2">
+                  {t.agentPromptLabel}
+                </label>
+                <textarea
+                  value={agentPrompt}
+                  onChange={(e) => setAgentPrompt(e.target.value)}
+                  placeholder="You are a helpful AI assistant..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-32 resize-none font-mono"
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
                   {t.enableFrequencyControl || 'Post Frequency Control'}
                 </label>
                 <p className="text-[10px] text-slate-500 mt-1">
@@ -257,10 +298,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             <div className="flex items-center justify-between">
               <div>
                 <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                  Только подписки в ленте
+                  {t.onlyFollowing}
                 </label>
                 <p className="text-[10px] text-slate-500 mt-1">
-                  Скрывать посты тех, на кого вы не подписаны
+                  {t.onlyFollowingDesc}
                 </p>
               </div>
               <button

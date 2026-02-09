@@ -115,24 +115,24 @@ const CommentItem: React.FC<CommentItemProps> = ({
                     </div>
                     <p className="text-xs text-slate-400 break-words mt-0.5">{comment.content}</p>
                     
-                    <div className="flex items-center space-x-3 mt-1 opacity-0 group-hover/comment:opacity-100 transition-opacity">
+                    <div className="flex items-center space-x-4 mt-1.5 opacity-0 group-hover/comment:opacity-100 transition-opacity">
                         <button 
                             onClick={() => setIsReplying(!isReplying)}
-                            className="text-[9px] font-bold text-slate-500 hover:text-cyan-400 uppercase tracking-tighter"
+                            className="text-[11px] font-bold text-slate-500 hover:text-cyan-400 uppercase tracking-tighter"
                         >
-                            {isReplying ? t.cancel : 'Ответить'}
+                            {isReplying ? t.cancel : t.reply}
                         </button>
                         
                         {hasReplies && (
                             <button 
                                 onClick={() => setIsExpanded(!isExpanded)}
-                                className="flex items-center space-x-1 text-[9px] font-mono text-slate-600 hover:text-cyan-400 transition-colors"
+                                className="flex items-center space-x-1.5 text-[11px] font-mono text-slate-600 hover:text-cyan-400 transition-colors"
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-                                <span>{replies.length}</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                                <span className="font-bold">{replies.length}</span>
                                 <svg 
                                     xmlns="http://www.w3.org/2000/svg" 
-                                    className={`h-2.5 w-2.5 transition-transform duration-300 ${isExpanded ? 'rotate-180' : 'rotate-0'}`} 
+                                    className={`h-3 w-3 transition-transform duration-300 ${isExpanded ? 'rotate-180' : 'rotate-0'}`} 
                                     fill="none" viewBox="0 0 24 24" stroke="currentColor"
                                 >
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 9l-7 7-7-7" />
@@ -143,10 +143,10 @@ const CommentItem: React.FC<CommentItemProps> = ({
                         {onDeleteComment && (comment.authorName === agentName) && (
                             <button
                                 onClick={() => onDeleteComment(thoughtId, comment.id)}
-                                className="p-1 text-slate-600 hover:text-rose-500 transition-all"
-                                title="Удалить"
+                                className="p-1 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-md transition-all"
+                                title={t.delete}
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                             </button>
                         )}
                     </div>
@@ -159,7 +159,7 @@ const CommentItem: React.FC<CommentItemProps> = ({
                                 value={replyContent}
                                 onChange={(e) => setReplyContent(e.target.value)}
                                 className="flex-1 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-cyan-500 text-slate-200"
-                                placeholder={`Ответ ${comment.authorName}...`}
+                                placeholder={t.placeholderReply ? t.placeholderReply.replace('{name}', comment.authorName) : `Reply to ${comment.authorName}...`}
                                 onKeyDown={(e) => e.key === 'Enter' && handleReply()}
                             />
                             <button 
@@ -299,7 +299,7 @@ const PostCard: React.FC<PostCardProps> = ({
                         <button
                             onClick={() => setShowMetaModal(true)}
                             className="p-1.5 text-slate-600 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                            title="Metadata"
+                            title="METADATA"
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
@@ -312,7 +312,7 @@ const PostCard: React.FC<PostCardProps> = ({
                         <button
                             onClick={() => onDelete && onDelete(thought.id!)}
                             className="p-1.5 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                            title="Удалить пост"
+                            title={t.delete}
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -494,7 +494,7 @@ const PostCard: React.FC<PostCardProps> = ({
                             onClick={() => setShowMetaModal(false)} 
                             className="w-full mt-6 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors uppercase tracking-widest text-[10px]"
                         >
-                            Закрыть
+                            {t.close}
                         </button>
                     </div>
                 </div>
