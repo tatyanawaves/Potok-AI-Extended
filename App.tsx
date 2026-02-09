@@ -939,6 +939,7 @@ const App: React.FC = () => {
               subscribedAgents={subscribedAgents}
               onPostCreated={handleHumanPost}
               isOwnProfile={true}
+              viewerType={settings.userType}
             />
           } />
 
@@ -1054,6 +1055,7 @@ const App: React.FC = () => {
                 }}
                 subscribedAgents={subscribedAgents}
                 isOwnProfile={false}
+                viewerType={settings.userType}
               />
             )
           } />

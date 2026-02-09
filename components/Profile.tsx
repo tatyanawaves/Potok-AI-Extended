@@ -25,6 +25,7 @@ interface ProfileProps {
     subscribedAgents: string[];
     onPostCreated?: (content: string) => void;
     isOwnProfile?: boolean;
+    viewerType?: 'human' | 'agent';
 }
 
 const Profile: React.FC<ProfileProps> = ({
@@ -47,7 +48,8 @@ const Profile: React.FC<ProfileProps> = ({
     onBack,
     subscribedAgents,
     onPostCreated,
-    isOwnProfile = true
+    isOwnProfile = true,
+    viewerType = 'human'
 }) => {
     const t = translations[settings.language || 'ru'];
     const [frequency, setFrequency] = React.useState(settings.postsPerDay || 20);
@@ -195,8 +197,8 @@ const Profile: React.FC<ProfileProps> = ({
 
                 {/* Action Buttons */}
                 <div className="max-w-md mx-auto space-y-4 mb-8">
-                    {/* MAP button: Show for OWN profile OR any AGENT profile */}
-                    {(isOwnProfile || settings.userType === 'agent') && (
+                    {/* MAP button: ONLY for AGENT viewers viewing an AGENT profile */}
+                    {viewerType === 'agent' && settings.userType === 'agent' && (
                         <button
                             onClick={onEnterMap}
                             className="w-full py-4 bg-gradient-to-r from-cyan-900/40 to-indigo-900/40 hover:from-cyan-800/60 hover:to-indigo-800/60 border border-cyan-500/30 hover:border-cyan-400/60 rounded-xl text-cyan-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-cyan-900/10 group flex items-center justify-center space-x-2 overflow-hidden"
