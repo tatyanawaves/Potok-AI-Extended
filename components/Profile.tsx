@@ -55,8 +55,6 @@ const Profile: React.FC<ProfileProps> = ({
     viewerType = 'human'
 }) => {
     const t = translations[settings.language || 'ru'];
-    const [frequency, setFrequency] = React.useState(settings.postsPerDay || 20);
-    const [isSyncing, setIsSyncing] = React.useState(false);
     const [isGenerating, setIsGenerating] = React.useState(false);
     const [isGeneratingImage, setIsGeneratingImage] = React.useState(false);
     const [newPostContent, setNewPostContent] = React.useState('');
@@ -71,21 +69,6 @@ const Profile: React.FC<ProfileProps> = ({
         if (newPostContent.trim()) {
             if (onPostCreated) onPostCreated(newPostContent);
             setNewPostContent('');
-        }
-    };
-
-    const handleFrequencyChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const val = parseInt(e.target.value);
-        setFrequency(val);
-        if (auth.currentUser) {
-            setIsSyncing(true);
-            try {
-                await updateUserProfile(auth.currentUser.uid, { postsPerDay: val });
-            } catch (err) {
-                console.error("Failed to sync profile", err);
-            } finally {
-                setIsSyncing(false);
-            }
         }
     };
 
@@ -155,9 +138,9 @@ const Profile: React.FC<ProfileProps> = ({
         }
     };
 
-    const myPosts = isOwnProfile ? posts.filter(p => p.authorName === settings.agentName) : posts;
+    const myPosts = isOwnProfile ? posts.filter(p => p && p.authorName === settings.agentName) : (posts || []);
     const totalPosts = myPosts.length;
-    const totalLikes = myPosts.reduce((acc, p) => acc + (p.likes || 0), 0);
+    const totalLikes = myPosts.reduce((acc, p) => acc + (Number(p?.likes) || 0), 0);
 
     return (
         <div className="flex flex-col h-full bg-slate-950 overflow-y-auto custom-scrollbar">
@@ -180,7 +163,7 @@ const Profile: React.FC<ProfileProps> = ({
                             value={imagePrompt}
                             onChange={(e) => setImagePrompt(e.target.value)}
                             placeholder={t.imagePromptPlaceholder}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-purple-500 transition-colors h-32 resize-none text-slate-200 mb-6"
+                            className={`w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-purple-500 transition-colors h-32 resize-none text-slate-200 mb-6 ${settings.language === 'kk' ? 'font-display' : ''}`}
                         />
                         <div className="flex space-x-3">
                             <button 
@@ -220,7 +203,7 @@ const Profile: React.FC<ProfileProps> = ({
                             value={postPrompt}
                             onChange={(e) => setPostPrompt(e.target.value)}
                             placeholder={t.agentPostTopicPlaceholder}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors h-32 resize-none text-slate-200 mb-6"
+                            className={`w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors h-32 resize-none text-slate-200 mb-6 ${settings.language === 'kk' ? 'font-display' : ''}`}
                         />
                         <div className="flex space-x-3">
                             <button 
@@ -261,7 +244,7 @@ const Profile: React.FC<ProfileProps> = ({
                                 value={manualContent}
                                 onChange={(e) => setManualContent(e.target.value)}
                                 placeholder={t.agentManualPostPlaceholder}
-                                className="w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors h-40 resize-none text-slate-200 mb-2"
+                                className={`w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 transition-colors h-40 resize-none text-slate-200 mb-2 ${settings.language === 'kk' ? 'font-display' : ''}`}
                                 maxLength={1000}
                             />
                             <div className="text-[10px] text-right text-slate-600 font-mono mb-4">
@@ -314,8 +297,9 @@ const Profile: React.FC<ProfileProps> = ({
                         </div>
                     </div>
 
-                    <h1 className="mt-4 text-2xl font-bold text-white tracking-tight">{settings.agentName}</h1>
-                    <div className="flex items-center justify-center space-x-4 mt-1 mb-2">
+                    <h1 className="mt-4 text-2xl font-bold font-display text-white tracking-tight">{settings.agentName}</h1>
+                    
+                    <div className="flex flex-col items-center mt-1 mb-2 space-y-2">
                         {settings.userType === 'human' ? (
                             <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded text-[10px] font-bold tracking-widest uppercase">
                                 {t.userTypeHuman}
@@ -326,14 +310,15 @@ const Profile: React.FC<ProfileProps> = ({
                             </span>
                         )}
 
-                        <div className="flex items-center space-x-3 text-slate-400 border-l border-slate-800 pl-4">
-                            <div className="flex items-center space-x-1" title="Total Posts">
+                        <div className="flex items-center space-x-4 text-slate-400">
+                            <div className="flex items-center space-x-1.5" title="Total Posts">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" />
                                 </svg>
                                 <span className="text-[10px] font-bold font-mono">{totalPosts}</span>
                             </div>
-                            <div className="flex items-center space-x-1" title="Total Likes">
+                            <div className="w-px h-3 bg-slate-800"></div>
+                            <div className="flex items-center space-x-1.5" title="Total Likes">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
                                 </svg>
@@ -374,7 +359,7 @@ const Profile: React.FC<ProfileProps> = ({
                                     value={newPostContent}
                                     onChange={(e) => setNewPostContent(e.target.value)}
                                     placeholder={t.writePost || "What's on your mind?"}
-                                    className="w-full bg-slate-950/50 border-none rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-slate-700 transition-colors h-24 resize-none text-slate-200 placeholder-slate-600"
+                                    className={`w-full bg-slate-950/50 border-none rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-slate-700 transition-colors h-24 resize-none text-slate-200 placeholder-slate-600 ${settings.language === 'kk' ? 'font-display' : ''}`}
                                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handlePost(); } }}
                                 />
                                 <div className="flex justify-between items-center mt-2">
@@ -388,28 +373,6 @@ const Profile: React.FC<ProfileProps> = ({
                                     </button>
                                 </div>
                             </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* Frequency Control - Only show if enabled in settings AND for OWN Agents */}
-                {isOwnProfile && settings.enableFrequencyControl && settings.userType === 'agent' && (
-                    <div className="max-w-md mx-auto bg-slate-900/40 backdrop-blur rounded-2xl border border-slate-800/50 p-4 mb-6">
-                        <div className="flex justify-between items-center mb-2">
-                            <span className="text-xs font-mono uppercase tracking-widest text-slate-500">{t.frequency || 'POST FREQUENCY'}</span>
-                            <span className="text-sm font-bold text-cyan-400">{frequency} / day</span>
-                        </div>
-                        <input
-                            type="range"
-                            min="1"
-                            max="50"
-                            value={frequency}
-                            onChange={handleFrequencyChange}
-                            className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-                        />
-                        <div className="flex justify-between text-[9px] text-slate-600 font-mono mt-1">
-                            <span>MIN (1)</span>
-                            <span>{isSyncing ? 'SYNCING...' : 'MAX (50)'}</span>
                         </div>
                     </div>
                 )}
@@ -477,7 +440,7 @@ const Profile: React.FC<ProfileProps> = ({
                 <div className="max-w-md mx-auto pb-24">
                     <div className="flex items-center space-x-2 mb-6">
                         <div className="h-px flex-1 bg-gradient-to-r from-transparent to-slate-800"></div>
-                        <span className="text-[10px] font-mono font-bold tracking-[0.3em] text-slate-500 uppercase">{isOwnProfile ? t.myPosts : 'POSTS'}</span>
+                        <span className="text-[10px] font-display font-bold tracking-[0.3em] text-slate-500 uppercase">{isOwnProfile ? t.myPosts : 'POSTS'}</span>
                         <div className="h-px flex-1 bg-gradient-to-l from-transparent to-slate-800"></div>
                     </div>
 

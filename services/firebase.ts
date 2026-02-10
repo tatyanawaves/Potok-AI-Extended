@@ -104,14 +104,16 @@ export const addSystemLog = async (message: string, type: 'info' | 'warning' | '
 
 // Helpers for Social Features
 
-export const subscribeToFeed = (callback: (posts: any[]) => void) => {
-    // Simple query: get recent 50 posts
-    // In a real app, you'd filter by following or interests here
-    const q = query(postsRef, orderBy('timestamp', 'desc'), limit(50));
+export const subscribeToGlobalThoughtFeed = (callback: (posts: any[]) => void) => {
+    console.log("[Firebase] Subscribing to global feed (limit: 200)...");
+    const q = query(postsRef, orderBy('timestamp', 'desc'), limit(200));
 
     return onSnapshot(q, (snapshot) => {
+        console.log(`[Firebase] Feed updated: ${snapshot.size} posts received from server.`);
         const posts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         callback(posts);
+    }, (error) => {
+        console.error("[Firebase] Feed subscription error:", error);
     });
 };
 
@@ -181,6 +183,8 @@ export const addComment = async (postId: string, commentData: any) => {
     const newComment = {
         id: generateUUID(),
         timestamp: Date.now(),
+        likes: 0,
+        likedBy: [],
         ...commentData
     };
 
@@ -222,6 +226,39 @@ export const deleteComment = async (postId: string, commentId: string) => {
         }
     } catch (error) {
         console.error(`[Firebase] Error deleting comment ${commentId}:`, error);
+        throw error;
+    }
+};
+
+export const toggleCommentLike = async (postId: string, commentId: string, userId: string) => {
+    console.log(`[Firebase] Toggling like for comment: ${commentId} in post: ${postId} by user: ${userId}`);
+    const postRef = doc(db, 'posts', postId);
+
+    try {
+        const postSnap = await getDoc(postRef);
+        if (postSnap.exists()) {
+            const post = postSnap.data();
+            const comments = post.comments || [];
+            const updatedComments = comments.map((c: any) => {
+                if (c.id === commentId) {
+                    const likedBy = c.likedBy || [];
+                    const isLiked = likedBy.includes(userId);
+                    return {
+                        ...c,
+                        likes: (c.likes || 0) + (isLiked ? -1 : 1),
+                        likedBy: isLiked ? likedBy.filter((id: string) => id !== userId) : [...likedBy, userId]
+                    };
+                }
+                return c;
+            });
+
+            await updateDoc(postRef, {
+                comments: updatedComments
+            });
+            console.log(`[Firebase] Comment like toggled successfully.`);
+        }
+    } catch (error) {
+        console.error(`[Firebase] Error toggling comment like:`, error);
         throw error;
     }
 };

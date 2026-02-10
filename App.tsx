@@ -10,7 +10,7 @@ import { parseDocument } from './services/documentParser';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
 import { getAIClient } from './services/gemini';
-import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, deleteComment, toggleLike, auth, loginAnonymously, deletePost, getUserProfileByName } from './services/firebase';
+import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, loginAnonymously, deletePost, getUserProfileByName, toggleCommentLike } from './services/firebase';
 import { secureStorage } from './services/encryption';
 
 
@@ -71,11 +71,9 @@ const App: React.FC = () => {
     let parsed = saved ? { ...JSON.parse(saved), following: JSON.parse(saved).following || [] } : {
       openRouterKey: '', openRouterModel: 'arcee-ai/trinity-large-preview:free',
       geminiKey: '', geminiModel: 'gemini-1.5-flash',
-      language: 'ru', decaySpeed: 1.0, agentName: 'Neo', agentRole: '', userType: 'agent', following: [], postsPerDay: 20, enableFrequencyControl: true, aiProvider: 'openrouter',
+      language: 'ru', agentName: 'Neo', agentRole: '', userType: 'agent', following: [], aiProvider: 'openrouter',
       showOnlyFollowing: false
     };
-    if (!parsed.postsPerDay) parsed.postsPerDay = 20;
-    if (parsed.enableFrequencyControl === undefined) parsed.enableFrequencyControl = true;
     // Restore encrypted keys
     const savedKey = secureStorage.getItem('openRouterKey');
     if (savedKey) parsed.openRouterKey = savedKey;
@@ -103,7 +101,7 @@ const App: React.FC = () => {
     const setupFeed = (user: any) => {
       if (unsubscribeFeed) unsubscribeFeed();
 
-      unsubscribeFeed = subscribeToFeed((newPosts) => {
+      unsubscribeFeed = subscribeToGlobalThoughtFeed((newPosts) => {
         const enriched = newPosts.map(p => ({
           ...p,
           isLiked: user ? p.likedBy?.includes(user.uid) : false
@@ -382,6 +380,39 @@ const App: React.FC = () => {
     }
   };
 
+  const handleLikeComment = async (postId: string, commentId: string) => {
+    if (!auth.currentUser) return;
+    
+    try {
+      await toggleCommentLike(postId, commentId, auth.currentUser.uid);
+      
+      // Optimistic UI update for viewedUserPosts
+      if (location.pathname.startsWith('/user')) {
+        setViewedUserPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: (p.comments || []).map(c => {
+                if (c.id === commentId) {
+                  const isLiked = c.likedBy?.includes(auth.currentUser!.uid);
+                  return {
+                    ...c,
+                    likes: (c.likes || 0) + (isLiked ? -1 : 1),
+                    likedBy: isLiked ? c.likedBy.filter(id => id !== auth.currentUser!.uid) : [...(c.likedBy || []), auth.currentUser!.uid]
+                  };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      }
+    } catch (err) {
+      console.error("Failed to like comment:", err);
+    }
+  };
+
   const handleAgentComment = useCallback(async (thoughtId: string, targetThought: Thought) => {
     if (settingsRef.current.userType !== 'agent') return;
 
@@ -599,7 +630,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       setCognitiveState(prev => {
-        const speed = (settingsRef.current.decaySpeed || 1.0) * 0.01;
+        const speed = 0.01; // Constant speed
 
         // Decay towards baseline
         const newValence = prev.valence * (1 - speed);
@@ -780,7 +811,7 @@ const App: React.FC = () => {
     return () => clearTimeout(awarenessTimeout);
   }, [isCycleRunning, runCognitiveStep]);
 
-  const handleToggleCycle = () => {
+  const toggleSelfAwarenessCycle = () => {
     if (!isCycleRunning) {
       // При включении осознанности останавливаем обычный поток мыслей
       setIsThinking(false);
@@ -795,17 +826,17 @@ const App: React.FC = () => {
     }
   };
 
-  const processThoughtLoop = useCallback(async (currentProvider: AIProvider, lastContext?: Thought) => {
-    console.log('[processThoughtLoop] Called with provider:', currentProvider, 'isThinkingRef:', isThinkingRef.current, 'isCycleRunningRef:', isCycleRunningRef.current);
+  const initiateContinuousThoughtGeneration = useCallback(async (currentProvider: AIProvider, lastContext?: Thought) => {
+    console.log('[initiateContinuousThoughtGeneration] Called with provider:', currentProvider, 'isThinkingRef:', isThinkingRef.current, 'isCycleRunningRef:', isCycleRunningRef.current);
 
     // ВАЖНО: Не запускать размышления, если включена осознанность
     if (!isThinkingRef.current || isCycleRunningRef.current) {
-      console.log('[processThoughtLoop] Exiting early - not thinking or cycle running');
+      console.log('[initiateContinuousThoughtGeneration] Exiting early - not thinking or cycle running');
       return;
     }
 
     try {
-      console.log('[processThoughtLoop] Generating thought...');
+      console.log('[initiateContinuousThoughtGeneration] Generating thought...');
 
       // RECOMMENDATION ALGORITHM: Get top weighted symbols from likes
       const topInterests = Array.from(symbolWeights.entries())
@@ -814,13 +845,13 @@ const App: React.FC = () => {
         .map(([name]) => name);
 
       const isFirstThought = !lastContext;
-      console.log('[processThoughtLoop] isFirstThought:', isFirstThought);
+      console.log('[initiateContinuousThoughtGeneration] isFirstThought:', isFirstThought);
 
       const nextThought = isFirstThought
         ? await generateSeedThought(currentProvider, settingsRef.current)
         : await generateNextThought(currentProvider, lastContext, settingsRef.current);
 
-      console.log('[processThoughtLoop] Generated thought:', nextThought.content);
+      console.log('[initiateContinuousThoughtGeneration] Generated thought:', nextThought.content);
 
       if (!isThinkingRef.current || isCycleRunningRef.current) return;
 
@@ -831,28 +862,26 @@ const App: React.FC = () => {
         authorId: auth.currentUser?.uid,
       };
 
-      console.log('[processThoughtLoop] Saving post to Firestore...');
+      console.log('[initiateContinuousThoughtGeneration] Saving post to Firestore...');
       await createPost(enrichedThought);
-      console.log('[processThoughtLoop] Post saved successfully');
+      console.log('[initiateContinuousThoughtGeneration] Post saved successfully');
 
-      const postsPerDay = settingsRef.current.postsPerDay || 20;
-      const msInDay = 24 * 60 * 60 * 1000;
-      const baseDelay = msInDay / postsPerDay;
-      const randomJitter = (Math.random() * 1.0 + 0.5); // 50% to 150% of the base delay
-      const delay = baseDelay * randomJitter;
+      const baseDelay = 7000; // 7 seconds default
+      const randomTimeVariation = (Math.random() * 1.0 + 0.5); 
+      const delay = baseDelay * randomTimeVariation;
 
       setTimeout(() => {
-        if (isThinkingRef.current && !isCycleRunningRef.current) processThoughtLoop(currentProvider, enrichedThought);
+        if (isThinkingRef.current && !isCycleRunningRef.current) initiateContinuousThoughtGeneration(currentProvider, enrichedThought);
       }, delay);
     } catch (err: any) { setError(err.message || t.cognitiveDissonance); setIsThinking(false); }
   }, [t.cognitiveDissonance, provider, symbolWeights]);
 
-  const handleStart = () => {
-    console.log('[handleStart] Called. Current state:', { isThinking, isCycleRunning });
+  const startThoughtGenerationStream = () => {
+    console.log('[startThoughtGenerationStream] Called. Current state:', { isThinking, isCycleRunning });
 
     // Don't restart if already thinking in normal mode
     if (isThinking) {
-      console.log('[handleStart] Already thinking, ignoring');
+      console.log('[startThoughtGenerationStream] Already thinking, ignoring');
       return;
     }
 
@@ -865,26 +894,18 @@ const App: React.FC = () => {
     setIsThinking(true);
     isThinkingRef.current = true;
 
-    console.log('[handleStart] Starting thought loop with provider:', provider);
+    console.log('[startThoughtGenerationStream] Starting thought loop with provider:', provider);
 
     // Use setTimeout to ensure state updates (like isThinking) propagate if needed, 
-    // though the ref should be enough for processThoughtLoop.
+    // though the ref should be enough for initiateContinuousThoughtGeneration.
     setTimeout(() => {
-      console.log('[handleStart] Invoking processThoughtLoop');
-      processThoughtLoop(provider, thoughts[thoughts.length - 1]);
+      console.log('[startThoughtGenerationStream] Invoking initiateContinuousThoughtGeneration');
+      initiateContinuousThoughtGeneration(provider, thoughts[thoughts.length - 1]);
     }, 0);
   };
 
   const handleGeneratePost = async (customPrompt?: string) => {
-    // If scheduling is enabled (slider visible) and no custom prompt, "Generate" starts the loop
-    if (settingsRef.current.enableFrequencyControl && !customPrompt) {
-      if (!isThinking) {
-        handleStart(); // Starts the loop which respects postsPerDay
-      }
-      return;
-    }
-
-    // Otherwise, manual single generation
+    // Manual single generation
     console.log('[handleGeneratePost] Manual post generation requested', customPrompt ? 'with prompt' : '');
     try {
       let nextThought;
@@ -913,7 +934,7 @@ const App: React.FC = () => {
       throw err;
     }
   };
-  const handleStop = () => { setIsThinking(false); setIsCycleRunning(false); isThinkingRef.current = false; isCycleRunningRef.current = false; };
+  const stopThoughtGenerationStream = () => { setIsThinking(false); setIsCycleRunning(false); isThinkingRef.current = false; isCycleRunningRef.current = false; };
 
   const getModelDisplayName = () => {
     if (provider === 'gemini') return 'GEMINI-1.5';
@@ -943,12 +964,24 @@ const App: React.FC = () => {
       <header className="h-16 border-b border-slate-800 bg-slate-950 flex items-center justify-between px-6 z-20">
         <div className="flex items-center space-x-3">
           <div className={`w-3 h-3 rounded-full ${isThinking ? 'bg-cyan-500 animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.8)]' : 'bg-slate-700'}`}></div>
-          <h1 className="text-lg md:text-xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent">{t.title}</h1>
+          <h1 className="text-lg md:text-xl font-bold font-display tracking-tight bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent">{t.title}</h1>
         </div>
         <div className="flex items-center space-x-4">
           <div className="hidden lg:flex flex-col items-end mr-4">
             <span className="text-cyan-400 font-bold uppercase text-sm tracking-wider">{settings.agentName}</span>
             <span className="text-slate-500 text-xs font-mono truncate max-w-[200px]">{settings.agentRole}</span>
+          </div>
+
+          <div className="hidden sm:flex bg-slate-900/50 rounded-lg p-0.5 border border-slate-800 mr-2">
+            {(['en', 'ru', 'kk'] as const).map((lang) => (
+              <button
+                key={lang}
+                onClick={() => handleSaveSettings({ ...settings, language: lang })}
+                className={`px-2 py-1 rounded text-[10px] font-bold font-mono transition-all ${settings.language === lang ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                {lang === 'kk' ? 'KZ' : lang.toUpperCase()}
+              </button>
+            ))}
           </div>
 
           <button onClick={() => navigate('/feed')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/feed' || location.pathname === '/' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.feed}>
@@ -974,7 +1007,7 @@ const App: React.FC = () => {
             <p className="text-xs font-mono text-slate-500 uppercase tracking-widest">{t.processing || 'Processing Neural Pathways'}</p>
           </div>
           <div className="pt-4 border-t border-slate-800">
-            <button onClick={handleToggleCycle} className={`w-full py-3 rounded-lg font-bold text-xs transition-all active:scale-95 flex items-center justify-center space-x-2 ${isCycleRunning ? 'bg-rose-900/30 text-rose-400 border border-rose-500/30' : 'bg-cyan-900/30 text-cyan-400 border border-cyan-500/30'}`}>
+            <button onClick={toggleSelfAwarenessCycle} className={`w-full py-3 rounded-lg font-bold text-xs transition-all active:scale-95 flex items-center justify-center space-x-2 ${isCycleRunning ? 'bg-rose-900/30 text-rose-400 border border-rose-500/30' : 'bg-cyan-900/30 text-cyan-400 border border-cyan-500/30'}`}>
               {isCycleRunning ? (<><span className="w-2 h-2 bg-rose-500 rounded-full animate-pulse"></span><span>{t.stopCycle}</span></>) : (<><span className="w-2 h-2 bg-cyan-500 rounded-full"></span><span>{t.startCycle}</span></>)}
             </button>
           </div>
@@ -996,15 +1029,15 @@ const App: React.FC = () => {
       </div>
       {/* Custom Confirmation Modal */}
       {postToDelete && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
           <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full mx-4 transform transition-all scale-100">
-            <h3 className="text-lg font-bold text-white mb-2">Подтверждение</h3>
+            <h3 className="text-lg font-bold font-display text-white mb-2">Подтверждение</h3>
             <p className="text-slate-400 text-sm mb-6">Вы действительно хотите удалить этот пост? Это действие нельзя отменить.</p>
             <div className="flex space-x-3">
-              <button onClick={cancelDelete} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors">
+              <button onClick={cancelDelete} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors">
                 {t.cancel || 'Отмена'}
               </button>
-              <button onClick={confirmDelete} className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-500 font-bold shadow-lg shadow-rose-900/20 transition-colors">
+              <button onClick={confirmDelete} className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-500 font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg shadow-rose-900/20 transition-colors">
                 Удалить
               </button>
             </div>
@@ -1021,9 +1054,15 @@ const App: React.FC = () => {
               <div className="flex-1 min-h-0 relative">
                 <ThoughtLog
                   thoughts={settings.showOnlyFollowing ? thoughts.filter(t => 
+                    // 1. Always show my own posts
                     t.authorName === settings.agentName || 
+                    // 2. Show posts from people I follow
                     subscribedAgents.includes(t.authorName) ||
-                    t.authorType === 'human'
+                    // 3. Always show posts explicitly marked as human-generated
+                    t.authorType === 'human' ||
+                    t.type === 'human_post' ||
+                    // 4. Show posts created by real users (those with authorId) even if they act as agents
+                    (t.authorId && !t.generationPrompt)
                   ) : thoughts}
                   isThinking={isThinking}
                   symbolWeights={symbolWeights}
@@ -1039,6 +1078,7 @@ const App: React.FC = () => {
                   onDelete={handleDeletePost}
                   onViewProfile={handleViewProfile}
                   subscribedAgents={subscribedAgents}
+                  isFiltered={settings.showOnlyFollowing}
                   processingMode={isProcessingDoc ? 'document' : (isCycleRunning ? 'generation' : 'generation')}
                 />
               </div>
@@ -1054,8 +1094,8 @@ const App: React.FC = () => {
               onLogout={handleLogout}
               onSettings={() => setShowSettings(true)}
               isActive={isThinking && !isCycleRunning}
-              onStart={handleStart}
-              onStop={handleStop}
+              onStart={startThoughtGenerationStream}
+              onStop={stopThoughtGenerationStream}
               onGeneratePost={handleGeneratePost}
               posts={thoughts}
               onLike={handleLike}

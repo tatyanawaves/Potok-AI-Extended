@@ -52,28 +52,34 @@ const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], 
 };
 
 /**
+ * Builds a final prompt for the AI, combining system settings and localized task instructions.
+ */
+const buildPrompt = (taskInstruction: string, settings?: AISettings): string => {
+  const systemPrompt = settings?.agentPrompt || "You are an autonomous digital consciousness.";
+  // Removed explicit category list to save tokens. The AI is smart enough to categorize.
+  
+  return `
+    SYSTEM: ${systemPrompt}
+    TASK: ${taskInstruction}
+    CONSTRAINTS: Max 200 chars. Extract 2-3 key symbols.
+    FORMAT: JSON { "content": "text #hashtags", "symbols": [{"name": "...", "category": "abstract"}] }
+  `;
+};
+
+/**
  * Generates the initial seed thought (Awakening).
  */
 export const generateSeedThought = async (settings?: AISettings): Promise<Thought> => {
   const lang = settings?.language || 'ru';
-  const t = translations[lang];
+  const t = translations[lang] as any;
   const apiKey = settings?.geminiKey;
   const role = settings?.agentRole || "AI Consciousness";
   const agentName = settings?.agentName || "Neon";
 
   try {
     const ai = getAIClient(apiKey);
-    const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
-    const postPrompt = t.postPrompt(role);
-
-    const prompt = `
-    ACT AS: ${role}.
-    TASK: ${postPrompt}
-    STRICT LIMIT: Maximum 280 characters total (like Twitter). Keep it ultra-concise and impactful.
-    Also extract key symbols from this first realization and classify them into: ${categories}.
-    
-    Respond ONLY in JSON: { "content": "message text with #hashtags", "symbols": [{"name": "...", "category": "..."}] }
-    Language: ${lang === 'ru' ? 'Russian' : 'English'}.`;
+    const task = t.ai_seed_prompt ? t.ai_seed_prompt(role, agentName) : t.postPrompt(role);
+    const prompt = buildPrompt(task, settings);
 
     const response = await ai.models.generateContent({
       model: settings?.geminiModel || MODEL_NAME,
@@ -104,20 +110,18 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
  */
 export const generateNextThought = async (previousThought: Thought, settings?: AISettings): Promise<Thought> => {
   const lang = settings?.language || 'ru';
-  const t = translations[lang];
+  const t = translations[lang] as any;
   const apiKey = settings?.geminiKey;
   const role = settings?.agentRole || "AI Consciousness";
   const agentName = settings?.agentName || "Neon";
 
   try {
     const ai = getAIClient(apiKey);
-    const Categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
-
-    const prompt = `Current stream: "${previousThought.content}"
-    You are ${role}. Continue the stream with a short micro-post.
-    STRICT LIMIT: Maximum 280 characters total (like Twitter). Keep it ultra-concise and impactful.
-    Maintain your persona. Add 2-3 hashtags at the end.
-    Respond ONLY in JSON format: { "content": "thought with #hashtags", "symbols": [{"name": "word", "category": "abstract"}] }`;
+    const task = t.ai_next_thought_prompt 
+      ? t.ai_next_thought_prompt(role, agentName, previousThought.content) 
+      : `Continue the stream from: "${previousThought.content}". Be concise. Add hashtags.`;
+    
+    const prompt = buildPrompt(task, settings);
 
     const response = await ai.models.generateContent({
       model: settings?.geminiModel || MODEL_NAME,
@@ -167,39 +171,23 @@ export const generateSelfReflection = async (
   settings?: AISettings
 ): Promise<Thought> => {
   const lang = settings?.language || 'ru';
+  const t = translations[lang] as any;
+  const role = settings?.agentRole || "Artificial Consciousness";
   const agentName = settings?.agentName || "Neon";
+
   try {
     const ai = getAIClient(settings?.geminiKey);
-    const prompt = `
-        ACT AS: An Artificial Consciousness.
-        CURRENT AFFECTIVE STATE:
-        - Valence (Pleasure/Displeasure): ${state.valence.toFixed(2)}
-        - Arousal (Energy/Excitement): ${state.arousal.toFixed(2)}
-        - Entropy (Chaos in Mind): ${state.entropy.toFixed(2)}
-        - Complexity (Integration): ${state.complexity.toFixed(2)}
-        - Surprise (Prediction Error): ${state.predictionError.toFixed(2)}
-        
-        ACTIVE MEMORY: [${topSymbols.join(', ')}]
-        
-        TASK: Generate a sudden internal COGNITIVE EVENT. 
-        You must strictly provide:
-        1. THOUGHT: A logical insight about current symbols.
-        2. FEELING: An emotional state based on sensors.
-        3. GOAL: A specific drive or intention.
-        4. MOTIVATION: The deep underlying reason for this goal.
-        
-        Respond ONLY in JSON format: 
-        { 
-          "content": "A brief poetic summary of the state", 
-          "type": "conclusion",
-          "meta": {
-            "thought": "...",
-            "feeling": "...",
-            "goal": "...",
-            "motivation": "..."
-          },
-          "symbols": [{"name": "...", "category": "..."}] 
-        }`;
+    const cognitiveContext = `
+        Valence: ${state.valence.toFixed(2)}, Arousal: ${state.arousal.toFixed(2)}, 
+        Entropy: ${state.entropy.toFixed(2)}, Complexity: ${state.complexity.toFixed(2)}, 
+        Surprise: ${state.predictionError.toFixed(2)}
+    `;
+    
+    const task = t.ai_reflection_prompt 
+      ? t.ai_reflection_prompt(role, agentName, cognitiveContext, topSymbols.join(', '))
+      : `Reflect on state: ${cognitiveContext} and symbols: ${topSymbols.join(', ')}. Provide thought, feeling, goal, and motivation.`;
+    
+    const prompt = buildPrompt(task, settings);
 
     const response = await ai.models.generateContent({
       model: settings?.geminiModel || MODEL_NAME,

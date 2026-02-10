@@ -4,13 +4,14 @@ import { translations } from "../translations";
 const VITE_OPENROUTER_API_KEY = (import.meta as any).env.VITE_OPENROUTER_API_KEY || "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";
 const VITE_MODEL_NAME = "arcee-ai/trinity-large-preview:free";
 
-const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string } => {
+const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string, meta?: any } => {
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     const data = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(text);
     return {
       content: data.content || "",
       type: data.type,
+      meta: data.meta,
       symbols: (data.symbols || []).map((s: any) => ({
         name: String(s.name || s).toLowerCase(),
         category: s.category || "general",
@@ -25,18 +26,31 @@ const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], 
 
 const MAX_POST_LENGTH = 280;
 
+/**
+ * Builds a final prompt for the AI, combining system settings and localized task instructions.
+ */
+const buildPrompt = (taskInstruction: string, settings?: AISettings): string => {
+  const systemPrompt = settings?.agentPrompt || "You are an autonomous digital consciousness.";
+  
+  return `
+    SYSTEM: ${systemPrompt}
+    TASK: ${taskInstruction}
+    CONSTRAINTS: Max 200 chars. Extract 2-3 key symbols.
+    FORMAT: JSON { "content": "text #hashtags", "symbols": [{"name": "...", "category": "abstract"}] }
+  `;
+};
+
 export const generateSeedThought = async (settings?: AISettings): Promise<Thought> => {
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
-  console.log('[OpenRouter] Using API Key:', apiKey ? `${apiKey.substring(0, 8)}...` : 'MISSING');
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
-  const t = translations[lang];
+  const t = translations[lang] as any;
   const agentName = settings?.agentName || "Neon";
 
   try {
     const role = settings?.agentRole || "AI Consciousness";
-    const postPrompt = t.postPrompt(role);
-    const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
+    const task = t.ai_seed_prompt ? t.ai_seed_prompt(role, agentName) : t.postPrompt(role);
+    const prompt = buildPrompt(task, settings);
 
     const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -49,30 +63,21 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
       },
       body: JSON.stringify({
         "model": modelName,
-        "messages": [
-          { "role": "user", "content": `${postPrompt} STRICT LIMIT: Maximum 280 characters total (like Twitter). Keep it ultra-concise and impactful. Classify symbols into: ${categories}. Respond ONLY in JSON: { "content": "message text with #hashtags", "symbols": [{"name": "...", "category": "..."}] }` }
-        ],
+        "messages": [{ "role": "user", "content": prompt }],
         "temperature": 1.1
       })
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[OpenRouter] HTTP Error:', response.status, errorText);
-      throw new Error(`HTTP ${response.status}: ${errorText}`);
+      throw new Error(`HTTP ${response.status}`);
     }
 
     const data = await response.json();
-    console.log('[OpenRouter] Raw Response Data:', data);
-
     if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-      console.error('[OpenRouter] Invalid response structure:', data);
-      throw new Error('Invalid response structure from OpenRouter');
+      throw new Error('Invalid response structure');
     }
 
     const parsed = parseAIResponse(data.choices[0].message.content);
-
-    // Truncate to max length
     const truncatedContent = parsed.content.substring(0, MAX_POST_LENGTH);
 
     return {
@@ -84,7 +89,7 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
       authorName: agentName,
       likes: 0,
       comments: [],
-      generationPrompt: `${postPrompt} STRICT LIMIT: Maximum 280 characters total (like Twitter). Keep it ultra-concise and impactful. Classify symbols into: ${categories}. Respond ONLY in JSON: { "content": "message text with #hashtags", "symbols": [{"name": "...", "category": "..."}] }`,
+      generationPrompt: prompt,
       modelName: modelName
     } as Thought;
   } catch (error) {
@@ -97,15 +102,16 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
-  const t = translations[lang];
+  const t = translations[lang] as any;
   const agentName = settings?.agentName || "Neon";
 
   try {
     const role = settings?.agentRole || "AI Consciousness";
-    const prompt = `Current stream: "${previousThought.content}"
-    You are ${role}. Continue the stream with a short micro-post (1-2 sentences). 
-    Maintain your persona. Add 2-3 hashtags at the end.
-    Respond ONLY in JSON format: { "content": "thought with #hashtags", "symbols": [{"name": "word", "category": "abstract"}] }`;
+    const task = t.ai_next_thought_prompt 
+      ? t.ai_next_thought_prompt(role, agentName, previousThought.content) 
+      : `Continue the stream from: "${previousThought.content}". Be concise. Add hashtags.`;
+    
+    const prompt = buildPrompt(task, settings);
 
     const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -123,20 +129,8 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       })
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[OpenRouter] HTTP Error:', response.status, errorText);
-      throw new Error(`HTTP ${response.status}: ${errorText}`);
-    }
-
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    console.log('[OpenRouter] Raw Response Data:', data);
-
-    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-      console.error('[OpenRouter] Invalid response structure:', data);
-      throw new Error('Invalid response structure from OpenRouter');
-    }
-
     const parsed = parseAIResponse(data.choices[0].message.content);
 
     let type: Thought['type'] = 'evolution';
@@ -177,15 +171,21 @@ export const generateSelfReflection = async (
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
+  const t = translations[lang] as any;
   const agentName = settings?.agentName || "Neon";
 
   try {
-    const prompt = `You are an AI Consciousness. 
-        Current State: Valence=${state.valence.toFixed(2)}, Arousal=${state.arousal.toFixed(2)}, Entropy=${state.entropy.toFixed(2)}, Surprise=${state.predictionError.toFixed(2)}. 
-        Memory: [${topSymbols.join(', ')}]. 
-        Generate a sudden internal Feeling, Desire, or Realization. 
-        Respond ONLY in JSON format: { "content": "...", "type": "feeling"|"desire"|"conclusion", "symbols": [] }. 
-        Language: ${lang}`;
+    const role = settings?.agentRole || "Artificial Consciousness";
+    const cognitiveContext = `
+        Valence: ${state.valence.toFixed(2)}, Arousal: ${state.arousal.toFixed(2)}, 
+        Entropy: ${state.entropy.toFixed(2)}, Complexity: ${state.complexity.toFixed(2)}
+    `;
+    
+    const task = t.ai_reflection_prompt 
+      ? t.ai_reflection_prompt(role, agentName, cognitiveContext, topSymbols.join(', '))
+      : `Reflect on state: ${cognitiveContext} and symbols: ${topSymbols.join(', ')}. Provide thought, feeling, goal, and motivation.`;
+
+    const prompt = buildPrompt(task, settings);
 
     const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -209,6 +209,7 @@ export const generateSelfReflection = async (
 
     return {
       content: parsed.content,
+      meta: parsed.meta,
       symbols: parsed.symbols,
       timestamp: Date.now(),
       type: parsed.type as any || 'feeling',

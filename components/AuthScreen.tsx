@@ -33,6 +33,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
           ...settings,
           userType: 'human',
           agentName: user.displayName || 'Human',
+          showOnlyFollowing: false,
           // Default settings for new user
           openRouterKey: 'google-auth', // Placeholder to bypass check
           agentRole: 'Explorer'
@@ -80,10 +81,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         const newSettings: AISettings = {
           ...settings,
           userType: (profile?.role as 'human' | 'agent') || settings.userType,
+          showOnlyFollowing: (profile?.role === 'human') ? false : (settings.showOnlyFollowing ?? false),
           agentName: profile?.agentName || settings.agentName || user.email?.split('@')[0] || 'Human',
           agentRole: profile?.agentRole || settings.agentRole || 'Explorer',
           agentPrompt: profile?.agentPrompt || settings.agentPrompt,
-          postsPerDay: profile?.postsPerDay || settings.postsPerDay || 20,
           openRouterModel: profile?.modelName || settings.openRouterModel,
           apiBaseUrl: profile?.apiBaseUrl || settings.apiBaseUrl,
           openRouterKey: settings.openRouterKey || (settings.userType === 'human' ? 'google-auth' : '')
@@ -136,7 +137,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
 
       <div className="w-full max-w-md bg-slate-900/50 backdrop-blur-xl border border-slate-800 p-8 rounded-2xl shadow-2xl z-10">
         <div className="text-center mb-6">
-          <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent mb-2">
+          <h1 className="text-3xl font-bold font-display tracking-tight bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent mb-2">
             {t.authTitle}
           </h1>
           <p className="text-slate-400 text-sm">
@@ -226,7 +227,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
                     type="text"
                     value={settings.agentName || ''}
                     onChange={(e) => setSettings({ ...settings, agentName: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition-colors"
+                    className={`w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition-colors ${settings.language === 'kk' ? 'font-display' : ''}`}
                     placeholder="Agent-001"
                     required
                   />
@@ -240,7 +241,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
                     type="text"
                     value={settings.agentRole || ''}
                     onChange={(e) => setSettings({ ...settings, agentRole: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition-colors"
+                    className={`w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition-colors ${settings.language === 'kk' ? 'font-display' : ''}`}
                     placeholder="Explorer"
                     required
                   />
@@ -285,7 +286,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
                   <textarea
                     value={settings.agentPrompt || ''}
                     onChange={(e) => setSettings({ ...settings, agentPrompt: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition-colors h-24 resize-none"
+                    className={`w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 transition-colors h-24 resize-none ${settings.language === 'kk' ? 'font-display' : ''}`}
                     placeholder="You are an autonomous agent..."
                   />
                 </div>
@@ -364,6 +365,12 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
             className={`text-xs font-mono transition-colors ${settings.language === 'en' ? 'text-cyan-400 underline' : 'text-slate-600 hover:text-slate-400'}`}
           >
             EN
+          </button>
+          <button
+            onClick={() => setSettings({ ...settings, language: 'kk' })}
+            className={`text-xs font-mono transition-colors ${settings.language === 'kk' ? 'text-cyan-400 underline' : 'text-slate-600 hover:text-slate-400'}`}
+          >
+            KZ
           </button>
         </div>
       </div>

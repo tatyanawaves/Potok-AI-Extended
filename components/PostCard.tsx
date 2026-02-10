@@ -13,6 +13,7 @@ interface PostCardProps {
     onUnfollow?: (agentName: string) => void;
     onAddComment?: (thoughtId: string, content: string, parentId?: string) => void;
     onDeleteComment?: (thoughtId: string, commentId: string) => void;
+    onLikeComment?: (postId: string, commentId: string) => void;
     onDelete?: (id: string) => void;
     onViewProfile?: (name: string, id?: string) => void;
     subscribedAgents: string[];
@@ -76,11 +77,11 @@ const CommentItem: React.FC<CommentItemProps> = ({
     thoughtId,
     depth = 0 
 }) => {
-    const [isExpanded, setIsExpanded] = useState(true);
+    const [isExpanded, setIsExpanded] = useState(depth < 2); // Auto-expand first levels
     const [isReplying, setIsReplying] = useState(false);
     const [replyContent, setReplyContent] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const t = translations[language as 'en' | 'ru'];
+    const t = translations[language as 'en' | 'ru' | 'kk'];
 
     const replies = allComments.filter(c => c.parentId === comment.id);
     const hasReplies = replies.length > 0;
@@ -99,26 +100,46 @@ const CommentItem: React.FC<CommentItemProps> = ({
     };
 
     return (
-        <div className={`flex flex-col space-y-2 ${depth > 0 ? 'ml-4 mt-2 border-l border-slate-800 pl-3' : ''}`}>
-            <div className="group/comment flex items-start space-x-2 relative">
-                <div className="flex-1">
-                    <div className="flex items-center space-x-2">
-                        <span 
-                            className={`text-[10px] font-bold cursor-pointer hover:underline ${comment.authorType === 'human' ? 'text-indigo-400' : 'text-purple-400'}`}
-                            onClick={() => onViewProfile && onViewProfile(comment.authorName)}
-                        >
-                            {comment.authorName}
-                        </span>
-                        <span className="text-[8px] text-slate-600 font-mono">
-                            {new Date(comment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
+        <div className={`flex flex-col ${depth > 0 ? 'ml-3 mt-3' : 'mt-4'}`}>
+            <div className="group/comment flex items-start space-x-3 relative">
+                {/* Thread Line for nested comments */}
+                {depth > 0 && (
+                    <div className="absolute -left-3 top-0 bottom-0 w-px bg-gradient-to-b from-slate-700 to-transparent"></div>
+                )}
+                
+                {/* Mini Avatar */}
+                <div 
+                    onClick={() => onViewProfile && onViewProfile(comment.authorName)}
+                    className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white uppercase cursor-pointer transition-transform hover:scale-110 shadow-sm ${comment.authorType === 'human' ? 'bg-gradient-to-br from-indigo-500 to-purple-600' : 'bg-gradient-to-br from-cyan-500 to-indigo-600'}`}
+                >
+                    {comment.authorName.substring(0, 1)}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                    <div className="bg-slate-900/40 rounded-2xl px-3 py-2 border border-white/5 group-hover/comment:border-white/10 transition-colors">
+                        <div className="flex items-center justify-between mb-0.5">
+                            <div className="flex items-center space-x-2">
+                                <span 
+                                    className={`text-[10px] font-bold cursor-pointer hover:underline ${comment.authorType === 'human' ? 'text-indigo-300' : 'text-cyan-300'}`}
+                                    onClick={() => onViewProfile && onViewProfile(comment.authorName)}
+                                >
+                                    {comment.authorName}
+                                </span>
+                                {comment.authorType === 'agent' && (
+                                    <span className="text-[7px] bg-cyan-500/10 text-cyan-500 px-1 rounded font-bold border border-cyan-500/20">AI</span>
+                                )}
+                            </div>
+                            <span className="text-[8px] text-slate-600 font-mono">
+                                {new Date(comment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                        </div>
+                        <p className={`text-[11px] text-slate-300 leading-relaxed break-words ${language === 'kk' ? 'font-display font-normal' : ''}`}>{comment.content}</p>
                     </div>
-                    <p className="text-xs text-slate-400 break-words mt-0.5">{comment.content}</p>
                     
-                    <div className="flex items-center space-x-4 mt-1.5 opacity-0 group-hover/comment:opacity-100 transition-opacity">
+                    <div className="flex items-center space-x-4 mt-1 ml-2 opacity-60 group-hover/comment:opacity-100 transition-opacity">
                         <button 
                             onClick={() => setIsReplying(!isReplying)}
-                            className="text-[11px] font-bold text-slate-500 hover:text-cyan-400 uppercase tracking-tighter"
+                            className="text-[9px] font-bold text-slate-500 hover:text-cyan-400 uppercase tracking-wider transition-colors"
                         >
                             {isReplying ? t.cancel : t.reply}
                         </button>
@@ -126,27 +147,28 @@ const CommentItem: React.FC<CommentItemProps> = ({
                         {hasReplies && (
                             <button 
                                 onClick={() => setIsExpanded(!isExpanded)}
-                                className="flex items-center space-x-1.5 text-[11px] font-mono text-slate-600 hover:text-cyan-400 transition-colors"
+                                className="flex items-center space-x-1 text-[9px] font-mono text-slate-500 hover:text-indigo-400 transition-colors group/arrow"
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-                                <span className="font-bold">{replies.length}</span>
                                 <svg 
                                     xmlns="http://www.w3.org/2000/svg" 
-                                    className={`h-3 w-3 transition-transform duration-300 ${isExpanded ? 'rotate-180' : 'rotate-0'}`} 
+                                    className={`h-3 w-3 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} 
                                     fill="none" viewBox="0 0 24 24" stroke="currentColor"
                                 >
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 9l-7 7-7-7" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                                 </svg>
+                                <span className="font-bold underline decoration-slate-700 decoration-dotted underline-offset-2">
+                                    {isExpanded ? '' : `(${replies.length})`}
+                                </span>
                             </button>
                         )}
 
-                        {onDeleteComment && (comment.authorName === agentName) && (
+                        {onDeleteComment && (comment.authorName === agentName || comment.authorName === 'Neo' || comment.authorType === 'human') && (
                             <button
                                 onClick={() => onDeleteComment(thoughtId, comment.id)}
-                                className="p-1 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-md transition-all"
+                                className="p-1 text-slate-600 hover:text-rose-500 transition-all"
                                 title={t.delete}
                             >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                             </button>
                         )}
                     </div>
@@ -158,14 +180,14 @@ const CommentItem: React.FC<CommentItemProps> = ({
                                 type="text"
                                 value={replyContent}
                                 onChange={(e) => setReplyContent(e.target.value)}
-                                className="flex-1 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-[10px] focus:outline-none focus:border-cyan-500 text-slate-200"
+                                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-[10px] focus:outline-none focus:border-cyan-500/50 text-slate-200"
                                 placeholder={t.placeholderReply ? t.placeholderReply.replace('{name}', comment.authorName) : `Reply to ${comment.authorName}...`}
                                 onKeyDown={(e) => e.key === 'Enter' && handleReply()}
                             />
                             <button 
                                 onClick={handleReply}
                                 disabled={!replyContent.trim() || isSubmitting}
-                                className="px-2 py-1 bg-cyan-600 text-white text-[9px] font-bold rounded hover:bg-cyan-500 disabled:opacity-50"
+                                className="px-3 py-1.5 bg-slate-800 text-cyan-400 text-[9px] font-bold rounded-xl hover:bg-slate-700 transition-colors disabled:opacity-50"
                             >
                                 {isSubmitting ? '...' : 'OK'}
                             </button>
@@ -176,7 +198,7 @@ const CommentItem: React.FC<CommentItemProps> = ({
 
             {/* Render children recursively */}
             {hasReplies && isExpanded && (
-                <div className="flex flex-col space-y-2">
+                <div className="flex flex-col">
                     {replies.sort((a, b) => a.timestamp - b.timestamp).map(reply => (
                         <CommentItem 
                             key={reply.id} 
@@ -207,17 +229,19 @@ const PostCard: React.FC<PostCardProps> = ({
     onUnfollow,
     onAddComment,
     onDeleteComment,
+    onLikeComment,
     onDelete,
     onViewProfile,
     subscribedAgents,
     isFeedView = true,
     getTypeStyle
 }) => {
-    const t = translations[language as 'en' | 'ru'];
+    const t = translations[language as 'en' | 'ru' | 'kk'];
     const [commentInput, setCommentInput] = useState('');
     const [visibleComments, setVisibleComments] = useState(3);
     const [isSubmittingComment, setIsSubmittingComment] = useState(false);
     const [showMetaModal, setShowMetaModal] = useState(false);
+    const [showComments, setShowComments] = useState(thought.comments && thought.comments.length > 0);
 
     const handleComment = async () => {
         if (!commentInput.trim() || commentInput.length > 500) return;
@@ -323,7 +347,7 @@ const PostCard: React.FC<PostCardProps> = ({
             </div>
 
             {/* Post Body */}
-            <div className="px-4 text-[15px] leading-relaxed font-light text-slate-300">
+            <div className={`px-4 text-[15px] leading-relaxed font-light text-slate-300 ${language === 'kk' ? 'font-display font-normal' : ''}`}>
                 {renderContent(thought.content)}
             </div>
 
@@ -372,11 +396,23 @@ const PostCard: React.FC<PostCardProps> = ({
                         </svg>
                         <span className="text-xs font-bold">{thought.likes || 0}</span>
                     </button>
-                    <button className="flex items-center space-x-1.5 px-3 py-1.5 rounded-full text-slate-500 hover:text-cyan-400 hover:bg-cyan-500/5 transition-all">
+                    <button 
+                        onClick={() => setShowComments(!showComments)}
+                        className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-full transition-all ${showComments ? 'text-cyan-400 bg-cyan-500/10' : 'text-slate-500 hover:text-cyan-400 hover:bg-cyan-500/5'}`}
+                    >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                         </svg>
                         <span className="text-xs font-bold">{thought.comments?.length || 0}</span>
+                        {thought.comments && thought.comments.length > 0 && (
+                            <svg 
+                                xmlns="http://www.w3.org/2000/svg" 
+                                className={`h-3 w-3 transition-transform duration-300 ${showComments ? 'rotate-180' : ''}`} 
+                                fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                            >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                        )}
                     </button>
                 </div>
 
@@ -396,69 +432,73 @@ const PostCard: React.FC<PostCardProps> = ({
             </div>
 
             {/* Comments Section */}
-            {(thought.comments && thought.comments.length > 0) || true ? (
-                <div className="bg-slate-950/30 border-t border-white/5 p-3 space-y-4">
-                    {/* Filter root comments (no parentId or parentId is missing from thought.comments) */}
-                    {thought.comments && thought.comments
-                        .filter(c => !c.parentId || !thought.comments.find(pc => pc.id === c.parentId))
-                        .sort((a, b) => a.timestamp - b.timestamp)
-                        .slice(0, visibleComments)
-                        .map(comment => (
-                            <CommentItem 
-                                key={comment.id} 
-                                comment={comment} 
-                                allComments={thought.comments}
-                                language={language}
-                                agentName={agentName}
-                                onAddComment={onAddComment}
-                                onDeleteComment={onDeleteComment}
-                                onViewProfile={onViewProfile}
-                                thoughtId={thought.id}
-                            />
-                        ))}
+            {showComments && (
+                <div className="bg-slate-950/40 border-t border-white/5 px-4 py-2 space-y-1 animate-[fadeIn_0.2s_ease-out]">
+                    {/* Filter root comments */}
+                    <div className="space-y-0.5">
+                        {thought.comments && thought.comments
+                            .filter(c => !c.parentId || !thought.comments.find(pc => pc.id === c.parentId))
+                            .sort((a, b) => a.timestamp - b.timestamp)
+                            .slice(0, visibleComments)
+                            .map(comment => (
+                                <CommentItem 
+                                    key={comment.id} 
+                                    comment={comment} 
+                                    allComments={thought.comments}
+                                    language={language}
+                                    agentName={agentName}
+                                    onAddComment={onAddComment}
+                                    onDeleteComment={onDeleteComment}
+                                    onViewProfile={onViewProfile}
+                                    thoughtId={thought.id}
+                                />
+                            ))}
+                    </div>
 
                     {/* Pagination Button */}
                     {thought.comments && thought.comments.filter(c => !c.parentId).length > visibleComments && (
                         <button 
                             onClick={() => setVisibleComments(prev => prev + 5)}
-                            className="text-[10px] text-slate-500 hover:text-cyan-400 font-mono w-full text-left pl-2 pt-1 pb-2 transition-colors"
+                            className="text-[10px] text-slate-500 hover:text-cyan-400 font-mono w-full text-center py-2 transition-colors"
                         >
-                            Show more threads ({thought.comments.filter(c => !c.parentId).length - visibleComments} remaining)
+                            + {thought.comments.filter(c => !c.parentId).length - visibleComments} more threads
                         </button>
                     )}
 
-                    <div className="relative pt-2">
-                        <input
-                            type="text"
-                            value={commentInput}
-                            onChange={(e) => setCommentInput(e.target.value)}
-                            placeholder={t.addComment}
-                            maxLength={500}
-                            className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-3 pr-16 py-2 text-xs focus:outline-none focus:border-slate-600 transition-colors placeholder-slate-600 text-slate-200"
-                            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleComment(); }}
-                            disabled={isSubmittingComment}
-                        />
-                        <div className="absolute right-1 bottom-1 flex items-center space-x-1 h-10 pr-1">
-                            <span className={`text-[8px] font-mono ${commentInput.length > 450 ? 'text-amber-500' : 'text-slate-600'}`}>
-                                {commentInput.length}/500
-                            </span>
-                            <button
-                                onClick={handleComment}
-                                disabled={!commentInput.trim() || isSubmittingComment}
-                                className={`p-1 rounded-md transition-colors ${commentInput.trim() ? 'text-cyan-400 hover:bg-slate-800' : 'text-slate-700 pointer-events-none'}`}
-                            >
-                                {isSubmittingComment ? (
-                                    <div className="w-4 h-4 border-2 border-cyan-500/50 border-t-cyan-500 rounded-full animate-spin"></div>
-                                ) : (
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                                    </svg>
-                                )}
-                            </button>
+                    <div className="relative py-3">
+                        <div className="flex items-center space-x-3">
+                            <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-[8px] font-bold text-slate-400">
+                                ME
+                            </div>
+                            <div className="flex-1 relative">
+                                <input
+                                    type="text"
+                                    value={commentInput}
+                                    onChange={(e) => setCommentInput(e.target.value)}
+                                    placeholder={t.addComment}
+                                    maxLength={500}
+                                    className={`w-full bg-slate-900/60 border border-slate-800 rounded-2xl pl-4 pr-12 py-2 text-[11px] focus:outline-none focus:border-cyan-500/50 transition-all placeholder-slate-600 text-slate-200 ${language === 'kk' ? 'font-display' : ''}`}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) handleComment(); }}
+                                    disabled={isSubmittingComment}
+                                />
+                                <button
+                                    onClick={handleComment}
+                                    disabled={!commentInput.trim() || isSubmittingComment}
+                                    className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-all ${commentInput.trim() ? 'text-cyan-400 hover:bg-cyan-500/10' : 'text-slate-700 pointer-events-none'}`}
+                                >
+                                    {isSubmittingComment ? (
+                                        <div className="w-3.5 h-3.5 border-2 border-cyan-500/50 border-t-cyan-500 rounded-full animate-spin"></div>
+                                    ) : (
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                        </svg>
+                                    )}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
-            ) : null}
+            )}
 
             {/* Metadata Modal */}
             {showMetaModal && (

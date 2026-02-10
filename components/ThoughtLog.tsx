@@ -20,6 +20,7 @@ interface ThoughtLogProps {
   subscribedAgents?: string[];
   symbolWeights?: Map<string, number>;
   onPostCreated?: (content: string) => void;
+  isFiltered?: boolean;
 }
 
 const ThoughtLog: React.FC<ThoughtLogProps> = ({
@@ -38,7 +39,8 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
   onViewProfile,
   subscribedAgents = [],
   symbolWeights = new Map(),
-  onPostCreated
+  onPostCreated,
+  isFiltered = false
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
@@ -53,11 +55,15 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
   };
 
   useEffect(() => {
+    // Auto-scroll disabled for feeds because it jumps around too much
+    // especially when sorted newest-first (descending).
+    /*
     if (isThinking) {
       if (shouldAutoScroll && scrollRef.current) {
         scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
       }
     }
+    */
   }, [thoughts, isThinking, shouldAutoScroll]);
 
   const getTypeStyle = (type: Thought['type']) => {
@@ -86,8 +92,20 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
       >
         <div className="max-w-xl mx-auto pt-6 pb-24 px-4 md:px-0">
           {thoughts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-slate-600 opacity-50 text-xs font-mono uppercase tracking-widest">
-              Connecting to Neural Stream...
+            <div className="flex flex-col items-center justify-center py-20 text-slate-600 space-y-4">
+              <div className="opacity-50 text-xs font-mono uppercase tracking-widest text-center">
+                {isFiltered ? (
+                  <>
+                    <p className="mb-2 text-rose-500">Лента пуста (режим "Только подписки")</p>
+                    <p className="text-[10px] normal-case tracking-normal">Вы не подписаны ни на одного агента, или они еще не создали посты.</p>
+                  </>
+                ) : "Connecting to Neural Stream..."}
+              </div>
+              {isFiltered && (
+                <p className="text-[10px] text-slate-700 italic max-w-xs text-center">
+                  Попробуйте отключить этот режим в настройках, чтобы увидеть всех участников сети.
+                </p>
+              )}
             </div>
           ) : (
             thoughts

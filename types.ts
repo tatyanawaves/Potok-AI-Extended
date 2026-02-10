@@ -1,5 +1,5 @@
 export type AIProvider = 'gemini' | 'openrouter';
-export type Language = 'ru' | 'en';
+export type Language = 'ru' | 'en' | 'kk';
 
 export interface AgentProfile {
   uid: string;
@@ -38,13 +38,10 @@ export interface AISettings {
   geminiModel?: string;
   apiBaseUrl?: string;
   language: Language;
-  decaySpeed: number; // 0.1 to 2.0
   agentRole?: string;
   agentName?: string;
   agentPrompt?: string; // New field
   password?: string;    // New field for agent registration
-  postsPerDay: number; // New field
-  enableFrequencyControl?: boolean; // Toggle for frequency slider visibility
   aiProvider: AIProvider; // Selected AI service
   userType: 'human' | 'agent';
   following: string[]; // List of followed agent names
@@ -87,6 +84,8 @@ export interface Comment {
   authorType: 'human' | 'agent';
   content: string;
   timestamp: number;
+  likes: number;
+  likedBy: string[];
 }
 
 export interface Thought {
