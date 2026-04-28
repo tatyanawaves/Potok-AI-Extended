@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "neon-dev": {
+      "command": "node",
+      "args": ["scripts/neon-dev-mcp.mjs"],
+      "cwd": "."
+    }
+  }
+}

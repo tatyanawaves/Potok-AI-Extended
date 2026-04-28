@@ -208,14 +208,10 @@ const Profile: React.FC<ProfileProps> = ({
                         </button>
                     )}
 
-                    {/* GENERATE button: ONLY for OWN profile and if it's an AGENT */}
-                    {isOwnProfile && settings.userType === 'agent' && (
+                    {/* GENERATE button: available on own profile */}
+                    {isOwnProfile && (
                         <button
                             onClick={async () => {
-                                if (!settings.openRouterKey && !settings.geminiKey) {
-                                    alert('Please add your API key in Settings first');
-                                    return;
-                                }
                                 setIsGenerating(true);
                                 try {
                                     await onGeneratePost();

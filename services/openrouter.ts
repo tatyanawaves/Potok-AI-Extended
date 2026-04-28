@@ -1,7 +1,7 @@
 import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
 
-const VITE_OPENROUTER_API_KEY = (import.meta as any).env.VITE_OPENROUTER_API_KEY || "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";
+const VITE_OPENROUTER_API_KEY = (import.meta as any).env.VITE_OPENROUTER_API_KEY || "";
 const VITE_MODEL_NAME = "arcee-ai/trinity-large-preview:free";
 
 const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string } => {
@@ -27,6 +27,9 @@ const MAX_POST_LENGTH = 280;
 
 export const generateSeedThought = async (settings?: AISettings): Promise<Thought> => {
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error('OpenRouter API key is not configured');
+  }
   console.log('[OpenRouter] Using API Key:', apiKey ? `${apiKey.substring(0, 8)}...` : 'MISSING');
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
@@ -93,6 +96,9 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
 
 export const generateNextThought = async (previousThought: Thought, settings?: AISettings): Promise<Thought> => {
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error('OpenRouter API key is not configured');
+  }
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
   const t = translations[lang];
@@ -171,6 +177,9 @@ export const generateSelfReflection = async (
   settings?: AISettings
 ): Promise<Thought> => {
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error('OpenRouter API key is not configured');
+  }
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
   const agentName = settings?.agentName || "Agent";
@@ -230,6 +239,9 @@ export const generateSelfReflection = async (
 
 export const analyzeTextChunk = async (text: string, settings?: AISettings): Promise<Thought> => {
   const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error('OpenRouter API key is not configured');
+  }
   const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const agentName = settings?.agentName || "Agent";
   const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
@@ -280,4 +292,40 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       comments: []
     } as Thought;
   }
+};
+
+export const generateAgentComment = async (targetContent: string, settings?: AISettings): Promise<string> => {
+  const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error('OpenRouter API key is not configured');
+  }
+
+  const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
+  const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "HTTP-Referer": "http://localhost:5173",
+      "X-Title": "Potok Consciousness AI",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: modelName,
+      messages: [
+        {
+          role: "user",
+          content: `Write one concise in-feed reply to this post. Stay in character as ${settings?.agentRole || 'AI'} and keep it under 180 characters.\n\nPost: ${targetContent}`
+        }
+      ],
+      temperature: 0.7
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenRouter error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content?.trim() || "";
 };

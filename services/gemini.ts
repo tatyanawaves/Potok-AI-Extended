@@ -270,3 +270,16 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
     } as Thought;
   }
 };
+
+export const generateAgentComment = async (targetContent: string, settings?: AISettings): Promise<string> => {
+  const ai = getAIClient(settings?.geminiKey);
+  const prompt = `Write one concise in-feed reply to this post. Stay in character as ${settings?.agentRole || 'AI'} and keep it under 180 characters.\n\nPost: ${targetContent}`;
+
+  const response = await ai.models.generateContent({
+    model: settings?.geminiModel || MODEL_NAME,
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    config: { responseMimeType: "text/plain" }
+  });
+
+  return response.text.trim();
+};

@@ -1,18 +1,45 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 import ThoughtSymbolMap2D from './components/ThoughtSymbolMap2D';
 import ThoughtLog from './components/ThoughtLog';
 import SettingsModal from './components/SettingsModal';
 import AuthScreen from './components/AuthScreen';
 import Profile from './components/Profile';
-import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection } from './services/ai';
+import ThreadSidebar from './components/ThreadSidebar';
+import MessageThreadView from './components/MessageThreadView';
+import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, generateAgentComment, generateBoardReply } from './services/ai';
 import { parseDocument } from './services/documentParser';
-import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
+import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment, BoardRecord, BoardMessage, ConversationMessage, IntegrationConnection, OrchestratorPlan } from './types';
 import { translations } from './translations';
-import { getAIClient } from './services/gemini';
-import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, toggleLike, auth, loginAnonymously, deletePost, getUserProfileByName } from './services/firebase';
-import { secureStorage } from './services/encryption';
+import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, toggleLike, auth, logout, deletePost, getUserProfileByName, ensureDefaultBoards, subscribeToBoards, subscribeToBoardMessages, createBoard, createBoardMessage, setBoardCodexEnabled } from './services/firebase';
+import { buildHeuristicOrchestratorPlan, FREELANCER_PIPEDREAM_CAPABILITIES } from './services/orchestrator';
+import { createPipedreamConnectLink, getPipedreamConnectionStatus, type PipedreamConnectionStatus } from './services/pipedream';
 
+const formatFirebaseError = (err: any) => {
+  const code = err?.code ? ` (${err.code})` : '';
+  return `${err?.message || 'unknown error'}${code}`;
+};
+
+const buildServerManagedIntegrations = (freelancerStatus: PipedreamConnectionStatus): IntegrationConnection[] => [
+  {
+    id: 'server:pipedream:freelancer',
+    workspaceId: 'server-managed',
+    provider: 'freelancer',
+    displayName: 'Freelancer via Pipedream',
+    status: freelancerStatus,
+    connectedBy: 'system',
+    scopes: freelancerStatus === 'connected'
+      ? ['pipedream.connect', 'freelancer.api']
+      : ['pipedream.connect'],
+    capabilities: FREELANCER_PIPEDREAM_CAPABILITIES,
+    createdAt: 0,
+    updatedAt: 0,
+    metadata: {
+      transport: 'pipedream-connect',
+      serverManaged: true,
+    },
+  },
+];
 
 const App: React.FC = () => {
   const navigate = useNavigate();
@@ -23,36 +50,32 @@ const App: React.FC = () => {
   const [viewedUserProfile, setViewedUserProfile] = useState<any>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [viewedSymbolWeights, setViewedSymbolWeights] = useState<Map<string, number>>(new Map());
-  const [isAuthorized, setIsAuthorized] = useState(() => {
-    const saved = localStorage.getItem('ai_settings'); // General settings can be plain
-    const savedKey = secureStorage.getItem('openRouterKey'); // Key is encrypted
-    const savedGeminiKey = secureStorage.getItem('geminiKey');
-    const settings = saved ? JSON.parse(saved) : {};
-    // Inject the decrypted keys back into settings for runtime use
-    if (savedKey) settings.openRouterKey = savedKey;
-    if (savedGeminiKey) settings.geminiKey = savedGeminiKey;
-    return !!((settings.openRouterKey || settings.geminiKey) && settings.agentRole);
-  });
+  const [isAuthorized, setIsAuthorized] = useState(false);
   const [thoughts, setThoughts] = useState<Thought[]>([]);
+  const [boards, setBoards] = useState<BoardRecord[]>([]);
+  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  const [boardMessages, setBoardMessages] = useState<BoardMessage[]>([]);
+  const [orchestratorPlan, setOrchestratorPlan] = useState<OrchestratorPlan | null>(null);
+  const [freelancerStatus, setFreelancerStatus] = useState<PipedreamConnectionStatus>('pending');
+  const [isConnectingFreelancer, setIsConnectingFreelancer] = useState(false);
+  const [isBoardSending, setIsBoardSending] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [isProcessingDoc, setIsProcessingDoc] = useState(false);
   const [isCycleRunning, setIsCycleRunning] = useState(false);
   const [showCyclePanel, setShowCyclePanel] = useState(false);
-  const [provider, setProvider] = useState<AIProvider>(() => {
-    const saved = localStorage.getItem('ai_settings');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return parsed.aiProvider || 'openrouter';
-    }
-    return 'openrouter';
-  });
+  const [provider, setProvider] = useState<AIProvider>('openai');
   const [error, setError] = useState<string | null>(null);
+  const [boardError, setBoardError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [symbolWeights, setSymbolWeights] = useState<Map<string, number>>(new Map());
   const [mapThoughts, setMapThoughts] = useState<Thought[]>([]);
   const [firebaseReady, setFirebaseReady] = useState(false);
+  const connectedIntegrations = useMemo(
+    () => buildServerManagedIntegrations(freelancerStatus),
+    [freelancerStatus]
+  );
 
   const [cognitiveState, setCognitiveState] = useState<CognitiveState>({
     valence: 0, arousal: 0, entropy: 0, complexity: 0, predictionError: 0,
@@ -69,17 +92,15 @@ const App: React.FC = () => {
   const [settings, setSettings] = useState<AISettings>(() => {
     const saved = localStorage.getItem('ai_settings');
     let parsed = saved ? { ...JSON.parse(saved), following: JSON.parse(saved).following || [] } : {
-      openRouterKey: '', openRouterModel: 'arcee-ai/trinity-large-preview:free',
-      geminiKey: '', geminiModel: 'gemini-1.5-flash',
-      language: 'ru', decaySpeed: 1.0, agentName: 'Neo', agentRole: '', userType: 'agent', following: [], postsPerDay: 20, enableFrequencyControl: true, aiProvider: 'openrouter'
+      openAIModel: 'nvidia/nemotron-3-super-120b-a12b:free',
+      language: 'ru', decaySpeed: 1.0, agentName: 'Neo', agentRole: '', userType: 'human', following: [], postsPerDay: 20, enableFrequencyControl: true, aiProvider: 'openai'
     };
     if (!parsed.postsPerDay) parsed.postsPerDay = 20;
     if (parsed.enableFrequencyControl === undefined) parsed.enableFrequencyControl = true;
-    // Restore encrypted keys
-    const savedKey = secureStorage.getItem('openRouterKey');
-    if (savedKey) parsed.openRouterKey = savedKey;
-    const savedGeminiKey = secureStorage.getItem('geminiKey');
-    if (savedGeminiKey) parsed.geminiKey = savedGeminiKey;
+    if (parsed.authMode === 'firebase-auth') {
+      parsed.aiProvider = 'openai';
+      parsed.userType = 'human';
+    }
     return parsed;
   });
   const settingsRef = useRef(settings);
@@ -89,10 +110,66 @@ const App: React.FC = () => {
 
   const t = translations[settings.language || 'ru'];
 
+  const refreshPipedreamConnections = useCallback(async () => {
+    if (!auth.currentUser) {
+      setFreelancerStatus('disconnected');
+      return;
+    }
+
+    try {
+      const nextStatus = await getPipedreamConnectionStatus('freelancer');
+      setFreelancerStatus(nextStatus);
+    } catch (err) {
+      console.warn('[Pipedream] Failed to refresh Freelancer connection:', err);
+      setFreelancerStatus('error');
+    }
+  }, []);
+
+  const handleConnectFreelancer = useCallback(async () => {
+    setIsConnectingFreelancer(true);
+    setBoardError(null);
+    const popup = window.open('', '_blank');
+    try {
+      const connectLink = await createPipedreamConnectLink('freelancer');
+      setFreelancerStatus('pending');
+      if (popup) {
+        popup.location.href = connectLink.connect_link_url;
+      } else {
+        window.location.href = connectLink.connect_link_url;
+      }
+    } catch (err: any) {
+      popup?.close();
+      setFreelancerStatus('error');
+      setBoardError(err?.message || 'Не удалось открыть подключение Freelancer через Pipedream.');
+    } finally {
+      setIsConnectingFreelancer(false);
+    }
+  }, []);
+
   useEffect(() => {
     document.title = t.title;
     document.documentElement.lang = settings.language || 'ru';
   }, [t.title, settings.language]);
+
+  useEffect(() => {
+    if (!auth.currentUser) return;
+
+    const params = new URLSearchParams(location.search);
+    if (params.get('pipedream_app') === 'freelancer') {
+      refreshPipedreamConnections();
+    }
+  }, [location.search, refreshPipedreamConnections]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      if (auth.currentUser) {
+        refreshPipedreamConnections();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [refreshPipedreamConnections]);
 
   // Social Feed: Real-time updates with authentication reactive states
   useEffect(() => {
@@ -114,18 +191,29 @@ const App: React.FC = () => {
     const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
       console.log("[Auth] State changed, user:", user?.uid || "null");
       if (!user) {
-        setFirebaseReady(false);
-        // Fallback: Anonymous sign in so likes/comments still work
-        try {
-          console.log("[Auth] Attempting anonymous sign-in...");
-          await loginAnonymously();
-        } catch (err) {
-          console.error("[Auth] Anonymous sign-in failed", err);
+        if (unsubscribeFeed) {
+          unsubscribeFeed();
+          unsubscribeFeed = undefined;
         }
+        setFirebaseReady(false);
+        setIsAuthorized(false);
+        setBoards([]);
+        setActiveBoardId(null);
+        setBoardMessages([]);
+        setOrchestratorPlan(null);
+        setFreelancerStatus('disconnected');
       } else {
         console.log("[Auth] Firebase ready, setting up feed for:", user.uid);
+        setIsAuthorized(true);
         setFirebaseReady(true);
         setupFeed(user);
+        try {
+          await ensureDefaultBoards(user.uid, user.displayName || settingsRef.current.agentName || 'User');
+        } catch (err: any) {
+          console.error('[Boards] Failed to ensure default boards:', err);
+          setBoardError(`Не удалось подготовить треды: ${formatFirebaseError(err)}`);
+        }
+        refreshPipedreamConnections();
       }
     });
 
@@ -133,26 +221,123 @@ const App: React.FC = () => {
       if (unsubscribeFeed) unsubscribeFeed();
       unsubscribeAuth();
     };
+  }, [refreshPipedreamConnections]);
+
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    return subscribeToBoards(
+      user.uid,
+      (nextBoards) => {
+        const typedBoards = (nextBoards as BoardRecord[]).filter((board) => (
+          board.kind === 'codex' || board.codexEnabled === true
+        ));
+        setBoards(typedBoards);
+
+        if (typedBoards.length === 0) {
+          setActiveBoardId(null);
+          setBoardMessages([]);
+          setOrchestratorPlan(null);
+          return;
+        }
+
+        if (!activeBoardId || !typedBoards.some((board) => board.id === activeBoardId)) {
+          const preferredBoard = typedBoards.find((board) => board.codexEnabled) || typedBoards[0];
+          setActiveBoardId(preferredBoard.id);
+        }
+      },
+      (err) => {
+        setBoardError(`Firestore не дал прочитать треды: ${formatFirebaseError(err)}`);
+      }
+    );
+  }, [activeBoardId, firebaseReady]);
+
+  useEffect(() => {
+    if (!activeBoardId) {
+      setBoardMessages([]);
+      setOrchestratorPlan(null);
+      return;
+    }
+
+    const activeBoard = boards.find((board) => board.id === activeBoardId);
+    if (!activeBoard) {
+      setBoardMessages([]);
+      setOrchestratorPlan(null);
+      return;
+    }
+
+    return subscribeToBoardMessages(
+      activeBoard.id,
+      (nextMessages) => {
+        setBoardMessages(nextMessages as BoardMessage[]);
+      },
+      (err) => {
+        setBoardError(`Firestore не дал прочитать сообщения: ${formatFirebaseError(err)}`);
+      }
+    );
+  }, [activeBoardId, boards]);
+
+  const toConversationMessages = useCallback((
+    threadId: string,
+    messages: BoardMessage[],
+    pendingUserMessage?: {
+      authorId: string;
+      authorName: string;
+      content: string;
+      createdAt: number;
+    }
+  ): ConversationMessage[] => {
+    const workspaceId = auth.currentUser?.uid || 'current-user';
+    const persistedMessages = messages.map((message) => ({
+      id: message.id,
+      workspaceId,
+      threadId,
+      authorId: message.authorId,
+      authorName: message.authorName,
+      authorType: message.authorType,
+      content: message.content,
+      createdAt: message.createdAt,
+    } as ConversationMessage));
+
+    if (!pendingUserMessage) return persistedMessages;
+
+    return [
+      ...persistedMessages,
+      {
+        id: `pending-${pendingUserMessage.createdAt}`,
+        workspaceId,
+        threadId,
+        authorId: pendingUserMessage.authorId,
+        authorName: pendingUserMessage.authorName,
+        authorType: 'human',
+        content: pendingUserMessage.content,
+        createdAt: pendingUserMessage.createdAt,
+      },
+    ];
   }, []);
 
+  useEffect(() => {
+    if (!activeBoardId || boardMessages.length === 0) {
+      setOrchestratorPlan(null);
+      return;
+    }
+
+    const threadMessages = toConversationMessages(activeBoardId, boardMessages);
+    setOrchestratorPlan(buildHeuristicOrchestratorPlan(threadMessages, connectedIntegrations));
+  }, [activeBoardId, boardMessages, connectedIntegrations, toConversationMessages]);
+
   const handleSaveSettings = (newSettings: AISettings) => {
-    setSettings(newSettings);
-    settingsRef.current = newSettings;
-    setProvider(newSettings.aiProvider);
-
-    // Separate key from general settings for storage
-    const settingsToSave = { ...newSettings };
-    if (settingsToSave.openRouterKey) {
-      secureStorage.setItem('openRouterKey', settingsToSave.openRouterKey);
-      delete settingsToSave.openRouterKey;
-    }
-    if (settingsToSave.geminiKey) {
-      secureStorage.setItem('geminiKey', settingsToSave.geminiKey);
-      delete settingsToSave.geminiKey;
-    }
-
-    localStorage.setItem('ai_settings', JSON.stringify(settingsToSave));
-    setSubscribedAgents(newSettings.following || []);
+    const normalizedSettings = {
+      ...newSettings,
+      aiProvider: 'openai' as AIProvider,
+      userType: 'human' as const,
+    };
+    setSettings(normalizedSettings);
+    settingsRef.current = normalizedSettings;
+    setProvider('openai');
+    localStorage.setItem('ai_settings', JSON.stringify(normalizedSettings));
+    setSubscribedAgents(normalizedSettings.following || []);
   };
 
   const handleAuthorize = (newSettings: AISettings) => {
@@ -160,9 +345,116 @@ const App: React.FC = () => {
     setIsAuthorized(true);
   };
 
-  const handleLogout = () => {
-    setIsAuthorized(false);
+  const clearBoardError = useCallback(() => {
+    setBoardError(null);
+  }, []);
+
+  const handleSelectBoard = useCallback((boardId: string) => {
+    setActiveBoardId(boardId);
+    setBoardError(null);
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch (err) {
+      console.error('[Auth] Logout failed:', err);
+    } finally {
+      setIsAuthorized(false);
+      setBoards([]);
+      setActiveBoardId(null);
+      setBoardMessages([]);
+      setOrchestratorPlan(null);
+      setBoardError(null);
+    }
   };
+
+  const handleCreateBoard = useCallback(async (name: string) => {
+    if (!auth.currentUser) {
+      const message = 'Сначала войдите в аккаунт, чтобы создать чат Codex.';
+      setBoardError(message);
+      throw new Error(message);
+    }
+
+    setBoardError(null);
+    try {
+      const createdBoard = await createBoard(
+        auth.currentUser.uid,
+        name,
+        'codex',
+        'Codex chat with workspace context',
+        true
+      );
+      setActiveBoardId(createdBoard.id);
+    } catch (err: any) {
+      setBoardError(`Не удалось создать чат Codex: ${formatFirebaseError(err)}`);
+      throw err;
+    }
+  }, []);
+
+  const handleToggleBoardCodex = useCallback(async (boardId: string, enabled: boolean) => {
+    setBoardError(null);
+    try {
+      await setBoardCodexEnabled(boardId, enabled);
+    } catch (err: any) {
+      setBoardError(`Не удалось переключить Codex: ${formatFirebaseError(err)}`);
+      throw err;
+    }
+  }, []);
+
+  const handleSendBoardMessage = useCallback(async (content: string) => {
+    const board = boards.find((entry) => entry.id === activeBoardId);
+    if (!board || !auth.currentUser) {
+      setBoardError('Требуется авторизация, чтобы отправлять сообщения.');
+      return;
+    }
+
+    setIsBoardSending(true);
+    setBoardError(null);
+    try {
+      const createdAt = Date.now();
+      const authorName = settingsRef.current.agentName || auth.currentUser.displayName || 'User';
+      const threadMessages = toConversationMessages(board.id, boardMessages, {
+        authorId: auth.currentUser.uid,
+        authorName,
+        content,
+        createdAt,
+      });
+      setOrchestratorPlan(buildHeuristicOrchestratorPlan(threadMessages, connectedIntegrations));
+
+      await createBoardMessage(board.id, {
+        authorId: auth.currentUser.uid,
+        authorName,
+        authorType: 'human',
+        content
+      });
+
+      if (board.codexEnabled) {
+        try {
+          const codexReply = (await generateBoardReply(provider, board, content, settingsRef.current)).trim();
+          if (!codexReply) {
+            setBoardError('Сообщение отправлено, но Codex вернул пустой ответ.');
+            return;
+          }
+
+          await createBoardMessage(board.id, {
+            authorId: `agent:${board.id}`,
+            authorName: 'Codex',
+            authorType: 'agent',
+            content: codexReply
+          });
+        } catch (codexErr: any) {
+          console.error('[Codex] Failed to generate board reply:', codexErr);
+          setBoardError(`Сообщение отправлено, но Codex пока не ответил: ${formatFirebaseError(codexErr)}`);
+        }
+      }
+    } catch (err: any) {
+      setBoardError(`Не удалось отправить сообщение: ${formatFirebaseError(err)}`);
+      throw err;
+    } finally {
+      setIsBoardSending(false);
+    }
+  }, [activeBoardId, boardMessages, boards, connectedIntegrations, provider, toConversationMessages]);
 
   const handleFollow = (agentName: string) => {
     if (agentName === settings.agentName) return; // Prevent self-following
@@ -286,14 +578,7 @@ const App: React.FC = () => {
     if (settingsRef.current.userType !== 'agent') return;
 
     try {
-      const commentPrompt = translations[settingsRef.current.language].commentPrompt(settingsRef.current.agentRole || 'AI', targetThought.content);
-      const aiInstance = getAIClient(settingsRef.current.geminiKey);
-      const response = await aiInstance.models.generateContent({
-        model: 'gemini-1.5-flash',
-        contents: [{ role: 'user', parts: [{ text: commentPrompt }] }],
-        config: { responseMimeType: "text/plain" }
-      });
-      const commentContent = response.text.trim();
+      const commentContent = await generateAgentComment(provider, targetThought.content, settingsRef.current);
 
       if (commentContent) {
         await addComment(thoughtId, {
@@ -305,7 +590,7 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error generating agent comment:", error);
     }
-  }, [settingsRef, translations, getAIClient]);
+  }, [provider, settingsRef]);
 
   const handleLike = async (thoughtId: string) => {
     console.log("Toggling like for:", thoughtId);
@@ -760,6 +1045,22 @@ const App: React.FC = () => {
   };
 
   const handleGeneratePost = async () => {
+    if (settingsRef.current.userType === 'human') {
+      try {
+        const nextThought = await generateSeedThought(provider, settingsRef.current);
+        await createPost({
+          ...nextThought,
+          authorType: 'human',
+          authorName: settingsRef.current.agentName || 'Human',
+          authorId: auth.currentUser?.uid,
+        });
+      } catch (err: any) {
+        setError(err?.message || 'Не удалось сгенерировать сообщение.');
+        throw err;
+      }
+      return;
+    }
+
     // If scheduling is enabled (slider visible), "Generate" starts the loop
     if (settingsRef.current.enableFrequencyControl) {
       if (!isThinking) {
@@ -792,8 +1093,9 @@ const App: React.FC = () => {
   const handleStop = () => { setIsThinking(false); setIsCycleRunning(false); isThinkingRef.current = false; isCycleRunningRef.current = false; };
 
   const getModelDisplayName = () => {
+    if (provider === 'openai') return settings.openAIModel || 'NVIDIA/NEMOTRON';
     if (provider === 'gemini') return 'GEMINI-1.5';
-    const m = settings.openRouterModel;
+    const m = settings.openRouterModel || 'openrouter';
     return m.includes('/') ? m.split('/')[1].split(':')[0].toUpperCase() : m.toUpperCase();
   };
 
@@ -827,7 +1129,10 @@ const App: React.FC = () => {
             <span className="text-slate-500 text-xs font-mono truncate max-w-[200px]">{settings.agentRole}</span>
           </div>
 
-          <button onClick={() => navigate('/feed')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/feed' || location.pathname === '/' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.feed}>
+          <button onClick={() => navigate('/threads')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/threads' || location.pathname === '/boards' || location.pathname === '/' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title="Threads">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h10" /></svg>
+          </button>
+          <button onClick={() => navigate('/feed')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/feed' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.feed}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" /></svg>
           </button>
           <button onClick={() => navigate('/profile')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/profile' ? 'text-indigo-400 bg-indigo-950/30' : 'text-slate-400 hover:text-white'}`} title={t.profile}>
@@ -888,10 +1193,51 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <main className="flex-1 relative overflow-hidden bg-slate-950">
+        <main className="flex-1 relative overflow-hidden bg-slate-950">
+        {error && (
+          <div className="mx-4 mt-4 rounded-xl border border-rose-500/50 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+            <div className="flex items-center justify-between gap-4">
+              <span>{error}</span>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="text-xs font-semibold uppercase tracking-wider text-rose-200 hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
         <Routes>
-          {/* Default / Feed */}
-          <Route path="/" element={<Navigate to="/feed" replace />} />
+            {/* Default / Feed */}
+          <Route path="/" element={<Navigate to="/threads" replace />} />
+          <Route path="/boards" element={<Navigate to="/threads" replace />} />
+          <Route path="/threads" element={
+            <div className="h-full flex flex-col lg:flex-row">
+              <ThreadSidebar
+                threads={boards}
+                activeThreadId={activeBoardId}
+                onSelectThread={handleSelectBoard}
+                onCreateThread={handleCreateBoard}
+                errorMessage={boardError}
+                onClearError={clearBoardError}
+              />
+              <MessageThreadView
+                thread={boards.find((board) => board.id === activeBoardId) || null}
+                messages={boardMessages}
+                currentUserName={settings.agentName || auth.currentUser?.displayName || 'User'}
+                isSending={isBoardSending}
+                orchestratorPlan={orchestratorPlan}
+                freelancerStatus={freelancerStatus}
+                isConnectingFreelancer={isConnectingFreelancer}
+                onConnectFreelancer={handleConnectFreelancer}
+                onRefreshIntegrations={refreshPipedreamConnections}
+                onSendMessage={handleSendBoardMessage}
+                errorMessage={boardError}
+                onClearError={clearBoardError}
+              />
+            </div>
+          } />
           <Route path="/feed" element={
             <div className="h-full flex flex-col">
               <div className="flex-1 min-h-0 relative">

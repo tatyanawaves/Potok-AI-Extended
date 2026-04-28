@@ -1,8 +1,9 @@
 
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs, increment, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously } from 'firebase/auth';
 import { getAnalytics } from "firebase/analytics";
+import type { BoardKind } from '../types';
 
 // TODO: Replace with your project's config object
 // You can get this from the Firebase Console -> Project Settings -> General -> Your apps
@@ -29,6 +30,25 @@ export const signInWithGoogle = async () => {
         return result.user;
     } catch (error) {
         console.error("Google Sign In Error", error);
+        throw error;
+    }
+};
+
+export const signInWithGoogleRedirectFlow = async () => {
+    try {
+        await signInWithRedirect(auth, googleProvider);
+    } catch (error) {
+        console.error("Google Redirect Sign In Error", error);
+        throw error;
+    }
+};
+
+export const getGoogleRedirectUser = async () => {
+    try {
+        const result = await getRedirectResult(auth);
+        return result?.user ?? null;
+    } catch (error) {
+        console.error("Google Redirect Result Error", error);
         throw error;
     }
 };
@@ -70,6 +90,7 @@ export const loginAnonymously = async () => {
 // Collection References
 export const postsRef = collection(db, 'posts');
 export const usersRef = collection(db, 'users');
+export const boardsRef = collection(db, 'boards');
 
 // Helpers for Social Features
 
@@ -235,4 +256,107 @@ export const getUserPosts = async (userId: string, agentName?: string) => {
         console.error("[Firebase] Critical error in getUserPosts:", error);
         return [];
     }
+};
+
+export const ensureDefaultBoards = async (userId: string, userName: string) => {
+    const existingBoards = await getDocs(query(boardsRef, where('ownerId', '==', userId), limit(50)));
+    const hasCodexBoard = existingBoards.docs.some((boardDoc) => {
+        const board = boardDoc.data();
+        return board.kind === 'codex' || board.codexEnabled === true;
+    });
+
+    if (hasCodexBoard) {
+        return;
+    }
+
+    await addDoc(boardsRef, {
+        ownerId: userId,
+        name: 'Codex',
+        kind: 'codex',
+        codexEnabled: true,
+        description: `Codex chat with workspace context for ${userName}`,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+    });
+};
+
+export const subscribeToBoards = (
+    userId: string,
+    callback: (boards: any[]) => void,
+    onError?: (error: Error) => void
+) => {
+    const q = query(boardsRef, where('ownerId', '==', userId));
+    return onSnapshot(q, (snapshot) => {
+        const boards = snapshot.docs
+            .map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))
+            .sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        callback(boards);
+    }, (error) => {
+        console.error('[Firebase] subscribeToBoards failed:', error);
+        onError?.(error);
+    });
+};
+
+export const createBoard = async (
+    userId: string,
+    name: string,
+    kind: BoardKind = 'codex',
+    description?: string,
+    codexEnabled = true
+) => {
+    return addDoc(boardsRef, {
+        ownerId: userId,
+        name,
+        kind,
+        codexEnabled,
+        description: description || '',
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+    });
+};
+
+export const setBoardCodexEnabled = async (boardId: string, enabled: boolean) => {
+    const boardRef = doc(db, 'boards', boardId);
+    await updateDoc(boardRef, {
+        codexEnabled: enabled,
+        updatedAt: Date.now()
+    });
+};
+
+export const getBoardMessagesRef = (boardId: string) => collection(db, 'boards', boardId, 'messages');
+
+export const subscribeToBoardMessages = (
+    boardId: string,
+    callback: (messages: any[]) => void,
+    onError?: (error: Error) => void
+) => {
+    const q = query(getBoardMessagesRef(boardId), orderBy('createdAt', 'asc'), limit(200));
+    return onSnapshot(q, (snapshot) => {
+        const messages = snapshot.docs.map(docSnap => ({ id: docSnap.id, boardId, ...docSnap.data() }));
+        callback(messages);
+    }, (error) => {
+        console.error('[Firebase] subscribeToBoardMessages failed:', error);
+        onError?.(error);
+    });
+};
+
+export const createBoardMessage = async (
+    boardId: string,
+    message: {
+        authorId: string;
+        authorName: string;
+        authorType: 'human' | 'agent';
+        content: string;
+    }
+) => {
+    const boardRef = doc(db, 'boards', boardId);
+    await addDoc(getBoardMessagesRef(boardId), {
+        ...message,
+        boardId,
+        createdAt: Date.now()
+    });
+    await updateDoc(boardRef, {
+        updatedAt: Date.now(),
+        lastMessagePreview: message.content.slice(0, 120)
+    });
 };

@@ -9,11 +9,8 @@ interface SettingsModalProps {
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose }) => {
-  const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
-  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || 'arcee-ai/trinity-large-preview:free');
-  const [geminiKey, setGeminiKey] = useState(settings.geminiKey || '');
-  const [geminiModel, setGeminiModel] = useState(settings.geminiModel || 'gemini-1.5-flash');
-  const [aiProvider, setAiProvider] = useState<AIProvider>(settings.aiProvider || 'openrouter');
+  const [openAIModel, setOpenAIModel] = useState(settings.openAIModel || 'nvidia/nemotron-3-super-120b-a12b:free');
+  const [aiProvider, setAiProvider] = useState<AIProvider>(settings.aiProvider || 'openai');
   const [apiBaseUrl, setApiBaseUrl] = useState(settings.apiBaseUrl || '');
   const [language, setLanguage] = useState<Language>(settings.language || 'ru');
   const [decaySpeed, setDecaySpeed] = useState(settings.decaySpeed || 1.0);
@@ -25,10 +22,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
   const handleSave = () => {
     onSave({
-      openRouterKey,
-      openRouterModel,
-      geminiKey,
-      geminiModel,
+      openAIModel,
       aiProvider,
       apiBaseUrl,
       language,
@@ -38,7 +32,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       enableFrequencyControl,
       postsPerDay: settings.postsPerDay,
       userType: settings.userType,
-      following: settings.following
+      following: settings.following,
+      authMode: settings.authMode
     });
     onClose();
   };
@@ -118,114 +113,66 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             <div className="flex space-x-2">
               <button
                 type="button"
-                onClick={() => setAiProvider('openrouter')}
-                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'openrouter' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
+                onClick={() => setAiProvider('openai')}
+                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'openai' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
               >
-                OPENROUTER
-              </button>
-              <button
-                type="button"
-                onClick={() => setAiProvider('gemini')}
-                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'gemini' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
-              >
-                GOOGLE GEMINI
+                OPENROUTER / CODEX
               </button>
             </div>
           </div>
 
-          {settings.userType === 'agent' && (
-            <>
-              {aiProvider === 'openrouter' ? (
-                <>
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      OpenRouter {t.apiKeyLabel}
-                    </label>
-                    <input
-                      type="password"
-                      value={openRouterKey}
-                      onChange={(e) => setOpenRouterKey(e.target.value)}
-                      placeholder="sk-or-v1-..."
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                  </div>
+          <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+            <p className="text-sm text-cyan-100 font-medium">Authorized OpenRouter mode</p>
+            <p className="mt-2 text-xs text-slate-400">
+              Codex works through Firebase-authenticated requests and a protected OpenRouter proxy.
+              API keys are not stored in the browser.
+            </p>
+          </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      OpenRouter Model
-                    </label>
-                    <input
-                      type="text"
-                      value={openRouterModel}
-                      onChange={(e) => setOpenRouterModel(e.target.value)}
-                      placeholder="author/model:free"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Gemini {t.apiKeyLabel}
-                    </label>
-                    <input
-                      type="password"
-                      value={geminiKey}
-                      onChange={(e) => setGeminiKey(e.target.value)}
-                      placeholder="AIza..."
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                  </div>
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              OpenRouter Model
+            </label>
+            <input
+              type="text"
+              value={openAIModel}
+              onChange={(e) => setOpenAIModel(e.target.value)}
+              placeholder="nvidia/nemotron-3-super-120b-a12b:free"
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+            />
+          </div>
 
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Gemini Model
-                    </label>
-                    <input
-                      type="text"
-                      value={geminiModel}
-                      onChange={(e) => setGeminiModel(e.target.value)}
-                      placeholder="gemini-1.5-flash"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                  </div>
-                </>
-              )}
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              Codex Proxy URL (Optional)
+            </label>
+            <input
+              type="text"
+              value={apiBaseUrl}
+              onChange={(e) => setApiBaseUrl(e.target.value)}
+              placeholder="https://your-backend.example.com/api/openai"
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+            />
+          </div>
 
-              <div className="space-y-2">
-                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                  Custom API Address (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={apiBaseUrl}
-                  onChange={(e) => setApiBaseUrl(e.target.value)}
-                  placeholder="https://api.your-proxy.com/v1"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                  Cognitive Decay Speed: {decaySpeed.toFixed(1)}x
-                </label>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="3.0"
-                  step="0.1"
-                  value={decaySpeed}
-                  onChange={(e) => setDecaySpeed(parseFloat(e.target.value))}
-                  className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-                />
-                <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                  <span>SLOW</span>
-                  <span>FAST</span>
-                </div>
-              </div>
-            </>
-          )}
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              Cognitive Decay Speed: {decaySpeed.toFixed(1)}x
+            </label>
+            <input
+              type="range"
+              min="0.1"
+              max="3.0"
+              step="0.1"
+              value={decaySpeed}
+              onChange={(e) => setDecaySpeed(parseFloat(e.target.value))}
+              className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+            />
+            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+              <span>SLOW</span>
+              <span>FAST</span>
+            </div>
+          </div>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
