@@ -21,7 +21,8 @@ const loadEnvFile = (path) => {
 loadEnvFile(".env.local");
 loadEnvFile(".env");
 
-const PORT = Number(process.env.CODEX_PROXY_PORT || 8787);
+const PORT = Number(process.env.PORT || process.env.CODEX_PROXY_PORT || 8787);
+const HOST = process.env.CODEX_PROXY_HOST || (process.env.RENDER || process.env.K_SERVICE ? "0.0.0.0" : "127.0.0.1");
 const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || "AIzaSyCt9A6-2ON2mDcS14h6q_cWC2TyUUdhgyA";
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "potok-33";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "";
@@ -38,6 +39,8 @@ const PIPEDREAM_ENVIRONMENT = process.env.PIPEDREAM_ENVIRONMENT || "development"
 const PIPEDREAM_CONNECT_BASE_URL = "https://api.pipedream.com/v1";
 const PIPEDREAM_FREELANCER_APP = "freelancer";
 const PIPEDREAM_FREELANCER_OAUTH_APP_ID = process.env.PIPEDREAM_FREELANCER_OAUTH_APP_ID || "";
+const SUPABASE_URL = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 let pipedreamAccessTokenCache = {
   token: "",
@@ -650,7 +653,351 @@ const verifyFirebaseUser = async (idToken) => {
   if (!user?.localId) {
     throw new Error("Firebase token did not contain a user.");
   }
-  return { uid: user.localId, displayName: user.displayName || user.email || "User" };
+  return {
+    uid: user.localId,
+    email: user.email || null,
+    displayName: user.displayName || user.email || "User",
+    photoUrl: user.photoUrl || null,
+  };
+};
+
+const isSupabaseConfigured = () => Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+
+const assertSupabaseConfigured = () => {
+  if (!isSupabaseConfigured()) {
+    throw new Error("Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the Node backend.");
+  }
+};
+
+const toIsoTimestamp = (value) => {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "number") return new Date(value).toISOString();
+  if (typeof value === "string") return value;
+  return new Date().toISOString();
+};
+
+const fromIsoTimestamp = (value) => {
+  if (!value) return Date.now();
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : Date.now();
+};
+
+const supabaseRequest = async (table, {
+  method = "GET",
+  query = {},
+  body,
+  prefer,
+} = {}) => {
+  assertSupabaseConfigured();
+
+  const url = new URL(`${SUPABASE_URL}/rest/v1/${table}`);
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+  });
+
+  const headers = {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    "Content-Type": "application/json",
+  };
+  if (prefer) headers.Prefer = prefer;
+
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { text };
+  }
+
+  if (!response.ok) {
+    const details = data?.message || data?.hint || data?.details || data?.code || response.status;
+    throw new Error(`Supabase ${table} request failed: ${details}`);
+  }
+
+  return data;
+};
+
+const firstRow = (rows) => Array.isArray(rows) ? rows[0] || null : rows || null;
+
+const ensureSupabaseProfile = async (user) => {
+  const displayName = user.displayName || user.email || "User";
+  const rows = await supabaseRequest("profiles", {
+    method: "POST",
+    query: { on_conflict: "firebase_uid" },
+    prefer: "resolution=merge-duplicates,return=representation",
+    body: {
+      firebase_uid: user.uid,
+      email: user.email,
+      display_name: displayName,
+      avatar_url: user.photoUrl,
+    },
+  });
+
+  const profile = firstRow(rows);
+  if (!profile?.id) {
+    throw new Error("Supabase did not return a profile row.");
+  }
+  return profile;
+};
+
+const supabaseThreadToBoard = (thread, firebaseUid) => ({
+  id: thread.id,
+  ownerId: firebaseUid,
+  name: thread.name,
+  kind: thread.kind || "codex",
+  codexEnabled: Boolean(thread.codex_enabled),
+  description: thread.description || "",
+  createdAt: fromIsoTimestamp(thread.created_at),
+  updatedAt: fromIsoTimestamp(thread.updated_at),
+  lastMessagePreview: thread.last_message_preview || undefined,
+});
+
+const supabaseMessageToBoardMessage = (message) => ({
+  id: message.id,
+  boardId: message.thread_id,
+  authorId: message.author_id,
+  authorName: message.author_name,
+  authorType: message.author_type,
+  content: message.content,
+  createdAt: fromIsoTimestamp(message.created_at),
+});
+
+const listSupabaseThreads = async (profile, firebaseUid) => {
+  const rows = await supabaseRequest("threads", {
+    query: {
+      select: "id,name,kind,codex_enabled,description,last_message_preview,created_at,updated_at",
+      profile_id: `eq.${profile.id}`,
+      order: "updated_at.desc,id.desc",
+    },
+  });
+
+  return (rows || []).map((thread) => supabaseThreadToBoard(thread, firebaseUid));
+};
+
+const getSupabaseThreadForUser = async (profileId, threadId) => {
+  const rows = await supabaseRequest("threads", {
+    query: {
+      select: "id,profile_id,name,kind,codex_enabled,description,last_message_preview,created_at,updated_at",
+      id: `eq.${threadId}`,
+      profile_id: `eq.${profileId}`,
+      limit: "1",
+    },
+  });
+  return firstRow(rows);
+};
+
+const ensureSupabaseDefaultThread = async (user) => {
+  const profile = await ensureSupabaseProfile(user);
+  const existingThreads = await listSupabaseThreads(profile, user.uid);
+  const hasCodexThread = existingThreads.some((thread) => thread.kind === "codex" || thread.codexEnabled);
+
+  if (!hasCodexThread) {
+    await supabaseRequest("threads", {
+      method: "POST",
+      prefer: "return=representation",
+      body: {
+        profile_id: profile.id,
+        name: "Codex",
+        kind: "codex",
+        codex_enabled: true,
+        description: `Codex chat with workspace context for ${user.displayName || "User"}`,
+      },
+    });
+  }
+
+  return listSupabaseThreads(profile, user.uid);
+};
+
+const createSupabaseThread = async (user, body) => {
+  const profile = await ensureSupabaseProfile(user);
+  const rows = await supabaseRequest("threads", {
+    method: "POST",
+    prefer: "return=representation",
+    body: {
+      profile_id: profile.id,
+      name: String(body.name || "Codex"),
+      kind: body.kind === "general" ? "general" : "codex",
+      codex_enabled: body.codexEnabled !== false,
+      description: String(body.description || ""),
+    },
+  });
+
+  return supabaseThreadToBoard(firstRow(rows), user.uid);
+};
+
+const updateSupabaseThreadCodex = async (user, body) => {
+  const profile = await ensureSupabaseProfile(user);
+  const threadId = String(body.threadId || body.boardId || "");
+  if (!threadId) throw new Error("Missing threadId.");
+
+  const rows = await supabaseRequest("threads", {
+    method: "PATCH",
+    query: {
+      id: `eq.${threadId}`,
+      profile_id: `eq.${profile.id}`,
+    },
+    prefer: "return=representation",
+    body: {
+      codex_enabled: Boolean(body.enabled),
+    },
+  });
+
+  const thread = firstRow(rows);
+  if (!thread) throw new Error("Thread not found.");
+  return supabaseThreadToBoard(thread, user.uid);
+};
+
+const listSupabaseMessages = async (user, threadId) => {
+  const profile = await ensureSupabaseProfile(user);
+  const thread = await getSupabaseThreadForUser(profile.id, threadId);
+  if (!thread) throw new Error("Thread not found.");
+
+  const rows = await supabaseRequest("messages", {
+    query: {
+      select: "id,thread_id,author_id,author_name,author_type,content,created_at",
+      thread_id: `eq.${threadId}`,
+      order: "created_at.asc,id.asc",
+      limit: "200",
+    },
+  });
+
+  return (rows || []).map(supabaseMessageToBoardMessage);
+};
+
+const createSupabaseMessage = async (user, body) => {
+  const profile = await ensureSupabaseProfile(user);
+  const threadId = String(body.threadId || body.boardId || "");
+  if (!threadId) throw new Error("Missing threadId.");
+
+  const thread = await getSupabaseThreadForUser(profile.id, threadId);
+  if (!thread) throw new Error("Thread not found.");
+
+  const message = body.message || {};
+  const content = String(message.content || "");
+  if (!content.trim()) throw new Error("Message content is empty.");
+
+  const rows = await supabaseRequest("messages", {
+    method: "POST",
+    prefer: "return=representation",
+    body: {
+      thread_id: threadId,
+      profile_id: profile.id,
+      author_id: String(message.authorId || user.uid),
+      author_name: String(message.authorName || user.displayName || "User"),
+      author_type: ["human", "agent", "system"].includes(message.authorType) ? message.authorType : "human",
+      content,
+      created_at: toIsoTimestamp(message.createdAt),
+    },
+  });
+
+  await supabaseRequest("threads", {
+    method: "PATCH",
+    query: {
+      id: `eq.${threadId}`,
+      profile_id: `eq.${profile.id}`,
+    },
+    body: {
+      last_message_preview: content.slice(0, 120),
+      updated_at: new Date().toISOString(),
+    },
+  });
+
+  return supabaseMessageToBoardMessage(firstRow(rows));
+};
+
+const syncSupabaseIntegrationAccount = async (user, provider, account) => {
+  if (!isSupabaseConfigured() || !account?.id) return null;
+
+  const profile = await ensureSupabaseProfile(user);
+  const integrationRows = await supabaseRequest("integrations", {
+    method: "POST",
+    query: { on_conflict: "profile_id,provider" },
+    prefer: "resolution=merge-duplicates,return=representation",
+    body: {
+      profile_id: profile.id,
+      provider,
+      display_name: account.app?.name || provider,
+      status: account.healthy === false || account.dead === true ? "error" : "connected",
+      connected_by: user.uid,
+      scopes: [],
+      capabilities: [],
+      metadata: {
+        transport: "pipedream-connect",
+        app: account.app?.name_slug || provider,
+      },
+    },
+  });
+  const integration = firstRow(integrationRows);
+
+  const accountRows = await supabaseRequest("integration_accounts", {
+    method: "POST",
+    query: { on_conflict: "profile_id,provider,external_account_id" },
+    prefer: "resolution=merge-duplicates,return=representation",
+    body: {
+      integration_id: integration?.id || null,
+      profile_id: profile.id,
+      provider,
+      auth_provider: "pipedream",
+      external_account_id: account.id,
+      external_user_id: account.external_id || user.uid,
+      account_name: account.name || account.external_id || account.id,
+      status: account.healthy === false || account.dead === true ? "error" : "connected",
+      scopes: [],
+      metadata: {
+        healthy: account.healthy ?? null,
+        dead: account.dead ?? null,
+        app: account.app || null,
+      },
+    },
+  });
+
+  return {
+    integration,
+    account: firstRow(accountRows),
+  };
+};
+
+const loadSupabaseBoardContext = async (user, activeBoardId) => {
+  const profile = await ensureSupabaseProfile(user);
+  const threads = (await listSupabaseThreads(profile, user.uid)).slice(0, 8);
+  const boardsWithMessages = [];
+
+  for (const thread of threads) {
+    const rows = await supabaseRequest("messages", {
+      query: {
+        select: "id,thread_id,author_id,author_name,author_type,content,created_at",
+        thread_id: `eq.${thread.id}`,
+        order: "created_at.desc,id.desc",
+        limit: "8",
+      },
+    });
+
+    boardsWithMessages.push({
+      id: thread.id,
+      name: thread.name,
+      kind: thread.kind,
+      codexEnabled: Boolean(thread.codexEnabled),
+      isActive: thread.id === activeBoardId,
+      messages: (rows || [])
+        .map(supabaseMessageToBoardMessage)
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+        .map((message) => ({
+          authorName: message.authorName,
+          authorType: message.authorType,
+          content: message.content,
+          createdAt: message.createdAt,
+        })),
+    });
+  }
+
+  return boardsWithMessages;
 };
 
 const firestoreValueToJs = (value) => {
@@ -730,7 +1077,14 @@ const listFirestoreDocuments = async (idToken, path, searchParams = {}) => {
   }));
 };
 
-const loadBoardContext = async (idToken, uid, activeBoardId) => {
+const loadBoardContext = async (idToken, userOrUid, activeBoardId) => {
+  const user = typeof userOrUid === "string" ? { uid: userOrUid, displayName: "User" } : userOrUid;
+  const uid = user.uid;
+
+  if (isSupabaseConfigured()) {
+    return loadSupabaseBoardContext(user, activeBoardId);
+  }
+
   const boards = await runFirestoreQuery(idToken, {
     from: [{ collectionId: "boards" }],
     where: {
@@ -872,7 +1226,8 @@ const callOpenRouter = async ({ operation, model, prompt, metadata, uid, boardCo
 
 const handleProxyRequest = async (req, res) => {
   const idToken = getBearerToken(req);
-  const { uid } = await verifyFirebaseUser(idToken);
+  const user = await verifyFirebaseUser(idToken);
+  const { uid } = user;
   const body = await readJsonBody(req);
   const { operation, model, prompt, metadata } = body;
   console.log(`[codex-proxy] ${operation || "unknown"} request received`);
@@ -886,7 +1241,7 @@ const handleProxyRequest = async (req, res) => {
   let boardContext = [];
   if (operation === "boardReply" || operation === "orchestratorPlan") {
     try {
-      boardContext = await loadBoardContext(idToken, uid, boardId);
+      boardContext = await loadBoardContext(idToken, user, boardId);
       console.log(`[codex-proxy] context loaded boards=${boardContext.length}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown context error";
@@ -962,9 +1317,70 @@ const handleProxyRequest = async (req, res) => {
   });
 };
 
+const handleWorkspaceRequest = async (pathname, req, res) => {
+  if (!isSupabaseConfigured()) {
+    json(res, 503, {
+      error: "Supabase workspace backend is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    });
+    return;
+  }
+
+  const idToken = getBearerToken(req);
+  const user = await verifyFirebaseUser(idToken);
+  const body = await readJsonBody(req);
+
+  if (pathname === "/api/workspace/ensure-default") {
+    const threads = await ensureSupabaseDefaultThread({
+      ...user,
+      displayName: String(body.userName || user.displayName || "User"),
+    });
+    json(res, 200, { ok: true, threads });
+    return;
+  }
+
+  if (pathname === "/api/threads/list") {
+    const profile = await ensureSupabaseProfile(user);
+    const threads = await listSupabaseThreads(profile, user.uid);
+    json(res, 200, { ok: true, threads });
+    return;
+  }
+
+  if (pathname === "/api/threads/create") {
+    const thread = await createSupabaseThread(user, body);
+    json(res, 200, { ok: true, thread });
+    return;
+  }
+
+  if (pathname === "/api/threads/update-codex") {
+    const thread = await updateSupabaseThreadCodex(user, body);
+    json(res, 200, { ok: true, thread });
+    return;
+  }
+
+  if (pathname === "/api/messages/list") {
+    const threadId = String(body.threadId || body.boardId || "");
+    if (!threadId) {
+      json(res, 400, { error: "Missing threadId." });
+      return;
+    }
+    const messages = await listSupabaseMessages(user, threadId);
+    json(res, 200, { ok: true, messages });
+    return;
+  }
+
+  if (pathname === "/api/messages/create") {
+    const message = await createSupabaseMessage(user, body);
+    json(res, 200, { ok: true, message });
+    return;
+  }
+
+  json(res, 404, { error: "Workspace route not found." });
+};
+
 const handlePipedreamConnectRequest = async (pathname, req, res) => {
   const idToken = getBearerToken(req);
-  const { uid } = await verifyFirebaseUser(idToken);
+  const user = await verifyFirebaseUser(idToken);
+  const { uid } = user;
   const body = await readJsonBody(req);
   const origin = req.headers.origin || body.origin || OPENROUTER_SITE_URL;
 
@@ -981,6 +1397,7 @@ const handlePipedreamConnectRequest = async (pathname, req, res) => {
   if (pathname === "/api/pipedream/accounts") {
     const app = typeof body.app === "string" && body.app ? body.app : PIPEDREAM_FREELANCER_APP;
     const accounts = await listPipedreamAccounts({ uid, app });
+    await Promise.all(accounts.map((account) => syncSupabaseIntegrationAccount(user, app, account)));
     json(res, 200, {
       ok: true,
       app,
@@ -1019,7 +1436,7 @@ const handlePipedreamConnectRequest = async (pathname, req, res) => {
   json(res, 404, { error: "Pipedream route not found." });
 };
 
-const server = http.createServer(async (req, res) => {
+export const handleNodeRequest = async (req, res) => {
   if (req.method === "OPTIONS") {
     json(res, 204, {});
     return;
@@ -1027,6 +1444,26 @@ const server = http.createServer(async (req, res) => {
 
   const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
   const pathname = requestUrl.pathname;
+
+  if (
+    pathname.startsWith("/api/workspace/") ||
+    pathname.startsWith("/api/threads/") ||
+    pathname.startsWith("/api/messages/")
+  ) {
+    if (req.method !== "POST") {
+      json(res, 405, { error: "Method not allowed." });
+      return;
+    }
+
+    try {
+      await handleWorkspaceRequest(pathname, req, res);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown workspace backend error";
+      console.error("[codex-proxy] workspace", message);
+      json(res, message.includes("token") ? 401 : 500, { error: message });
+    }
+    return;
+  }
 
   if (pathname.startsWith("/api/pipedream/")) {
     if (req.method !== "POST") {
@@ -1062,9 +1499,15 @@ const server = http.createServer(async (req, res) => {
     console.error("[codex-proxy]", message);
     json(res, message.includes("token") ? 401 : 500, { error: message });
   }
-});
+};
 
-server.listen(PORT, "127.0.0.1", () => {
-  const mode = OPENROUTER_API_KEY ? `OpenRouter ${OPENROUTER_MODEL}` : "mock";
-  console.log(`Codex proxy listening on http://127.0.0.1:${PORT}/openaiProxy (${mode} mode)`);
-});
+const server = http.createServer(handleNodeRequest);
+
+if (!process.env.VERCEL) {
+  server.listen(PORT, HOST, () => {
+    const mode = OPENROUTER_API_KEY ? `OpenRouter ${OPENROUTER_MODEL}` : "mock";
+    console.log(`Codex proxy listening on http://${HOST}:${PORT}/openaiProxy (${mode} mode)`);
+    console.log(`[codex-proxy] Pipedream Connect ${isPipedreamConnectConfigured() ? "configured" : "not configured"}`);
+    console.log(`[codex-proxy] Supabase workspace ${isSupabaseConfigured() ? "configured" : "not configured"}`);
+  });
+}

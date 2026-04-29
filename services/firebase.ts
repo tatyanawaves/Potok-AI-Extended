@@ -24,6 +24,84 @@ export const auth = getAuth(app);
 export const analytics = getAnalytics(app);
 export const googleProvider = new GoogleAuthProvider();
 
+const ENV_PROXY_URL =
+    (import.meta as any).env.VITE_OPENAI_PROXY_URL ||
+    '/api/openai';
+
+const BACKEND_BASE_URL =
+    (import.meta as any).env.VITE_CODEX_BACKEND_URL ||
+    ENV_PROXY_URL.replace(/\/(?:openaiProxy|api\/openai)$/i, '');
+
+const WORKSPACE_BACKEND =
+    ((import.meta as any).env.VITE_WORKSPACE_BACKEND || 'firebase').toLowerCase();
+
+const useWorkspaceApi = () =>
+    WORKSPACE_BACKEND === 'supabase' ||
+    WORKSPACE_BACKEND === 'api' ||
+    WORKSPACE_BACKEND === 'backend';
+
+const workspaceEndpoint = (path: string) => `${BACKEND_BASE_URL}${path}`;
+
+async function callWorkspaceBackend<T>(path: string, body: Record<string, unknown> = {}): Promise<T> {
+    if (!auth.currentUser) {
+        throw new Error('Нужно войти в NEON, чтобы работать с тредами.');
+    }
+
+    const idToken = await auth.currentUser.getIdToken();
+    const response = await fetch(workspaceEndpoint(path), {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify(body),
+    });
+
+    const text = await response.text();
+    let data: any = {};
+    try {
+        data = text ? JSON.parse(text) : {};
+    } catch {
+        data = { error: text };
+    }
+
+    if (!response.ok) {
+        throw new Error(data.error || data.message || `Workspace backend failed: ${response.status}`);
+    }
+
+    return data as T;
+}
+
+function subscribeByPolling<T>(
+    load: () => Promise<T[]>,
+    callback: (items: T[]) => void,
+    onError?: (error: Error) => void,
+    intervalMs = 2500
+) {
+    let active = true;
+    let busy = false;
+
+    const poll = async () => {
+        if (!active || busy) return;
+        busy = true;
+        try {
+            const items = await load();
+            if (active) callback(items);
+        } catch (error: any) {
+            if (active) onError?.(error instanceof Error ? error : new Error(String(error)));
+        } finally {
+            busy = false;
+        }
+    };
+
+    poll();
+    const timer = window.setInterval(poll, intervalMs);
+    return () => {
+        active = false;
+        window.clearInterval(timer);
+    };
+}
+
 export const signInWithGoogle = async () => {
     try {
         const result = await signInWithPopup(auth, googleProvider);
@@ -259,6 +337,11 @@ export const getUserPosts = async (userId: string, agentName?: string) => {
 };
 
 export const ensureDefaultBoards = async (userId: string, userName: string) => {
+    if (useWorkspaceApi()) {
+        await callWorkspaceBackend('/api/workspace/ensure-default', { userName });
+        return;
+    }
+
     const existingBoards = await getDocs(query(boardsRef, where('ownerId', '==', userId), limit(50)));
     const hasCodexBoard = existingBoards.docs.some((boardDoc) => {
         const board = boardDoc.data();
@@ -285,6 +368,17 @@ export const subscribeToBoards = (
     callback: (boards: any[]) => void,
     onError?: (error: Error) => void
 ) => {
+    if (useWorkspaceApi()) {
+        return subscribeByPolling(
+            async () => {
+                const data = await callWorkspaceBackend<{ ok: boolean; threads: any[] }>('/api/threads/list');
+                return data.threads || [];
+            },
+            callback,
+            onError
+        );
+    }
+
     const q = query(boardsRef, where('ownerId', '==', userId));
     return onSnapshot(q, (snapshot) => {
         const boards = snapshot.docs
@@ -304,6 +398,16 @@ export const createBoard = async (
     description?: string,
     codexEnabled = true
 ) => {
+    if (useWorkspaceApi()) {
+        const data = await callWorkspaceBackend<{ ok: boolean; thread: any }>('/api/threads/create', {
+            name,
+            kind,
+            description: description || '',
+            codexEnabled,
+        });
+        return { id: data.thread.id, ...data.thread };
+    }
+
     return addDoc(boardsRef, {
         ownerId: userId,
         name,
@@ -316,6 +420,11 @@ export const createBoard = async (
 };
 
 export const setBoardCodexEnabled = async (boardId: string, enabled: boolean) => {
+    if (useWorkspaceApi()) {
+        await callWorkspaceBackend('/api/threads/update-codex', { threadId: boardId, enabled });
+        return;
+    }
+
     const boardRef = doc(db, 'boards', boardId);
     await updateDoc(boardRef, {
         codexEnabled: enabled,
@@ -330,6 +439,20 @@ export const subscribeToBoardMessages = (
     callback: (messages: any[]) => void,
     onError?: (error: Error) => void
 ) => {
+    if (useWorkspaceApi()) {
+        return subscribeByPolling(
+            async () => {
+                const data = await callWorkspaceBackend<{ ok: boolean; messages: any[] }>('/api/messages/list', {
+                    threadId: boardId,
+                });
+                return data.messages || [];
+            },
+            callback,
+            onError,
+            2000
+        );
+    }
+
     const q = query(getBoardMessagesRef(boardId), orderBy('createdAt', 'asc'), limit(200));
     return onSnapshot(q, (snapshot) => {
         const messages = snapshot.docs.map(docSnap => ({ id: docSnap.id, boardId, ...docSnap.data() }));
@@ -349,6 +472,14 @@ export const createBoardMessage = async (
         content: string;
     }
 ) => {
+    if (useWorkspaceApi()) {
+        await callWorkspaceBackend('/api/messages/create', {
+            threadId: boardId,
+            message,
+        });
+        return;
+    }
+
     const boardRef = doc(db, 'boards', boardId);
     await addDoc(getBoardMessagesRef(boardId), {
         ...message,

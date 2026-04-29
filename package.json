@@ -10,6 +10,7 @@
     "dev:restart": "node scripts/neon-dev.mjs restart",
     "dev:status": "node scripts/neon-dev.mjs status",
     "dev:stop": "node scripts/neon-dev.mjs stop",
+    "start:backend": "node scripts/codex-proxy.mjs",
     "mcp:neon-dev": "node scripts/neon-dev-mcp.mjs",
     "build": "vite build",
     "preview": "vite preview",

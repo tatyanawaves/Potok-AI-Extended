@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: neon-codex-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run start:backend
+    envVars:
+      - key: CODEX_PROXY_HOST
+        value: 0.0.0.0
+      - key: FIREBASE_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: nvidia/nemotron-3-super-120b-a12b:free
+      - key: OPENROUTER_APP_NAME
+        value: NEON
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: PIPEDREAM_CLIENT_ID
+        sync: false
+      - key: PIPEDREAM_CLIENT_SECRET
+        sync: false
+      - key: PIPEDREAM_PROJECT_ID
+        value: proj_4GsXoag
+      - key: PIPEDREAM_ENVIRONMENT
+        value: development
+      - key: PIPEDREAM_FREELANCER_WEBHOOK_URL
+        sync: false
