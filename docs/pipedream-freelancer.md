@@ -1,5 +1,42 @@
 # Pipedream Freelancer integration
 
+## Current in-app Connect flow
+
+NEON now uses Pipedream Connect as the preferred path for Freelancer. The UI has a `+` button in the Codex message header. It opens a small menu named `Подключить`; choosing `Freelancer` asks the backend for a short-lived Connect token and opens the Pipedream OAuth link.
+
+The backend endpoint is:
+
+```text
+POST /api/pipedream/connect-token
+```
+
+It calls Pipedream:
+
+```text
+POST https://api.pipedream.com/v1/connect/{project_id}/tokens
+```
+
+with `external_user_id` set to the Firebase user ID, `x-pd-environment` set from `PIPEDREAM_ENVIRONMENT`, and redirect URLs back to `/threads`. This follows Pipedream's current Connect token flow: server creates a short-lived token or Connect Link, frontend opens the link, Pipedream stores the connected account for that external user and environment.
+
+Required server environment:
+
+```env
+PIPEDREAM_CLIENT_ID=
+PIPEDREAM_CLIENT_SECRET=
+PIPEDREAM_PROJECT_ID=proj_4GsXoag
+PIPEDREAM_ENVIRONMENT=development
+```
+
+For local Windows CLI work, clear broken proxy variables before running `pd` if needed:
+
+```powershell
+$env:HTTP_PROXY=''; $env:HTTPS_PROXY=''; $env:ALL_PROXY='';
+$env:http_proxy=''; $env:https_proxy=''; $env:all_proxy='';
+pd --version
+```
+
+The installed CLI should be available as `pd.exe` in the user PATH. Official Windows install is the native Windows build from Pipedream, unzipped so `pd.exe` is on `PATH`.
+
 NEON sends Freelancer workflow events to Pipedream from the server proxy only. The browser never receives the webhook URL.
 
 ## Incoming payload

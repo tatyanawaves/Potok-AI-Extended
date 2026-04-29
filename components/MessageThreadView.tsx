@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { BoardMessage, BoardRecord, OrchestratorPlan } from '../types';
 import type { PipedreamConnectionStatus } from '../services/pipedream';
 
@@ -17,6 +17,13 @@ interface MessageThreadViewProps {
   onClearError?: () => void;
 }
 
+const FreelancerIcon: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <svg className={className} viewBox="0 0 32 32" role="img" aria-label="Freelancer" fill="none">
+    <path d="M4 7h7.3l3.2 6.4L19.8 7H28L17.7 25.2h-6.2L14.1 18 4 7Z" fill="currentColor" />
+    <path d="M12.4 7h5.8l-3.5 4.3L12.4 7Z" fill="rgba(255,255,255,0.55)" />
+  </svg>
+);
+
 const MessageThreadView: React.FC<MessageThreadViewProps> = ({
   thread,
   messages,
@@ -33,6 +40,8 @@ const MessageThreadView: React.FC<MessageThreadViewProps> = ({
 }) => {
   const [draft, setDraft] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [isIntegrationMenuOpen, setIsIntegrationMenuOpen] = useState(false);
+  const integrationMenuRef = useRef<HTMLDivElement | null>(null);
 
   const activeTitle = thread?.name || 'Выберите тред';
 
@@ -49,6 +58,33 @@ const MessageThreadView: React.FC<MessageThreadViewProps> = ({
     if (freelancerStatus === 'error') return 'Нужно проверить Connect';
     return 'Freelancer не подключен';
   }, [freelancerStatus]);
+
+  useEffect(() => {
+    if (!isIntegrationMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!integrationMenuRef.current?.contains(event.target as Node)) {
+        setIsIntegrationMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsIntegrationMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isIntegrationMenuOpen]);
+
+  const handleFreelancerMenuConnect = async () => {
+    setIsIntegrationMenuOpen(false);
+    await onConnectFreelancer();
+  };
 
   const handleSubmit = async () => {
     const content = draft.trim();
@@ -73,11 +109,60 @@ const MessageThreadView: React.FC<MessageThreadViewProps> = ({
               <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Message thread</p>
               <h1 className="mt-1 truncate text-2xl font-semibold text-white">{activeTitle}</h1>
             </div>
-            {thread?.codexEnabled ? (
-              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-                Codex active
+            <div className="flex items-center gap-2">
+              {thread?.codexEnabled ? (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                  Codex active
+                </div>
+              ) : null}
+              <div className="relative" ref={integrationMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setIsIntegrationMenuOpen((value) => !value)}
+                  aria-label="Открыть меню интеграций"
+                  aria-haspopup="menu"
+                  aria-expanded={isIntegrationMenuOpen}
+                  className="grid h-10 w-10 place-items-center rounded-full border border-cyan-400/30 bg-cyan-400/10 text-xl font-semibold leading-none text-cyan-200 shadow-[0_0_24px_rgba(34,211,238,0.12)] transition hover:border-cyan-300 hover:bg-cyan-400/20 hover:text-white"
+                >
+                  +
+                </button>
+                {isIntegrationMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-12 z-30 w-72 overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/95 shadow-2xl shadow-black/40 backdrop-blur"
+                  >
+                    <div className="border-b border-slate-800 px-4 py-3">
+                      <p className="text-[10px] uppercase tracking-[0.22em] text-cyan-300">Подключить</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-400">Выберите сервис, который Codex сможет вызывать через Pipedream.</p>
+                    </div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={handleFreelancerMenuConnect}
+                      disabled={isConnectingFreelancer}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <span className="grid h-10 w-10 place-items-center rounded-xl bg-cyan-400 text-slate-950">
+                        <FreelancerIcon className="h-6 w-6" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold text-white">Freelancer</span>
+                        <span className="mt-0.5 block text-xs text-slate-400">
+                          {isConnectingFreelancer ? 'Открываю OAuth...' : freelancerStatusLabel}
+                        </span>
+                      </span>
+                      <span className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-[0.12em] ${
+                        freelancerStatus === 'connected'
+                          ? 'bg-emerald-500/15 text-emerald-200'
+                          : 'bg-slate-800 text-slate-300'
+                      }`}>
+                        {freelancerStatus === 'connected' ? 'on' : 'oauth'}
+                      </span>
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
+            </div>
           </div>
         </div>
 
