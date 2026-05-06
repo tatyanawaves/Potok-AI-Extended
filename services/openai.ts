@@ -12,9 +12,10 @@ import { translations } from "../translations";
 import { auth } from "./firebase";
 import { buildHeuristicOrchestratorPlan } from "./orchestrator";
 
+const CODEX_BACKEND_BASE_URL = ((import.meta as any).env.VITE_CODEX_BACKEND_URL || "").replace(/\/+$/, "");
 const ENV_PROXY_URL =
   (import.meta as any).env.VITE_OPENAI_PROXY_URL ||
-  "/api/openai";
+  (CODEX_BACKEND_BASE_URL ? `${CODEX_BACKEND_BASE_URL}/api/openai` : "/api/openai");
 const DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 const MAX_POST_LENGTH = 280;
 

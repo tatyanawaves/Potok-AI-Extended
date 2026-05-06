@@ -4,9 +4,10 @@ const ENV_PROXY_URL =
   (import.meta as any).env.VITE_OPENAI_PROXY_URL ||
   '/api/openai';
 
-const BACKEND_BASE_URL =
+const BACKEND_BASE_URL = (
   (import.meta as any).env.VITE_CODEX_BACKEND_URL ||
-  ENV_PROXY_URL.replace(/\/(?:openaiProxy|api\/openai)$/i, '');
+  ENV_PROXY_URL.replace(/\/(?:openaiProxy|api\/openai)$/i, '')
+).replace(/\/+$/, '');
 
 export type PipedreamConnectionStatus = 'disconnected' | 'pending' | 'connected' | 'error';
 

@@ -129,8 +129,12 @@ const App: React.FC = () => {
     setIsConnectingFreelancer(true);
     setBoardError(null);
     const popup = window.open('', '_blank');
+    popup?.document.write('<!doctype html><title>NEON</title><body style="margin:0;background:#020617;color:#e2e8f0;font:16px system-ui;display:grid;min-height:100vh;place-items:center"><div>Готовлю подключение Freelancer через Pipedream...</div></body>');
     try {
       const connectLink = await createPipedreamConnectLink('freelancer');
+      if (!connectLink.connect_link_url) {
+        throw new Error('Backend не вернул ссылку Pipedream Connect.');
+      }
       setFreelancerStatus('pending');
       if (popup) {
         popup.location.href = connectLink.connect_link_url;
@@ -138,7 +142,11 @@ const App: React.FC = () => {
         window.location.href = connectLink.connect_link_url;
       }
     } catch (err: any) {
-      popup?.close();
+      if (popup && !popup.closed) {
+        popup.document.body.innerHTML = '<div style="max-width:520px;padding:32px;line-height:1.6"><h1 style="font-size:20px">Не удалось открыть Freelancer</h1><p id="connect-error"></p><p>Вернитесь в NEON и попробуйте ещё раз после публикации backend.</p></div>';
+        const errorNode = popup.document.getElementById('connect-error');
+        if (errorNode) errorNode.textContent = err?.message || 'Pipedream Connect backend недоступен.';
+      }
       setFreelancerStatus('error');
       setBoardError(err?.message || 'Не удалось открыть подключение Freelancer через Pipedream.');
     } finally {
