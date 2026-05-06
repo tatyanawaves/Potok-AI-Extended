@@ -56,9 +56,13 @@ const FREELANCER_MATCHERS = [
   /заказ/i,
   /клиент/i,
   /проект/i,
+  /ваканс/i,
+  /работ/i,
   /отклик/i,
+  /заявк/i,
   /ставк/i,
   /bid/i,
+  /apply/i,
   /proposal/i,
 ];
 
@@ -69,7 +73,26 @@ const FREELANCER_ACTION_MATCHERS = [
   /запусти/i,
   /синхрон/i,
   /опублику/i,
+  /найд/i,
+  /ищ/i,
+  /скан/i,
+  /монитор/i,
+  /подбер/i,
+  /подготов/i,
+  /напиш/i,
+  /сдела/i,
+  /выполн/i,
+  /отклик/i,
+  /заявк/i,
+  /ставк/i,
   /send/i,
+  /search/i,
+  /find/i,
+  /scan/i,
+  /monitor/i,
+  /draft/i,
+  /apply/i,
+  /bid/i,
   /create/i,
   /trigger/i,
   /run/i,
@@ -267,7 +290,7 @@ const pipedreamProxyRequest = async ({ uid, accountId, method = "GET", url, body
   return data;
 };
 
-const searchFreelancerViaPipedreamConnect = async ({ uid, query }) => {
+const searchFreelancerViaPipedreamConnect = async ({ uid, query, action = "search_jobs" }) => {
   const account = await getPrimaryPipedreamAccount({ uid, app: PIPEDREAM_FREELANCER_APP });
   if (!account?.id) {
     const error = new Error("Freelancer is not connected in Pipedream Connect.");
@@ -293,8 +316,163 @@ const searchFreelancerViaPipedreamConnect = async ({ uid, query }) => {
 
   return {
     ok: true,
-    action: "search_jobs",
+    action,
     accountId: account.id,
+    responseBody: result,
+  };
+};
+
+const getFreelancerSelfViaPipedreamConnect = async ({ uid }) => {
+  const account = await getPrimaryPipedreamAccount({ uid, app: PIPEDREAM_FREELANCER_APP });
+  if (!account?.id) {
+    const error = new Error("Freelancer is not connected in Pipedream Connect.");
+    error.code = "PIPEDREAM_AUTH_REQUIRED";
+    throw error;
+  }
+
+  const result = await pipedreamProxyRequest({
+    uid,
+    accountId: account.id,
+    method: "GET",
+    url: "https://www.freelancer.com/api/users/0.1/self/",
+  });
+
+  return {
+    accountId: account.id,
+    responseBody: result,
+  };
+};
+
+const extractFreelancerSelfId = (responseBody) => {
+  const candidates = [
+    responseBody?.result?.id,
+    responseBody?.id,
+    responseBody?.data?.result?.id,
+    responseBody?.data?.id,
+    responseBody?.body?.result?.id,
+    responseBody?.body?.id,
+    responseBody?.return_value?.result?.id,
+    responseBody?.return_value?.id,
+  ];
+  return candidates.find((value) => Number.isFinite(Number(value))) || null;
+};
+
+const parseNumberValue = (value) => {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).replace(",", ".").trim();
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const extractFirstNumber = (text, patterns) => {
+  for (const pattern of patterns) {
+    const match = String(text || "").match(pattern);
+    const parsed = parseNumberValue(match?.[1]);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+};
+
+const collectFreelancerContextText = (boardContext) =>
+  (boardContext || [])
+    .flatMap((board) => board.messages || [])
+    .map((message) => message.content || "")
+    .join("\n\n");
+
+const extractProjectIdFromIndexedHistory = ({ text, historyText }) => {
+  const ordinal = extractFirstNumber(text, [
+    /(?:проект|номер|вариант|работа|вакансия)\s*(?:№|#|n)?\s*(\d{1,2})/i,
+    /(?:перв|втор|трет|четверт|пят)/i,
+  ]);
+
+  const ordinalWord = String(text || "").match(/(перв|втор|трет|четверт|пят)/i)?.[1]?.toLowerCase();
+  const normalizedOrdinal = ordinal || {
+    "перв": 1,
+    "втор": 2,
+    "трет": 3,
+    "четверт": 4,
+    "пят": 5,
+  }[ordinalWord || ""];
+
+  if (!normalizedOrdinal) return null;
+
+  const linePattern = new RegExp(`^\\s*${normalizedOrdinal}\\.\\s+.*?(?:ID|id)\\s*[:#-]?\\s*(\\d{4,})`, "im");
+  const lineMatch = historyText.match(linePattern);
+  return lineMatch?.[1] || null;
+};
+
+const extractFreelancerProjectId = ({ text, boardContext }) => {
+  const direct = String(text || "").match(
+    /(?:project[_\s-]?id|projectId|id|проект|project)\s*(?:=|:|#|№)?\s*(\d{4,})/i
+  );
+  if (direct?.[1]) return direct[1];
+
+  const url = String(text || "").match(/freelancer\.com\/projects\/[^\s]+?(\d{4,})(?:[^\d]|$)/i);
+  if (url?.[1]) return url[1];
+
+  return extractProjectIdFromIndexedHistory({
+    text,
+    historyText: collectFreelancerContextText(boardContext),
+  });
+};
+
+const extractBidDetails = ({ text, outputText }) => {
+  const combinedText = `${text || ""}\n${outputText || ""}`;
+  const amount = extractFirstNumber(combinedText, [
+    /(?:amount|bid|budget|rate|price|ставк[аи]?|бюджет|цена|за)\s*(?:=|:)?\s*(\d+(?:[.,]\d+)?)/i,
+    /(\d+(?:[.,]\d+)?)\s*(?:usd|aud|eur|долл|бакс)/i,
+  ]);
+  const period = extractFirstNumber(combinedText, [
+    /(?:period|days|срок|дней|дня|день)\s*(?:=|:)?\s*(\d{1,3})/i,
+    /(\d{1,3})\s*(?:days|дней|дня|день)/i,
+  ]);
+  const milestonePercentage = extractFirstNumber(combinedText, [
+    /(?:milestone|этап|предоплат[аы]?)\s*(?:=|:)?\s*(\d{1,3})%?/i,
+  ]);
+  const explicitProposalMatch = String(text || "").match(/(?:текст|proposal|cover letter|отклик)\s*(?:=|:)\s*([\s\S]{20,})/i);
+  const generatedProposalMatch = String(outputText || "").match(/(?:текст|proposal|cover letter|отклик)\s*(?:=|:)\s*([\s\S]{20,})/i);
+  const description = (explicitProposalMatch?.[1] || generatedProposalMatch?.[1] || outputText || text || "").trim();
+
+  return {
+    amount,
+    period,
+    milestonePercentage: milestonePercentage || 100,
+    description,
+    hasExplicitDescription: Boolean(explicitProposalMatch?.[1]),
+  };
+};
+
+const hasBidConfirmation = (text) =>
+  /подтверждаю\s+отправк|можно\s+отправлять|отправляй\s+отклик|отправь\s+заявку\s+сейчас|confirm(?:ed)?\s+send|approve(?:d)?\s+bid/i.test(
+    String(text || "")
+  );
+
+const placeFreelancerBidViaPipedreamConnect = async ({ uid, projectId, amount, period, milestonePercentage, description }) => {
+  const self = await getFreelancerSelfViaPipedreamConnect({ uid });
+  const bidderId = extractFreelancerSelfId(self.responseBody);
+  if (!bidderId) {
+    throw new Error("Freelancer account is connected, but the user id was not returned by /users/self.");
+  }
+
+  const result = await pipedreamProxyRequest({
+    uid,
+    accountId: self.accountId,
+    method: "POST",
+    url: "https://www.freelancer.com/api/projects/0.1/bids/",
+    body: {
+      project_id: Number(projectId),
+      bidder_id: Number(bidderId),
+      amount,
+      period,
+      milestone_percentage: milestonePercentage,
+      description,
+    },
+  });
+
+  return {
+    ok: true,
+    action: "bid_submit_confirmed",
+    accountId: self.accountId,
     responseBody: result,
   };
 };
@@ -311,6 +489,7 @@ const extractUserMessage = (prompt) => {
 const buildFreelancerDispatchPlan = ({ prompt, metadata }) => {
   const userMessage = extractUserMessage(prompt);
   const combinedText = `${userMessage}\n${JSON.stringify(metadata || {})}`.toLowerCase();
+  const confirmedBid = hasBidConfirmation(combinedText);
 
   if (includesAny(combinedText, ["webhook", "hook", "test", "ping", "\u0445\u0443\u043a", "\u0442\u0435\u0441\u0442"])) {
     return {
@@ -320,18 +499,91 @@ const buildFreelancerDispatchPlan = ({ prompt, metadata }) => {
     };
   }
 
-  if (includesAny(combinedText, ["search", "find", "job", "jobs", "vacancy", "\u043d\u0430\u0439\u0434", "\u0438\u0449", "\u0432\u0430\u043a\u0430\u043d\u0441"])) {
+  if (confirmedBid) {
     return {
-      action: "search_jobs",
-      intent: "Search Freelancer projects that match the user's request.",
+      action: "bid_submit_confirmed",
+      intent: "Submit a Freelancer bid only after explicit user confirmation.",
       userMessage,
     };
   }
 
-  if (includesAny(combinedText, ["proposal", "bid", "\u043e\u0442\u043a\u043b\u0438\u043a", "\u0441\u0442\u0430\u0432\u043a"])) {
+  if (
+    includesAny(combinedText, [
+      "apply",
+      "submit bid",
+      "place bid",
+      "send proposal",
+      "\u043e\u0442\u043a\u043b\u0438\u043a\u043d\u0438\u0441",
+      "\u043f\u043e\u0434\u0430\u0439 \u0437\u0430\u044f\u0432",
+      "\u043e\u0442\u043f\u0440\u0430\u0432\u044c \u0437\u0430\u044f\u0432",
+      "\u043e\u0441\u0442\u0430\u0432\u044c \u0441\u0442\u0430\u0432",
+      "\u0441\u0434\u0435\u043b\u0430\u0439 \u0441\u0442\u0430\u0432",
+      "\u043e\u0442\u043f\u0440\u0430\u0432\u044c \u043e\u0442\u043a\u043b\u0438\u043a",
+    ])
+  ) {
+    return {
+      action: "apply_requires_approval",
+      intent: "Prepare the Freelancer application flow and require explicit approval before submitting a bid.",
+      userMessage,
+    };
+  }
+
+  if (
+    includesAny(combinedText, [
+      "execute task",
+      "do the task",
+      "implementation plan",
+      "\u0441\u0434\u0435\u043b\u0430\u0439 \u0437\u0430\u0434\u0430\u043d",
+      "\u0432\u044b\u043f\u043e\u043b\u043d\u0438 \u0437\u0430\u0434\u0430\u043d",
+      "\u0441\u0434\u0435\u043b\u0430\u0439 \u0442\u0435\u0441\u0442\u043e\u0432",
+      "\u0432\u044b\u043f\u043e\u043b\u043d\u0438 \u0442\u0435\u0441\u0442\u043e\u0432",
+    ])
+  ) {
+    return {
+      action: "task_execution_plan",
+      intent: "Plan or start execution of a Freelancer task while keeping user approval around external delivery.",
+      userMessage,
+    };
+  }
+
+  if (
+    includesAny(combinedText, [
+      "search",
+      "find",
+      "scan",
+      "monitor",
+      "job",
+      "jobs",
+      "vacancy",
+      "\u043d\u0430\u0439\u0434",
+      "\u0438\u0449",
+      "\u0432\u0430\u043a\u0430\u043d\u0441",
+      "\u0441\u043a\u0430\u043d",
+      "\u043c\u043e\u043d\u0438\u0442\u043e\u0440",
+      "\u043f\u043e\u0434\u0431\u0435\u0440",
+    ])
+  ) {
+    return {
+      action: includesAny(combinedText, ["scan", "monitor", "\u0441\u043a\u0430\u043d", "\u043c\u043e\u043d\u0438\u0442\u043e\u0440"]) ? "scan_jobs" : "search_jobs",
+      intent: "Search and rank Freelancer projects that match the user's request.",
+      userMessage,
+    };
+  }
+
+  if (
+    includesAny(combinedText, [
+      "proposal",
+      "cover letter",
+      "bid draft",
+      "\u043e\u0442\u043a\u043b\u0438\u043a",
+      "\u0441\u043e\u043f\u0440\u043e\u0432\u043e\u0434",
+      "\u043f\u0438\u0441\u044c\u043c",
+      "\u0441\u0442\u0430\u0432\u043a",
+    ])
+  ) {
     return {
       action: "proposal_draft",
-      intent: "Prepare or route a Freelancer proposal draft.",
+      intent: "Prepare a Freelancer proposal draft without submitting it.",
       userMessage,
     };
   }
@@ -356,6 +608,7 @@ const metadataTargetsFreelancer = (metadata) => {
   return (
     metadata.provider === "freelancer" ||
     metadata.integrationProvider === "freelancer" ||
+    String(metadata.boardName || "").toLowerCase().includes("freelancer") ||
     String(metadata.capabilityId || "").startsWith("freelancer.") ||
     String(metadata.integrationId || "").includes("freelancer")
   );
@@ -461,21 +714,37 @@ const formatProjectUrl = (project) => {
   return "https://www.freelancer.com/search/projects";
 };
 
+const formatFreelancerBidResult = (responseBody) => {
+  const result = responseBody?.result || responseBody?.data?.result || responseBody?.body?.result || responseBody?.return_value?.result || responseBody;
+  const bidId = result?.id || result?.bid_id;
+  const projectId = result?.project_id || result?.project?.id;
+  return [
+    "Отклик отправлен на Freelancer.",
+    bidId ? `Bid ID: ${bidId}` : "",
+    projectId ? `Project ID: ${projectId}` : "",
+    "Если клиент ответит, следующий шаг - читать переписку/уведомления через интеграцию Freelancer.",
+  ].filter(Boolean).join("\n");
+};
+
 const formatFreelancerResultMessage = ({ action, eventId, responseBody, outputText }) => {
   if (action === "webhook_test") {
     const reply = extractFreelancerReply(responseBody);
     return reply || `Хук Freelancer отправлен в Pipedream.\nEvent ID: ${eventId}`;
   }
 
-  if (action === "search_jobs" || action === "project_intake") {
+  if (action === "search_jobs" || action === "scan_jobs" || action === "project_intake") {
     const projects = extractFreelancerProjects(responseBody).slice(0, 5);
     if (projects.length > 0) {
       return [
         `Freelancer вернул ${projects.length} подходящих проектов:`,
         ...projects.map((project, index) => {
           const title = project?.title || project?.name || `Project ${project?.id || index + 1}`;
-          return `${index + 1}. ${title} | ${formatProjectBudget(project)}\n${formatProjectUrl(project)}`;
+          const projectId = project?.id ? `ID: ${project.id} | ` : "";
+          return `${index + 1}. ${title} | ${projectId}${formatProjectBudget(project)}\n${formatProjectUrl(project)}`;
         }),
+        "",
+        "Можешь написать: “подготовь отклик на проект 2” или “оцени эти вакансии и выбери 3 лучшие”.",
+        "Реальную отправку заявки я сделаю только после явного подтверждения с project_id, ставкой и сроком.",
       ].join("\n\n");
     }
 
@@ -488,6 +757,11 @@ const formatFreelancerResultMessage = ({ action, eventId, responseBody, outputTe
       "Но workflow не вернул список проектов в HTTP-ответе.",
       "Добавьте в Pipedream шаг Return HTTP response и верните body из Node-step, чтобы NEON мог показать вакансии здесь.",
     ].join("\n");
+  }
+
+  if (action === "bid_submit_confirmed") {
+    const reply = extractFreelancerReply(responseBody);
+    return reply || formatFreelancerBidResult(responseBody);
   }
 
   const reply = extractFreelancerReply(responseBody);
@@ -571,7 +845,39 @@ const dispatchPipedreamFreelancer = async ({
   };
 };
 
-const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, outputText }) => {
+const buildFreelancerApprovalReply = ({ dispatchPlan, projectId, bidDetails }) => {
+  const missing = [];
+  if (!projectId) missing.push("project_id");
+  if (!bidDetails.amount) missing.push("ставка/amount");
+  if (!bidDetails.period) missing.push("срок/period");
+  if (!bidDetails.hasExplicitDescription) missing.push("текст отклика");
+  const draft = bidDetails.description && bidDetails.description !== dispatchPlan.userMessage ? bidDetails.description : "";
+
+  return [
+    "Я подготовил маршрут для отклика, но не отправляю заявку без явного подтверждения.",
+    draft ? `Черновик отклика:\n${draft}` : "",
+    missing.length ? `Нужно добавить: ${missing.join(", ")}.` : "",
+    "",
+    "Безопасная команда для отправки выглядит так:",
+    `подтверждаю отправку отклика project_id=${projectId || "ID"} amount=${bidDetails.amount || "100"} period=${bidDetails.period || "7"} текст: [финальный текст отклика]`,
+    "",
+    "До подтверждения я могу только подготовить/улучшить текст отклика и оценить риск проекта.",
+  ].filter(Boolean).join("\n");
+};
+
+const buildFreelancerTaskExecutionReply = ({ dispatchPlan, outputText }) => [
+  outputText || "Я разложил задачу на рабочий план.",
+  "",
+  "Как рабочий агент Freelancer я могу:",
+  "1. распаковать ТЗ и критерии приемки;",
+  "2. составить план выполнения и список вопросов клиенту;",
+  "3. подготовить артефакты: текст, код, структуру ответа или файлы;",
+  "4. после твоего подтверждения помочь отправить результат во внешний сервис.",
+  "",
+  `Контекст задачи: ${dispatchPlan.userMessage}`,
+].join("\n");
+
+const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, boardContext, outputText }) => {
   if (!isPipedreamConnectConfigured()) {
     return {
       ok: false,
@@ -584,10 +890,11 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, outpu
   const dispatchPlan = buildFreelancerDispatchPlan({ prompt, metadata });
   const eventId = `neon-connect-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  if (dispatchPlan.action === "search_jobs" || dispatchPlan.action === "project_intake") {
+  if (dispatchPlan.action === "search_jobs" || dispatchPlan.action === "scan_jobs" || dispatchPlan.action === "project_intake") {
     const result = await searchFreelancerViaPipedreamConnect({
       uid,
       query: dispatchPlan.userMessage,
+      action: dispatchPlan.action,
     });
 
     return {
@@ -597,6 +904,86 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, outpu
       action: dispatchPlan.action,
       responseBody: result.responseBody,
       accountId: result.accountId,
+    };
+  }
+
+  if (dispatchPlan.action === "bid_submit_confirmed") {
+    const projectId = extractFreelancerProjectId({ text: dispatchPlan.userMessage, boardContext });
+    const bidDetails = extractBidDetails({ text: dispatchPlan.userMessage, outputText });
+    if (!projectId || !bidDetails.amount || !bidDetails.period || !bidDetails.hasExplicitDescription || !bidDetails.description) {
+      return {
+        ok: true,
+        transport: "pipedream-connect",
+        eventId,
+        action: "apply_requires_approval",
+        responseBody: {
+          ok: true,
+          neonReply: buildFreelancerApprovalReply({ dispatchPlan, projectId, bidDetails }),
+        },
+      };
+    }
+
+    const result = await placeFreelancerBidViaPipedreamConnect({
+      uid,
+      projectId,
+      amount: bidDetails.amount,
+      period: bidDetails.period,
+      milestonePercentage: bidDetails.milestonePercentage,
+      description: bidDetails.description,
+    });
+
+    return {
+      ok: true,
+      transport: "pipedream-connect",
+      eventId,
+      action: dispatchPlan.action,
+      responseBody: result.responseBody,
+      accountId: result.accountId,
+    };
+  }
+
+  if (dispatchPlan.action === "apply_requires_approval") {
+    const projectId = extractFreelancerProjectId({ text: dispatchPlan.userMessage, boardContext });
+    const bidDetails = extractBidDetails({ text: dispatchPlan.userMessage, outputText });
+    return {
+      ok: true,
+      transport: "pipedream-connect",
+      eventId,
+      action: dispatchPlan.action,
+      responseBody: {
+        ok: true,
+        neonReply: buildFreelancerApprovalReply({ dispatchPlan, projectId, bidDetails }),
+      },
+    };
+  }
+
+  if (dispatchPlan.action === "proposal_draft") {
+    return {
+      ok: true,
+      transport: "pipedream-connect",
+      eventId,
+      action: dispatchPlan.action,
+      responseBody: {
+        ok: true,
+        neonReply: [
+          outputText || "Черновик отклика подготовлен.",
+          "",
+          "Я пока не отправил заявку. Если нужно отправить, пришли project_id, ставку, срок и фразу “подтверждаю отправку отклика”.",
+        ].join("\n"),
+      },
+    };
+  }
+
+  if (dispatchPlan.action === "task_execution_plan") {
+    return {
+      ok: true,
+      transport: "pipedream-connect",
+      eventId,
+      action: dispatchPlan.action,
+      responseBody: {
+        ok: true,
+        neonReply: buildFreelancerTaskExecutionReply({ dispatchPlan, outputText }),
+      },
     };
   }
 
@@ -1274,6 +1661,7 @@ const handleProxyRequest = async (req, res) => {
         uid,
         prompt,
         metadata,
+        boardContext,
         outputText,
       });
 

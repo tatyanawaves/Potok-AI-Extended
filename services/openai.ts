@@ -281,8 +281,18 @@ export const generateBoardReply = async (
   userMessage: string,
   settings?: AISettings
 ): Promise<string> => {
+  const isFreelancerBoard = board.name.toLowerCase().includes('freelancer');
   const prompt =
-    board.kind === "codex"
+    board.kind === "codex" && isFreelancerBoard
+      ? `You are Codex, embedded as a dedicated Freelancer work thread inside the user's workspace.
+Use the surrounding workspace context when it helps.
+The connected Freelancer account is handled by NEON/Pipedream after your draft.
+If the user asks to scan jobs, answer briefly that NEON will query Freelancer and then summarize results.
+If the user asks to apply or submit a bid, draft the proposal and state that real submission requires explicit confirmation with project_id, amount, and period.
+If the user asks to do a task, turn it into a concrete execution plan and requested inputs.
+
+User message: ${userMessage}`
+      : board.kind === "codex"
       ? `You are Codex, embedded as a dedicated board inside the user's workspace. Answer in a concise but useful way, and use the surrounding board context when it helps.
 If the user asks to send, trigger, or route an integration/webhook, briefly describe the intended action instead of inventing an external service result.
 

@@ -32,16 +32,36 @@ const createCapability = (
 
 export const FREELANCER_PIPEDREAM_CAPABILITIES: ToolCapability[] = [
   createCapability(
-    'freelancer.route_request',
-    'Route freelancer task',
-    'Send a structured task/event to the Freelancer Pipedream workflow.',
-    ['freelancer', 'freelance', 'pipedream', 'фриланс', 'фрилансер', 'заказ', 'клиент', 'проект', 'отклик', 'ставка']
+    'freelancer.search_jobs',
+    'Scan jobs',
+    'Search and rank active Freelancer projects through the connected account.',
+    ['freelancer', 'freelance', 'фриланс', 'фрилансер', 'вакансии', 'работа', 'проекты', 'найди', 'ищи', 'сканируй', 'мониторь', 'подбери'],
+    false
+  ),
+  createCapability(
+    'freelancer.draft_proposal',
+    'Draft proposal',
+    'Prepare a proposal or cover letter without submitting it.',
+    ['proposal', 'cover letter', 'отклик', 'сопроводительное', 'письмо', 'подготовь', 'напиши'],
+    false
+  ),
+  createCapability(
+    'freelancer.apply_project',
+    'Apply to project',
+    'Submit a Freelancer bid only after explicit user confirmation with project id, amount, and period.',
+    ['apply', 'bid', 'откликнись', 'подай заявку', 'отправь отклик', 'ставка', 'подтверждаю отправку']
+  ),
+  createCapability(
+    'freelancer.execute_task_plan',
+    'Execute task plan',
+    'Turn a Freelancer task into a checklist, deliverables, and next steps before external delivery.',
+    ['сделай задание', 'выполни задание', 'тестовое', 'deliverable', 'task']
   ),
   createCapability(
     'freelancer.sync_event',
     'Sync freelancer event',
-    'Push a workflow event into the connected Freelancer automation.',
-    ['webhook', 'send', 'trigger', 'sync', 'отправь', 'передай', 'запусти', 'синхронизируй']
+    'Push a low-level workflow event into the connected Freelancer automation.',
+    ['webhook', 'send', 'trigger', 'sync', 'хук', 'отправь', 'передай', 'запусти', 'синхронизируй']
   ),
 ];
 
@@ -67,9 +87,11 @@ export const VIKTOR_PRIORITY_MCP_BLUEPRINTS: PriorityMcpBlueprint[] = [
     priority: 96,
     whyItMatters: 'Routes marketplace work, client requests, proposals, and project events through Pipedream.',
     examplePrompts: [
-      'отправь задачу во freelancer',
-      'подготовь отклик клиенту на freelancer',
-      'запусти pipedream workflow для нового заказа',
+      'просканируй вакансии Freelancer по React',
+      'выбери 3 лучших проекта и объясни почему',
+      'подготовь отклик на проект 2',
+      'подтверждаю отправку отклика project_id=123 amount=120 period=5 текст: ...',
+      'сделай план выполнения тестового задания',
     ],
     capabilities: FREELANCER_PIPEDREAM_CAPABILITIES,
   },

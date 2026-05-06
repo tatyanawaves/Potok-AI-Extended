@@ -170,7 +170,7 @@ const App: React.FC = () => {
       navigate('/threads', { replace: true });
 
       const accountLabel = activeAccount.name || activeAccount.external_id || activeAccount.id;
-      const noticeKey = `neon:freelancer-connected:${user.uid}:${activeAccount.id}`;
+      const noticeKey = `neon:freelancer-connected:v2:${user.uid}:${activeAccount.id}`;
       if (!localStorage.getItem(noticeKey)) {
         await createBoardMessage(threadId, {
           authorId: 'system:freelancer',
@@ -181,9 +181,13 @@ const App: React.FC = () => {
             `Рабочий аккаунт: ${accountLabel}.`,
             '',
             'Теперь в этом чате можно писать обычным языком:',
-            'найди вакансии по React',
-            'подготовь сопроводительное письмо к этому проекту',
-            'оцени, стоит ли откликаться на эту работу',
+            'просканируй вакансии по React',
+            'выбери 3 лучших проекта и объясни почему',
+            'подготовь отклик на проект 2',
+            'сделай план выполнения тестового задания',
+            'подтверждаю отправку отклика project_id=123 amount=120 period=5 текст: ...',
+            '',
+            'Важно: заявки/ставки отправляются только после явного подтверждения.',
           ].join('\n'),
         });
         localStorage.setItem(noticeKey, String(Date.now()));
