@@ -20,6 +20,8 @@ const formatFirebaseError = (err: any) => {
   return `${err?.message || 'unknown error'}${code}`;
 };
 
+const getFreelancerConnectPendingKey = (uid: string) => `neon:pipedream:freelancer-pending:${uid}`;
+
 const buildServerManagedIntegrations = (freelancerStatus: PipedreamConnectionStatus): IntegrationConnection[] => [
   {
     id: 'server:pipedream:freelancer',
@@ -86,6 +88,7 @@ const App: React.FC = () => {
 
   const isThinkingRef = useRef(isThinking);
   const isCycleRunningRef = useRef(isCycleRunning);
+  const isCompletingFreelancerRef = useRef(false);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -110,6 +113,59 @@ const App: React.FC = () => {
 
   const t = translations[settings.language || 'ru'];
 
+  const openFreelancerThread = useCallback(async (
+    activeAccount?: Awaited<ReturnType<typeof listPipedreamAccounts>>[number]
+  ) => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    const existingThread = boards.find((board) => {
+      const name = (board.name || '').toLowerCase();
+      return name.includes('freelancer') || name.includes('фриланс');
+    });
+
+    let threadId = existingThread?.id;
+    if (!threadId) {
+      const createdThread = await createBoard(
+        user.uid,
+        'Freelancer',
+        'codex',
+        'Рабочий чат для поиска проектов, анализа вакансий и подготовки откликов через Freelancer/Pipedream.',
+        true
+      );
+      threadId = createdThread.id;
+    }
+
+    setActiveBoardId(threadId);
+    navigate('/threads', { replace: true });
+
+    if (!activeAccount) return;
+
+    const accountLabel = activeAccount.name || activeAccount.external_id || activeAccount.id;
+    const noticeKey = `neon:freelancer-connected:v2:${user.uid}:${activeAccount.id}`;
+    if (!localStorage.getItem(noticeKey)) {
+      await createBoardMessage(threadId, {
+        authorId: 'system:freelancer',
+        authorName: 'NEON',
+        authorType: 'agent',
+        content: [
+          'Freelancer подключен через Pipedream.',
+          `Рабочий аккаунт: ${accountLabel}.`,
+          '',
+          'Теперь в этом чате можно писать обычным языком:',
+          'просканируй вакансии по React',
+          'выбери 3 лучших проекта и объясни почему',
+          'подготовь отклик на проект 2',
+          'сделай план выполнения тестового задания',
+          'подтверждаю отправку отклика project_id=123 amount=120 period=5 текст: ...',
+          '',
+          'Важно: заявки/ставки отправляются только после явного подтверждения.',
+        ].join('\n'),
+      });
+      localStorage.setItem(noticeKey, String(Date.now()));
+    }
+  }, [boards, navigate]);
+
   const refreshPipedreamConnections = useCallback(async () => {
     if (!auth.currentUser) {
       setFreelancerStatus('disconnected');
@@ -128,7 +184,9 @@ const App: React.FC = () => {
   const completeFreelancerConnection = useCallback(async () => {
     const user = auth.currentUser;
     if (!user) return;
+    if (isCompletingFreelancerRef.current) return;
 
+    isCompletingFreelancerRef.current = true;
     setBoardError(null);
     setFreelancerStatus('pending');
 
@@ -148,63 +206,37 @@ const App: React.FC = () => {
       }
 
       setFreelancerStatus('connected');
-
-      const existingThread = boards.find((board) => {
-        const name = (board.name || '').toLowerCase();
-        return name.includes('freelancer') || name.includes('фриланс');
-      });
-
-      let threadId = existingThread?.id;
-      if (!threadId) {
-        const createdThread = await createBoard(
-          user.uid,
-          'Freelancer',
-          'codex',
-          'Рабочий чат для поиска проектов, анализа вакансий и подготовки откликов через Freelancer/Pipedream.',
-          true
-        );
-        threadId = createdThread.id;
-      }
-
-      setActiveBoardId(threadId);
-      navigate('/threads', { replace: true });
-
-      const accountLabel = activeAccount.name || activeAccount.external_id || activeAccount.id;
-      const noticeKey = `neon:freelancer-connected:v2:${user.uid}:${activeAccount.id}`;
-      if (!localStorage.getItem(noticeKey)) {
-        await createBoardMessage(threadId, {
-          authorId: 'system:freelancer',
-          authorName: 'NEON',
-          authorType: 'agent',
-          content: [
-            'Freelancer подключен через Pipedream.',
-            `Рабочий аккаунт: ${accountLabel}.`,
-            '',
-            'Теперь в этом чате можно писать обычным языком:',
-            'просканируй вакансии по React',
-            'выбери 3 лучших проекта и объясни почему',
-            'подготовь отклик на проект 2',
-            'сделай план выполнения тестового задания',
-            'подтверждаю отправку отклика project_id=123 amount=120 period=5 текст: ...',
-            '',
-            'Важно: заявки/ставки отправляются только после явного подтверждения.',
-          ].join('\n'),
-        });
-        localStorage.setItem(noticeKey, String(Date.now()));
-      }
+      localStorage.removeItem(getFreelancerConnectPendingKey(user.uid));
+      await openFreelancerThread(activeAccount);
     } catch (err: any) {
       console.error('[Pipedream] Failed to complete Freelancer connection:', err);
       setFreelancerStatus('error');
       setBoardError(err?.message || 'Freelancer подключился, но NEON не смог открыть рабочий чат.');
+    } finally {
+      isCompletingFreelancerRef.current = false;
     }
-  }, [boards, navigate]);
+  }, [openFreelancerThread]);
 
   const handleConnectFreelancer = useCallback(async () => {
+    const user = auth.currentUser;
+    if (!user) {
+      setBoardError('Сначала войдите через Google, чтобы подключить Freelancer.');
+      return;
+    }
+
     setIsConnectingFreelancer(true);
     setBoardError(null);
-    const popup = window.open('', '_blank');
-    popup?.document.write('<!doctype html><title>NEON</title><body style="margin:0;background:#020617;color:#e2e8f0;font:16px system-ui;display:grid;min-height:100vh;place-items:center"><div>Готовлю подключение Freelancer через Pipedream...</div></body>');
+    localStorage.setItem(getFreelancerConnectPendingKey(user.uid), String(Date.now()));
+    let popup: Window | null = null;
+
     try {
+      if (freelancerStatus === 'connected') {
+        await completeFreelancerConnection();
+        return;
+      }
+
+      popup = window.open('', '_blank');
+      popup?.document.write('<!doctype html><title>NEON</title><body style="margin:0;background:#020617;color:#e2e8f0;font:16px system-ui;display:grid;min-height:100vh;place-items:center"><div>Готовлю подключение Freelancer через Pipedream...</div></body>');
       const connectLink = await createPipedreamConnectLink('freelancer');
       if (!connectLink.connect_link_url) {
         throw new Error('Backend не вернул ссылку Pipedream Connect.');
@@ -216,6 +248,7 @@ const App: React.FC = () => {
         window.location.href = connectLink.connect_link_url;
       }
     } catch (err: any) {
+      localStorage.removeItem(getFreelancerConnectPendingKey(user.uid));
       if (popup && !popup.closed) {
         popup.document.body.innerHTML = '<div style="max-width:520px;padding:32px;line-height:1.6"><h1 style="font-size:20px">Не удалось открыть Freelancer</h1><p id="connect-error"></p><p>Вернитесь в NEON и попробуйте ещё раз после публикации backend.</p></div>';
         const errorNode = popup.document.getElementById('connect-error');
@@ -226,7 +259,7 @@ const App: React.FC = () => {
     } finally {
       setIsConnectingFreelancer(false);
     }
-  }, []);
+  }, [completeFreelancerConnection, freelancerStatus]);
 
   useEffect(() => {
     document.title = t.title;
@@ -240,6 +273,7 @@ const App: React.FC = () => {
     if (params.get('pipedream_app') === 'freelancer') {
       const status = params.get('pipedream_status');
       if (status === 'error') {
+        localStorage.removeItem(getFreelancerConnectPendingKey(auth.currentUser.uid));
         setFreelancerStatus('error');
         setBoardError('Pipedream не завершил подключение Freelancer. Попробуйте подключить аккаунт ещё раз.');
         navigate('/threads', { replace: true });
@@ -262,6 +296,9 @@ const App: React.FC = () => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'neon:pipedream-connected' && event.data?.app === 'freelancer') {
         if (event.data?.status === 'error') {
+          if (auth.currentUser) {
+            localStorage.removeItem(getFreelancerConnectPendingKey(auth.currentUser.uid));
+          }
           setFreelancerStatus('error');
           setBoardError('Pipedream не завершил подключение Freelancer. Попробуйте подключить аккаунт ещё раз.');
           return;
@@ -276,14 +313,21 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleFocus = () => {
-      if (auth.currentUser) {
-        refreshPipedreamConnections();
+      const user = auth.currentUser;
+      if (!user) return;
+
+      refreshPipedreamConnections();
+
+      const pendingAt = Number(localStorage.getItem(getFreelancerConnectPendingKey(user.uid)) || 0);
+      const isRecentPendingConnect = pendingAt > 0 && Date.now() - pendingAt < 10 * 60 * 1000;
+      if (isRecentPendingConnect) {
+        completeFreelancerConnection();
       }
     };
 
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
-  }, [refreshPipedreamConnections]);
+  }, [completeFreelancerConnection, refreshPipedreamConnections]);
 
   // Social Feed: Real-time updates with authentication reactive states
   useEffect(() => {
