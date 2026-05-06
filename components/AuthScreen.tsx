@@ -57,6 +57,16 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
   const handleGoogleLogin = async () => {
     setError(null);
     try {
+      const shouldUseRedirect =
+        window.location.hostname !== 'localhost' &&
+        window.location.hostname !== '127.0.0.1';
+
+      if (shouldUseRedirect) {
+        setError('Открываю вход через Google...');
+        await signInWithGoogleRedirectFlow();
+        return;
+      }
+
       const user = await signInWithGoogle();
       // Sync basic profile
       if (user) {
@@ -68,7 +78,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         onAuthorize(buildAuthorizedSettings(settings, user.displayName));
       }
     } catch (err: any) {
-      if (err?.code === 'auth/popup-blocked') {
+      const shouldFallbackToRedirect = [
+        'auth/popup-blocked',
+        'auth/popup-closed-by-user',
+        'auth/cancelled-popup-request',
+        'auth/operation-not-supported-in-this-environment',
+      ].includes(err?.code);
+
+      if (shouldFallbackToRedirect) {
         setError('Попап заблокирован браузером. Перенаправляем на вход через Google...');
         try {
           await signInWithGoogleRedirectFlow();
@@ -78,11 +95,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         return;
       }
       if (err?.code === 'auth/unauthorized-domain') {
-        setError('Этот домен не добавлен в Firebase Authentication → Authorized domains.');
-        return;
-      }
-      if (err?.code === 'auth/popup-closed-by-user') {
-        setError('Окно входа Google было закрыто до завершения авторизации.');
+        setError(`Домен ${window.location.hostname} не добавлен в Firebase Authentication → Authorized domains.`);
         return;
       }
       setError(err?.message || 'Google auth failed');
