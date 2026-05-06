@@ -291,6 +291,23 @@ const pipedreamProxyRequest = async ({ uid, accountId, method = "GET", url, body
   return data;
 };
 
+const FREELANCER_SEARCH_FALLBACK_QUERY = "React frontend web development";
+
+const normalizeFreelancerSearchQuery = (query) => {
+  const raw = String(query || "").trim();
+  const normalized = raw.toLowerCase();
+  const hasSpecificTech = /react|next|node|javascript|typescript|frontend|backend|fullstack|web|api|shopify|wordpress|figma|ui|ux|php|python|mobile|android|ios|blockchain|seo/i.test(raw);
+  const isGenericAccountMatch =
+    !raw ||
+    /соответствующ|подходящ|подбери|найди\s+(?:задан|работ|проект|ваканс)|для\s+аккаунт|по\s+аккаунт/i.test(normalized);
+
+  if (isGenericAccountMatch && !hasSpecificTech) {
+    return FREELANCER_SEARCH_FALLBACK_QUERY;
+  }
+
+  return raw || FREELANCER_SEARCH_FALLBACK_QUERY;
+};
+
 const searchFreelancerViaPipedreamConnect = async ({ uid, query, action = "search_jobs" }) => {
   const account = await getPrimaryPipedreamAccount({ uid, app: PIPEDREAM_FREELANCER_APP });
   if (!account?.id) {
@@ -299,8 +316,9 @@ const searchFreelancerViaPipedreamConnect = async ({ uid, query, action = "searc
     throw error;
   }
 
+  const searchQuery = normalizeFreelancerSearchQuery(query);
   const freelancerUrl = new URL("https://www.freelancer.com/api/projects/0.1/projects/active/");
-  freelancerUrl.searchParams.set("query", query || "React");
+  freelancerUrl.searchParams.set("query", searchQuery);
   freelancerUrl.searchParams.set("limit", "10");
   freelancerUrl.searchParams.set("full_description", "true");
   freelancerUrl.searchParams.set("job_details", "true");
@@ -318,6 +336,7 @@ const searchFreelancerViaPipedreamConnect = async ({ uid, query, action = "searc
   return {
     ok: true,
     action,
+    query: searchQuery,
     accountId: account.id,
     responseBody: result,
   };
@@ -420,7 +439,7 @@ const extractFreelancerProjectId = ({ text, boardContext }) => {
 const extractBidDetails = ({ text, outputText }) => {
   const combinedText = `${text || ""}\n${outputText || ""}`;
   const amount = extractFirstNumber(combinedText, [
-    /(?:amount|bid|budget|rate|price|ставк[аи]?|бюджет|цена|за)\s*(?:=|:)?\s*(\d+(?:[.,]\d+)?)/i,
+    /(?:amount|sum|bid|budget|rate|price|сумма|ставк[аи]?|бюджет|цена|за)\s*(?:=|:)?\s*(\d+(?:[.,]\d+)?)/i,
     /(\d+(?:[.,]\d+)?)\s*(?:usd|aud|eur|долл|бакс)/i,
   ]);
   const period = extractFirstNumber(combinedText, [
@@ -430,8 +449,8 @@ const extractBidDetails = ({ text, outputText }) => {
   const milestonePercentage = extractFirstNumber(combinedText, [
     /(?:milestone|этап|предоплат[аы]?)\s*(?:=|:)?\s*(\d{1,3})%?/i,
   ]);
-  const explicitProposalMatch = String(text || "").match(/(?:текст|proposal|cover letter|отклик)\s*(?:=|:)\s*([\s\S]{20,})/i);
-  const generatedProposalMatch = String(outputText || "").match(/(?:текст|proposal|cover letter|отклик)\s*(?:=|:)\s*([\s\S]{20,})/i);
+  const explicitProposalMatch = String(text || "").match(/(?:текст|proposal|cover letter|отклик|ответ)\s*(?:=|:)\s*([\s\S]{20,})/i);
+  const generatedProposalMatch = String(outputText || "").match(/(?:текст|proposal|cover letter|отклик|ответ)\s*(?:=|:)\s*([\s\S]{20,})/i);
   const description = (explicitProposalMatch?.[1] || generatedProposalMatch?.[1] || outputText || text || "").trim();
 
   return {
@@ -487,6 +506,37 @@ const extractUserMessage = (prompt) => {
   return (match?.[1] || prompt || "").trim();
 };
 
+const isAmbiguousFreelancerMessage = (message) => {
+  const text = String(message || "").trim().toLowerCase();
+  if (!text) return true;
+  if (text.length <= 3) return true;
+  const words = text.split(/\s+/).filter(Boolean);
+  const hasAction = includesAny(text, [
+    "найд",
+    "ищ",
+    "подбер",
+    "скан",
+    "ваканс",
+    "проект",
+    "задан",
+    "работ",
+    "отклик",
+    "став",
+    "подготов",
+    "выбери",
+    "оцени",
+    "сделай",
+    "отправ",
+    "apply",
+    "bid",
+    "search",
+    "find",
+    "scan",
+    "draft",
+  ]);
+  return words.length === 1 && !hasAction;
+};
+
 const buildFreelancerDispatchPlan = ({ prompt, metadata }) => {
   const userMessage = extractUserMessage(prompt);
   const combinedText = `${userMessage}\n${JSON.stringify(metadata || {})}`.toLowerCase();
@@ -504,6 +554,46 @@ const buildFreelancerDispatchPlan = ({ prompt, metadata }) => {
     return {
       action: "bid_submit_confirmed",
       intent: "Submit a Freelancer bid only after explicit user confirmation.",
+      userMessage,
+    };
+  }
+
+  if (
+    !includesAny(combinedText, [
+      "apply",
+      "submit",
+      "place bid",
+      "send proposal",
+      "send response",
+      "отправ",
+      "откликнис",
+      "подай",
+      "заяв",
+      "оставь став",
+      "сделай став",
+    ]) &&
+    includesAny(combinedText, [
+      "draft proposal",
+      "draft response",
+      "cover letter",
+      "proposal",
+      "answer to project",
+      "response to project",
+      "reply to project",
+      "ответ на проект",
+      "ответ для проекта",
+      "подготовь ответ",
+      "напиши ответ",
+      "составь ответ",
+      "черновик ответа",
+      "отклик",
+      "сопровод",
+      "письм",
+    ])
+  ) {
+    return {
+      action: "proposal_draft",
+      intent: "Prepare a Freelancer proposal draft without submitting it.",
       userMessage,
     };
   }
@@ -571,24 +661,6 @@ const buildFreelancerDispatchPlan = ({ prompt, metadata }) => {
     };
   }
 
-  if (
-    includesAny(combinedText, [
-      "proposal",
-      "cover letter",
-      "bid draft",
-      "\u043e\u0442\u043a\u043b\u0438\u043a",
-      "\u0441\u043e\u043f\u0440\u043e\u0432\u043e\u0434",
-      "\u043f\u0438\u0441\u044c\u043c",
-      "\u0441\u0442\u0430\u0432\u043a",
-    ])
-  ) {
-    return {
-      action: "proposal_draft",
-      intent: "Prepare a Freelancer proposal draft without submitting it.",
-      userMessage,
-    };
-  }
-
   if (includesAny(combinedText, ["project", "task", "order", "\u043f\u0440\u043e\u0435\u043a\u0442", "\u0437\u0430\u0434\u0430\u0447", "\u0437\u0430\u043a\u0430\u0437"])) {
     return {
       action: "project_intake",
@@ -651,18 +723,35 @@ const isPipedreamDefaultResponse = (responseBody) =>
   typeof responseBody?.text === "string" &&
   responseBody.text.includes("To customize this response");
 
+const parseMaybeJson = (value) => {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+};
+
 const firstArray = (values) => values.find((value) => Array.isArray(value)) || [];
 
 const extractFreelancerProjects = (responseBody) => {
   if (!responseBody || typeof responseBody !== "object") return [];
+  const body = parseMaybeJson(responseBody.body);
+  const text = parseMaybeJson(responseBody.text);
+  const data = parseMaybeJson(responseBody.data);
+  const result = parseMaybeJson(responseBody.result);
 
   return firstArray([
-    responseBody?.result?.projects,
+    result?.projects,
     responseBody?.projects,
-    responseBody?.data?.result?.projects,
-    responseBody?.data?.projects,
-    responseBody?.body?.result?.projects,
-    responseBody?.body?.projects,
+    data?.result?.projects,
+    data?.projects,
+    body?.result?.projects,
+    body?.projects,
+    text?.result?.projects,
+    text?.projects,
     responseBody?.return_value?.result?.projects,
     responseBody?.return_value?.projects,
     responseBody?.freelancer?.result?.projects,
@@ -715,6 +804,13 @@ const formatProjectUrl = (project) => {
   return "https://www.freelancer.com/search/projects";
 };
 
+const formatProjectSkills = (project) => {
+  const skills = Array.isArray(project?.jobs)
+    ? project.jobs.map((job) => job?.name || job?.seo_url || job?.id).filter(Boolean)
+    : [];
+  return skills.length ? `Навыки: ${skills.slice(0, 5).join(", ")}` : "";
+};
+
 const formatFreelancerBidResult = (responseBody) => {
   const result = responseBody?.result || responseBody?.data?.result || responseBody?.body?.result || responseBody?.return_value?.result || responseBody;
   const bidId = result?.id || result?.bid_id;
@@ -727,24 +823,28 @@ const formatFreelancerBidResult = (responseBody) => {
   ].filter(Boolean).join("\n");
 };
 
-const formatFreelancerResultMessage = ({ action, eventId, responseBody, outputText }) => {
+const formatFreelancerResultMessage = ({ action, eventId, responseBody, outputText, searchQuery }) => {
   if (action === "webhook_test") {
     const reply = extractFreelancerReply(responseBody);
-    return reply || `Хук Freelancer отправлен в Pipedream.\nEvent ID: ${eventId}`;
+    return reply || "Интеграция Freelancer активна и готова к работе.";
   }
 
   if (action === "search_jobs" || action === "scan_jobs" || action === "project_intake") {
     const projects = extractFreelancerProjects(responseBody).slice(0, 5);
     if (projects.length > 0) {
       return [
-        `Freelancer вернул ${projects.length} подходящих проектов:`,
+        `Freelancer вернул ${projects.length} подходящих проектов${searchQuery ? ` по запросу "${searchQuery}"` : ""}:`,
         ...projects.map((project, index) => {
           const title = project?.title || project?.name || `Project ${project?.id || index + 1}`;
           const projectId = project?.id ? `ID: ${project.id} | ` : "";
-          return `${index + 1}. ${title} | ${projectId}${formatProjectBudget(project)}\n${formatProjectUrl(project)}`;
+          return [
+            `${index + 1}. ${title} | ${projectId}${formatProjectBudget(project)}`,
+            formatProjectSkills(project),
+            formatProjectUrl(project),
+          ].filter(Boolean).join("\n");
         }),
         "",
-        "Можешь написать: “подготовь отклик на проект 2” или “оцени эти вакансии и выбери 3 лучшие”.",
+        "Можешь написать: \"подготовь отклик на проект 2\" или \"оцени эти вакансии и выбери 3 лучшие\".",
         "Реальную отправку заявки я сделаю только после явного подтверждения с project_id, ставкой и сроком.",
       ].join("\n\n");
     }
@@ -753,10 +853,8 @@ const formatFreelancerResultMessage = ({ action, eventId, responseBody, outputTe
     if (reply) return reply;
 
     return [
-      `Запрос в Freelancer отправлен через Pipedream.`,
-      `Event ID: ${eventId}`,
-      "Но workflow не вернул список проектов в HTTP-ответе.",
-      "Добавьте в Pipedream шаг Return HTTP response и верните body из Node-step, чтобы NEON мог показать вакансии здесь.",
+      `Я проверила Freelancer, но не нашла проекты${searchQuery ? ` по запросу "${searchQuery}"` : ""}.`,
+      "Уточни стек или нишу, например: React frontend, Next.js, Node.js API.",
     ].join("\n");
   }
 
@@ -768,7 +866,7 @@ const formatFreelancerResultMessage = ({ action, eventId, responseBody, outputTe
   const reply = extractFreelancerReply(responseBody);
   if (reply) return reply;
 
-  return `${outputText}\n\n[Freelancer/Pipedream: ${action} sent, eventId=${eventId}]`;
+  return outputText || "Приняла. Напиши, что сделать дальше: найти проекты, выбрать лучшие, подготовить отклик или отправить подтвержденный отклик.";
 };
 
 const dispatchPipedreamFreelancer = async ({
@@ -891,6 +989,19 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, board
   const dispatchPlan = buildFreelancerDispatchPlan({ prompt, metadata });
   const eventId = `neon-connect-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+  if (isAmbiguousFreelancerMessage(dispatchPlan.userMessage)) {
+    return {
+      ok: true,
+      transport: "pipedream-connect",
+      eventId,
+      action: "clarify_request",
+      responseBody: {
+        ok: true,
+        neonReply: "Я не хочу додумывать за тебя и случайно сделать не то. Напиши чуть точнее: найти проекты, выбрать лучшие, подготовить отклик или отправить подтвержденный отклик?",
+      },
+    };
+  }
+
   if (dispatchPlan.action === "search_jobs" || dispatchPlan.action === "scan_jobs" || dispatchPlan.action === "project_intake") {
     const result = await searchFreelancerViaPipedreamConnect({
       uid,
@@ -903,6 +1014,7 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, board
       transport: "pipedream-connect",
       eventId,
       action: dispatchPlan.action,
+      searchQuery: result.query,
       responseBody: result.responseBody,
       accountId: result.accountId,
     };
@@ -1683,6 +1795,7 @@ const handleProxyRequest = async (req, res) => {
         eventId: integrations.freelancer.eventId,
         responseBody: integrations.freelancer.responseBody,
         outputText,
+        searchQuery: integrations.freelancer.searchQuery,
       });
       console.log(`[codex-proxy] Freelancer ${integrations.freelancer.transport || "pipedream-webhook"} event sent`);
     } catch (error) {
@@ -1692,12 +1805,12 @@ const handleProxyRequest = async (req, res) => {
         finalOutputText = [
           outputText,
           "",
-          "Freelancer еще не подключен через Pipedream Connect.",
+          "Freelancer еще не подключен.",
           "Нажмите кнопку подключения в панели оркестратора, авторизуйте Freelancer и повторите запрос.",
         ].join("\n");
       } else {
         integrations.freelancer = { ok: false, error: message };
-        finalOutputText = `${outputText}\n\n[Freelancer/Pipedream: event failed: ${message}]`;
+        finalOutputText = `${outputText}\n\nЯ не смогла выполнить действие во Freelancer: ${message}`;
       }
       console.error("[codex-proxy] Freelancer Pipedream event failed:", message);
     }

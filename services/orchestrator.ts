@@ -42,7 +42,7 @@ export const FREELANCER_PIPEDREAM_CAPABILITIES: ToolCapability[] = [
     'freelancer.draft_proposal',
     'Draft proposal',
     'Prepare a proposal or cover letter without submitting it.',
-    ['proposal', 'cover letter', 'отклик', 'сопроводительное', 'письмо', 'подготовь', 'напиши'],
+    ['proposal', 'cover letter', 'response', 'answer', 'отклик', 'ответ', 'сопроводительное', 'письмо', 'подготовь', 'напиши'],
     false
   ),
   createCapability(
