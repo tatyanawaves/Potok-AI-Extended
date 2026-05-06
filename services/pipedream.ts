@@ -83,6 +83,8 @@ export const listPipedreamAccounts = async (app = 'freelancer'): Promise<Pipedre
 
 export const getPipedreamConnectionStatus = async (app = 'freelancer'): Promise<PipedreamConnectionStatus> => {
   const accounts = await listPipedreamAccounts(app);
-  const activeAccount = accounts.find((account) => account.healthy !== false && account.dead !== true);
+  // Pipedream can mark OAuth accounts as healthy=false even while Connect proxy
+  // requests work. Treat any non-dead account as usable and let API calls decide.
+  const activeAccount = accounts.find((account) => account.dead !== true);
   return activeAccount ? 'connected' : 'disconnected';
 };
