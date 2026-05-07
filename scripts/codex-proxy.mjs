@@ -542,7 +542,15 @@ const buildFreelancerDispatchPlan = ({ prompt, metadata }) => {
   const combinedText = `${userMessage}\n${JSON.stringify(metadata || {})}`.toLowerCase();
   const confirmedBid = hasBidConfirmation(combinedText);
 
-  if (includesAny(combinedText, ["webhook", "hook", "test", "ping", "\u0445\u0443\u043a", "\u0442\u0435\u0441\u0442"])) {
+  if (confirmedBid) {
+    return {
+      action: "bid_submit_confirmed",
+      intent: "Submit a Freelancer bid only after explicit user confirmation.",
+      userMessage,
+    };
+  }
+
+  if (includesAny(combinedText, ["webhook", "hook", "ping", "\u0445\u0443\u043a", "\u0442\u0435\u0441\u0442 \u0445\u0443\u043a\u0430", "test webhook", "test hook"])) {
     return {
       action: "webhook_test",
       intent: "Verify that the Freelancer Pipedream workflow receives NEON events.",
@@ -550,10 +558,23 @@ const buildFreelancerDispatchPlan = ({ prompt, metadata }) => {
     };
   }
 
-  if (confirmedBid) {
+  if (
+    includesAny(combinedText, [
+      "which one can you do",
+      "what can you do",
+      "can you do this",
+      "can you complete",
+      "\u043a\u0430\u043a\u043e\u0439 \u0438\u0437 \u043d\u0438\u0445",
+      "\u0447\u0442\u043e \u0438\u0437 \u044d\u0442\u043e\u0433\u043e",
+      "\u0441\u0430\u043c \u0441\u043c\u043e\u0436\u0435\u0448\u044c",
+      "\u0441\u043c\u043e\u0436\u0435\u0448\u044c \u0441\u0434\u0435\u043b\u0430\u0442\u044c",
+      "\u043c\u043e\u0436\u0435\u0448\u044c \u0441\u0434\u0435\u043b\u0430\u0442\u044c",
+      "\u0432\u043e\u0437\u044c\u043c\u0435\u0448\u044c \u0432 \u0440\u0430\u0431\u043e\u0442\u0443",
+    ])
+  ) {
     return {
-      action: "bid_submit_confirmed",
-      intent: "Submit a Freelancer bid only after explicit user confirmation.",
+      action: "executor_fit_analysis",
+      intent: "Choose which listed Freelancer project Codex can realistically execute through the NEON executor.",
       userMessage,
     };
   }
@@ -623,9 +644,26 @@ const buildFreelancerDispatchPlan = ({ prompt, metadata }) => {
     includesAny(combinedText, [
       "execute task",
       "do the task",
+      "start task",
+      "start project",
+      "do project",
+      "execute project",
+      "take project",
       "implementation plan",
+      "\u0441\u0434\u0435\u043b\u0430\u0439 \u043f\u0440\u043e\u0435\u043a\u0442",
+      "\u0432\u044b\u043f\u043e\u043b\u043d\u0438 \u043f\u0440\u043e\u0435\u043a\u0442",
+      "\u043d\u0430\u0447\u043d\u0438 \u043f\u0440\u043e\u0435\u043a\u0442",
+      "\u0431\u0435\u0440\u0438 \u043f\u0440\u043e\u0435\u043a\u0442",
+      "\u0432\u043e\u0437\u044c\u043c\u0438 \u043f\u0440\u043e\u0435\u043a\u0442",
+      "\u0441\u0434\u0435\u043b\u0430\u0439 \u0435\u0433\u043e",
+      "\u0432\u044b\u043f\u043e\u043b\u043d\u0438 \u0435\u0433\u043e",
+      "\u043d\u0430\u0447\u043d\u0438 \u0435\u0433\u043e",
+      "\u043d\u0430\u0447\u0438\u043d\u0430\u0439",
+      "\u0432\u044b\u0431\u0435\u0440\u0438 \u043b\u0443\u0447\u0448\u0438\u0439 \u0438 \u043d\u0430\u0447\u043d\u0438",
       "\u0441\u0434\u0435\u043b\u0430\u0439 \u0437\u0430\u0434\u0430\u043d",
       "\u0432\u044b\u043f\u043e\u043b\u043d\u0438 \u0437\u0430\u0434\u0430\u043d",
+      "\u0432\u043e\u0437\u044c\u043c\u0438 \u0437\u0430\u0434\u0430\u043d",
+      "\u043d\u0430\u0447\u043d\u0438 \u0437\u0430\u0434\u0430\u043d",
       "\u0441\u0434\u0435\u043b\u0430\u0439 \u0442\u0435\u0441\u0442\u043e\u0432",
       "\u0432\u044b\u043f\u043e\u043b\u043d\u0438 \u0442\u0435\u0441\u0442\u043e\u0432",
     ])
@@ -811,6 +849,191 @@ const formatProjectSkills = (project) => {
   return skills.length ? `Навыки: ${skills.slice(0, 5).join(", ")}` : "";
 };
 
+const parseFreelancerProjectsFromMessage = (content) => {
+  const lines = String(content || "").split(/\r?\n/);
+  const projects = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    const match = line.match(/^\s*(\d{1,2})\.\s+(.+?)\s+\|\s+ID:\s*(\d{4,})\s+\|\s+(.+)$/i);
+    if (!match) continue;
+
+    const nearby = lines.slice(index + 1, index + 4).map((item) => item.trim()).filter(Boolean);
+    const skillsLine = nearby.find((item) => /^(skills|навыки)\s*:/i.test(item));
+    const urlLine = nearby.find((item) => /^https?:\/\//i.test(item));
+    const skills = skillsLine
+      ? skillsLine.replace(/^[^:]+:\s*/i, "").split(",").map((skill) => skill.trim()).filter(Boolean)
+      : [];
+
+    projects.push({
+      index: Number(match[1]),
+      title: match[2].trim(),
+      id: match[3],
+      budget: match[4].trim(),
+      jobs: skills.map((name) => ({ name })),
+      url: urlLine || `https://www.freelancer.com/projects/${match[3]}`,
+    });
+  }
+
+  return projects;
+};
+
+const extractFreelancerProjectsFromBoardContext = (boardContext) => {
+  const boards = [...(boardContext || [])].sort((a, b) => Number(Boolean(b.isActive)) - Number(Boolean(a.isActive)));
+  for (const board of boards) {
+    const messages = [...(board.messages || [])].reverse();
+    for (const message of messages) {
+      const projects = parseFreelancerProjectsFromMessage(message.content);
+      if (projects.length > 0) return projects;
+    }
+  }
+  return [];
+};
+
+const scoreFreelancerProjectForExecutor = (project) => {
+  const skills = Array.isArray(project?.jobs) ? project.jobs.map((job) => job?.name || job?.seo_url || "").join(" ") : "";
+  const text = `${project?.title || ""} ${project?.description || ""} ${skills}`.toLowerCase();
+  let score = 35;
+
+  const positives = [
+    [/react|next\.?js|frontend|front-end|typescript|javascript|node\.?js|api|html|css|website|web development/i, 26],
+    [/bug|fix|debug|search|glitch|integration|full-stack|full stack/i, 18],
+    [/wordpress|php|mysql|postgres|mongodb|database/i, 10],
+    [/copywriting|content|proposal|profile|consulting|freelancer api/i, 8],
+  ];
+  const negatives = [
+    [/cold caller|setter|sales|phone|voice|calling/i, -35],
+    [/statistics|data processing|micro task|captcha|survey/i, -16],
+    [/brand management|social media marketing|digital marketing/i, -12],
+  ];
+
+  for (const [pattern, delta] of positives) {
+    if (pattern.test(text)) score += delta;
+  }
+  for (const [pattern, delta] of negatives) {
+    if (pattern.test(text)) score += delta;
+  }
+
+  return Math.max(0, Math.min(100, score));
+};
+
+const rankFreelancerProjectsForExecutor = (projects) =>
+  projects
+    .map((project) => ({
+      ...project,
+      executorScore: scoreFreelancerProjectForExecutor(project),
+    }))
+    .sort((a, b) => b.executorScore - a.executorScore);
+
+const selectFreelancerProjectForExecution = ({ text, boardContext }) => {
+  const projects = extractFreelancerProjectsFromBoardContext(boardContext);
+  const projectId = extractFreelancerProjectId({ text, boardContext });
+  if (projectId) {
+    const byId = projects.find((project) => String(project.id) === String(projectId));
+    if (byId) return { project: byId, projects };
+  }
+
+  const ordinal = extractFirstNumber(text, [
+    /(?:project|option|job|task)\s*(?:#|№|n)?\s*(\d{1,2})/i,
+    /(?:проект|вариант|работа|вакансия|задание)\s*(?:#|№|n)?\s*(\d{1,2})/i,
+  ]);
+  if (ordinal && projects[ordinal - 1]) return { project: projects[ordinal - 1], projects };
+
+  return { project: rankFreelancerProjectsForExecutor(projects)[0] || null, projects };
+};
+
+const formatFreelancerExecutorCapabilities = (project) => {
+  const text = `${project?.title || ""} ${(project?.jobs || []).map((job) => job.name || "").join(" ")}`.toLowerCase();
+  if (/react|next|frontend|typescript|javascript|node|api|html|css|website|wordpress|php/i.test(text)) {
+    return [
+      "разобрать требования и критерии приемки",
+      "подготовить архитектуру и план работ",
+      "писать или править код в подключенном репозитории",
+      "прогнать проверку и собрать готовый пакет сдачи",
+    ];
+  }
+  return [
+    "разобрать задачу и риски",
+    "подготовить рабочий документ, текст или план",
+    "собрать вопросы клиенту и черновик результата",
+    "передать наружу только после твоего подтверждения",
+  ];
+};
+
+const messageRequestsFreelancerExecution = (text) =>
+  includesAny(String(text || "").toLowerCase(), [
+    "execute task",
+    "do the task",
+    "start task",
+    "start project",
+    "do project",
+    "execute project",
+    "take project",
+    "\u0441\u0434\u0435\u043b\u0430\u0439",
+    "\u0432\u044b\u043f\u043e\u043b\u043d\u0438",
+    "\u043d\u0430\u0447\u043d\u0438",
+    "\u043d\u0430\u0447\u0438\u043d\u0430\u0439",
+    "\u0432\u043e\u0437\u044c\u043c\u0438",
+    "\u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439 \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c",
+  ]);
+
+const suggestFreelancerBidForProject = (project) => {
+  const budget = String(project?.budget || "");
+  const numbers = [...budget.matchAll(/(\d+(?:[.,]\d+)?)/g)]
+    .map((match) => Number(String(match[1]).replace(",", ".")))
+    .filter((value) => Number.isFinite(value));
+  const amount = numbers.length >= 2
+    ? Math.round((numbers[0] + numbers[1]) / 2)
+    : numbers[0] || 120;
+  const title = `${project?.title || ""} ${(project?.jobs || []).map((job) => job.name || "").join(" ")}`.toLowerCase();
+  const period = /bug|fix|glitch|search|wordpress|php|html|css|javascript|react|node|frontend/i.test(title) ? 5 : 7;
+  return { amount, period };
+};
+
+const buildFreelancerProposalDraft = (project) => {
+  const title = project?.title || "your project";
+  const skills = Array.isArray(project?.jobs)
+    ? project.jobs.map((job) => job?.name).filter(Boolean).slice(0, 5)
+    : [];
+  const skillLine = skills.length ? `I can cover the required stack: ${skills.join(", ")}.` : "I can quickly review the requirements and start with a clear implementation plan.";
+
+  return [
+    `Hi, I can help with "${title}".`,
+    skillLine,
+    "My approach would be: first reproduce or clarify the current issue, then implement the fix or feature in small verifiable steps, test the result, and send you a concise summary of what changed.",
+    "I can start immediately and keep communication clear throughout the work.",
+  ].join(" ");
+};
+
+const buildFreelancerExecutorFitReply = ({ boardContext, outputText }) => {
+  const projects = extractFreelancerProjectsFromBoardContext(boardContext);
+  if (!projects.length) {
+    return [
+      outputText || "Да, я могу выполнять часть задач как NEON Executor, но сейчас в треде нет списка проектов, из которого можно выбрать.",
+      "",
+      "Напиши: \"найди React задачи\", а потом \"какой из них ты сам сможешь сделать\" или \"начни проект 2\".",
+    ].join("\n");
+  }
+
+  const ranked = rankFreelancerProjectsForExecutor(projects);
+  const best = ranked[0];
+  const top = ranked.slice(0, 3);
+
+  return [
+    `Да. Из последнего списка я бы взял в работу №${best.index}: ${best.title}.`,
+    `Оценка пригодности для NEON Executor: ${best.executorScore}/100. ${best.id ? `Project ID: ${best.id}.` : ""}`,
+    "",
+    "Почему именно он:",
+    ...formatFreelancerExecutorCapabilities(best).slice(0, 3).map((item) => `- ${item}`),
+    "",
+    "Мой рейтинг по выполнимости:",
+    ...top.map((project) => `${project.index}. ${project.title} - ${project.executorScore}/100`),
+    "",
+    `Чтобы начать без лишних уточнений, напиши: "начни проект ${best.index}".`,
+    "Внешние действия во Freelancer - ставка, сообщение клиенту или сдача результата - я все равно буду делать только после явного подтверждения.",
+  ].join("\n");
+};
+
 const formatFreelancerBidResult = (responseBody) => {
   const result = responseBody?.result || responseBody?.data?.result || responseBody?.body?.result || responseBody?.return_value?.result || responseBody;
   const bidId = result?.id || result?.bid_id;
@@ -944,37 +1167,81 @@ const dispatchPipedreamFreelancer = async ({
   };
 };
 
-const buildFreelancerApprovalReply = ({ dispatchPlan, projectId, bidDetails }) => {
+const buildFreelancerApprovalReply = ({ dispatchPlan, projectId, bidDetails, selectedProject, includeExecutorPlan = false, boardContext }) => {
+  const suggestedBid = selectedProject ? suggestFreelancerBidForProject(selectedProject) : null;
   const missing = [];
   if (!projectId) missing.push("project_id");
   if (!bidDetails.amount) missing.push("ставка/amount");
   if (!bidDetails.period) missing.push("срок/period");
   if (!bidDetails.hasExplicitDescription) missing.push("текст отклика");
-  const draft = bidDetails.description && bidDetails.description !== dispatchPlan.userMessage ? bidDetails.description : "";
+  const generatedDraft = selectedProject ? buildFreelancerProposalDraft(selectedProject) : "";
+  const draft = bidDetails.description && bidDetails.description !== dispatchPlan.userMessage ? bidDetails.description : generatedDraft;
+  const recommendedAmount = bidDetails.amount || suggestedBid?.amount || "100";
+  const recommendedPeriod = bidDetails.period || suggestedBid?.period || "7";
+  const executorPlan = includeExecutorPlan
+    ? buildFreelancerTaskExecutionReply({ dispatchPlan, outputText: "", boardContext })
+    : "";
 
   return [
+    selectedProject
+      ? `Я выбрал проект для отклика: №${selectedProject.index} ${selectedProject.title}${selectedProject.id ? ` | Project ID: ${selectedProject.id}` : ""}.`
+      : "",
+    selectedProject?.url ? `Ссылка: ${selectedProject.url}` : "",
+    executorPlan,
+    executorPlan ? "" : "",
     "Я подготовил маршрут для отклика, но не отправляю заявку без явного подтверждения.",
     draft ? `Черновик отклика:\n${draft}` : "",
     missing.length ? `Нужно добавить: ${missing.join(", ")}.` : "",
     "",
     "Безопасная команда для отправки выглядит так:",
-    `подтверждаю отправку отклика project_id=${projectId || "ID"} amount=${bidDetails.amount || "100"} period=${bidDetails.period || "7"} текст: [финальный текст отклика]`,
+    `подтверждаю отправку отклика project_id=${projectId || "ID"} amount=${recommendedAmount} period=${recommendedPeriod} текст: [финальный текст отклика]`,
     "",
     "До подтверждения я могу только подготовить/улучшить текст отклика и оценить риск проекта.",
   ].filter(Boolean).join("\n");
 };
 
-const buildFreelancerTaskExecutionReply = ({ dispatchPlan, outputText }) => [
-  outputText || "Я разложил задачу на рабочий план.",
-  "",
-  "Как рабочий агент Freelancer я могу:",
-  "1. распаковать ТЗ и критерии приемки;",
-  "2. составить план выполнения и список вопросов клиенту;",
-  "3. подготовить артефакты: текст, код, структуру ответа или файлы;",
-  "4. после твоего подтверждения помочь отправить результат во внешний сервис.",
-  "",
-  `Контекст задачи: ${dispatchPlan.userMessage}`,
-].join("\n");
+const buildFreelancerTaskExecutionReply = ({ dispatchPlan, outputText, boardContext }) => {
+  const { project, projects } = selectFreelancerProjectForExecution({
+    text: dispatchPlan.userMessage,
+    boardContext,
+  });
+  const taskId = `neon-exec-${Date.now().toString(36)}`;
+
+  if (!project && projects.length > 0) {
+    return [
+      "Я вижу список проектов, но не понял, какой именно брать в работу.",
+      "",
+      "Напиши коротко: \"начни проект 1\" или \"начни проект 2\". Если хочешь, я могу сам выбрать лучший вариант командой: \"выбери лучший и начни\".",
+      "",
+      "Реальные действия во Freelancer останутся на подтверждении: ставка, сообщение клиенту и отправка результата наружу.",
+    ].join("\n");
+  }
+
+  const capabilities = formatFreelancerExecutorCapabilities(project);
+  const title = project?.title || dispatchPlan.userMessage || "Freelancer task";
+  const projectLine = project
+    ? `Проект: №${project.index} ${project.title}${project.id ? ` | Project ID: ${project.id}` : ""}${project.budget ? ` | ${project.budget}` : ""}`
+    : `Задача: ${dispatchPlan.userMessage}`;
+  const linkLine = project?.url ? `Ссылка: ${project.url}` : "";
+
+  return [
+    `Открываю рабочую задачу NEON Executor: ${taskId}.`,
+    projectLine,
+    linkLine,
+    "",
+    "Что я делаю автоматически внутри NEON:",
+    "1. фиксирую цель, стек и критерии приемки;",
+    "2. готовлю план выполнения и вопросы клиенту только если без них нельзя безопасно двигаться;",
+    `3. собираю deliverable-пакет: ${capabilities.slice(0, 3).join(", ")};`,
+    "4. готовлю отклик/сообщение клиенту и финальную сдачу, но не отправляю наружу без твоего подтверждения.",
+    "",
+    outputText && !/pipedream|webhook|http/i.test(outputText)
+      ? `Черновик от модели:\n${outputText}`
+      : "Первый артефакт: я считаю эту задачу исполнимой через Codex, если есть описание, доступ к коду/файлам или можно выполнить результат как текстовый/архитектурный пакет.",
+    "",
+    `Следующая команда без ручной настройки: "подготовь рабочий пакет для ${title.slice(0, 80)}".`,
+  ].filter(Boolean).join("\n");
+};
 
 const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, boardContext, outputText }) => {
   if (!isPipedreamConnectConfigured()) {
@@ -1056,7 +1323,8 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, board
   }
 
   if (dispatchPlan.action === "apply_requires_approval") {
-    const projectId = extractFreelancerProjectId({ text: dispatchPlan.userMessage, boardContext });
+    const selected = selectFreelancerProjectForExecution({ text: dispatchPlan.userMessage, boardContext });
+    const projectId = extractFreelancerProjectId({ text: dispatchPlan.userMessage, boardContext }) || selected.project?.id;
     const bidDetails = extractBidDetails({ text: dispatchPlan.userMessage, outputText });
     return {
       ok: true,
@@ -1065,7 +1333,27 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, board
       action: dispatchPlan.action,
       responseBody: {
         ok: true,
-        neonReply: buildFreelancerApprovalReply({ dispatchPlan, projectId, bidDetails }),
+        neonReply: buildFreelancerApprovalReply({
+          dispatchPlan,
+          projectId,
+          bidDetails,
+          selectedProject: selected.project,
+          includeExecutorPlan: messageRequestsFreelancerExecution(dispatchPlan.userMessage),
+          boardContext,
+        }),
+      },
+    };
+  }
+
+  if (dispatchPlan.action === "executor_fit_analysis") {
+    return {
+      ok: true,
+      transport: "pipedream-connect",
+      eventId,
+      action: dispatchPlan.action,
+      responseBody: {
+        ok: true,
+        neonReply: buildFreelancerExecutorFitReply({ boardContext, outputText }),
       },
     };
   }
@@ -1095,7 +1383,7 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, board
       action: dispatchPlan.action,
       responseBody: {
         ok: true,
-        neonReply: buildFreelancerTaskExecutionReply({ dispatchPlan, outputText }),
+        neonReply: buildFreelancerTaskExecutionReply({ dispatchPlan, outputText, boardContext }),
       },
     };
   }

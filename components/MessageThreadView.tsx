@@ -268,6 +268,21 @@ const MessageThreadView: React.FC<MessageThreadViewProps> = ({
             </div>
           </div>
 
+          <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.16em] text-amber-200/70">NEON Executor</p>
+                <h3 className="mt-1 text-sm font-semibold text-white">Исполнение задач Codex</h3>
+              </div>
+              <span className="rounded bg-amber-500/15 px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-amber-200">
+                gated
+              </span>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-300">
+              Codex может открыть внутреннюю задачу по проекту Freelancer, подготовить код/текст/план и собрать пакет сдачи. Ставки, сообщения клиенту и внешняя отправка требуют явного подтверждения.
+            </p>
+          </div>
+
           {orchestratorPlan ? (
             <>
               <p className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-sm leading-6 text-slate-300">

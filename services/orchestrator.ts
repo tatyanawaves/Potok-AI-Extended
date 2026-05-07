@@ -53,9 +53,9 @@ export const FREELANCER_PIPEDREAM_CAPABILITIES: ToolCapability[] = [
   ),
   createCapability(
     'freelancer.execute_task_plan',
-    'Execute task plan',
-    'Turn a Freelancer task into a checklist, deliverables, and next steps before external delivery.',
-    ['сделай задание', 'выполни задание', 'тестовое', 'deliverable', 'task']
+    'Execute task',
+    'Open a NEON Executor package for a Freelancer task: plan, artifacts, code/text deliverables, and approval-gated external delivery.',
+    ['сделай задание', 'выполни задание', 'сделай проект', 'выполни проект', 'начни проект', 'возьми проект', 'начинай', 'какой из них', 'сам сможешь', 'тестовое', 'deliverable', 'execute', 'task']
   ),
   createCapability(
     'freelancer.sync_event',
@@ -251,6 +251,23 @@ const normalize = (value: string) => value.toLowerCase();
 const collectText = (messages: ConversationMessage[]) =>
   messages.map((message) => message.content).join('\n').toLowerCase();
 
+const textIncludesAny = (text: string, values: string[]) => values.some((value) => text.includes(value.toLowerCase()));
+
+const EXECUTOR_INTENT_KEYWORDS = [
+  'сделай проект',
+  'выполни проект',
+  'начни проект',
+  'возьми проект',
+  'сделай задание',
+  'выполни задание',
+  'начинай',
+  'какой из них',
+  'сам сможешь',
+  'execute task',
+  'do project',
+  'deliverable',
+];
+
 const scoreBlueprint = (
   blueprint: PriorityMcpBlueprint,
   combinedText: string,
@@ -317,6 +334,8 @@ export const buildHeuristicOrchestratorPlan = (
   messages: ConversationMessage[],
   connections: IntegrationConnection[]
 ): OrchestratorPlan => {
+  const combinedText = collectText(messages);
+  const wantsExecutor = textIncludesAny(combinedText, EXECUTOR_INTENT_KEYWORDS);
   const ranked = rankMcpBlueprintsForMessages(messages, connections);
   const topMatches = ranked.slice(0, 3);
   const missingIntegrations = topMatches
@@ -334,6 +353,20 @@ export const buildHeuristicOrchestratorPlan = (
       false
     ),
   ];
+
+  if (wantsExecutor) {
+    steps.push(
+      buildStep(
+        'step-neon-executor',
+        'Open NEON Executor',
+        'Codex should create an internal execution package, prepare artifacts, and keep external Freelancer actions approval-gated.',
+        'codex',
+        'codex.executor.run_task',
+        'planned',
+        false
+      )
+    );
+  }
 
   for (const [index, entry] of topMatches.entries()) {
     const primaryCapability = entry.blueprint.capabilities[0];
@@ -355,12 +388,15 @@ export const buildHeuristicOrchestratorPlan = (
 
   return {
     summary:
+      wantsExecutor
+        ? 'Codex should act as NEON Executor: select the Freelancer task, prepare deliverables, and ask for approval only before external submission.'
+        : 
       topMatches.length > 0
         ? `Codex should interpret the conversation, then consider ${topMatches
             .map((entry) => entry.blueprint.label)
             .join(', ')} for execution.`
         : 'Codex should answer from context first and wait for a connected tool before acting.',
-    actionMode: 'draft',
+    actionMode: wantsExecutor ? 'act' : 'draft',
     needsUserAuth: missingIntegrations.length > 0,
     needsApproval: true,
     missingIntegrations,

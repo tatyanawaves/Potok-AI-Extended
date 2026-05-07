@@ -232,6 +232,24 @@ export interface OrchestratorTask {
   lastError?: string;
 }
 
+export type ExecutorTaskKind = 'freelancer_project' | 'code_delivery' | 'text_delivery' | 'research_delivery';
+
+export interface ExecutorTaskArtifact {
+  id: string;
+  title: string;
+  kind: 'plan' | 'draft' | 'code' | 'file' | 'checklist' | 'delivery_note';
+  content: string;
+  createdAt: number;
+}
+
+export interface ExecutorTask extends OrchestratorTask {
+  kind: ExecutorTaskKind;
+  sourceProvider?: IntegrationProvider;
+  sourceExternalId?: string;
+  artifacts: ExecutorTaskArtifact[];
+  requiresExternalApproval: boolean;
+}
+
 export interface OrchestratorPlanStep {
   id: string;
   title: string;
