@@ -379,7 +379,9 @@ const extractFreelancerSelfId = (responseBody) => {
 
 const parseNumberValue = (value) => {
   if (value === undefined || value === null) return null;
-  const normalized = String(value).replace(",", ".").trim();
+  const raw = String(value).trim();
+  const withoutThousands = raw.replace(/[\s\u00a0\u202f]+/g, "");
+  const normalized = withoutThousands.replace(",", ".");
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 };
@@ -398,6 +400,37 @@ const collectFreelancerContextText = (boardContext) =>
     .flatMap((board) => board.messages || [])
     .map((message) => message.content || "")
     .join("\n\n");
+
+const findLatestFreelancerAgentMessage = (boardContext, predicate) => {
+  const orderedBoards = [...(boardContext || [])].sort((a, b) => Number(Boolean(b.isActive)) - Number(Boolean(a.isActive)));
+  for (const board of orderedBoards) {
+    const messages = [...(board.messages || [])].reverse();
+    for (const message of messages) {
+      if (message.authorType !== "agent") continue;
+      const content = String(message.content || "");
+      if (predicate(content)) return content;
+    }
+  }
+  return "";
+};
+
+const extractLatestFreelancerApprovalMessage = (boardContext) =>
+  findLatestFreelancerAgentMessage(boardContext, (content) =>
+    /project[_\s-]?id\s*=\s*\d{4,}|project id:\s*\d{4,}|безопасная команда|черновик отклика|подтверждаю отправку отклика/i.test(content)
+  );
+
+const cleanFreelancerProposalDraft = (value) =>
+  String(value || "")
+    .replace(/\*\*?\s*Важно\s*:?\*\*?[\s\S]*$/i, "")
+    .replace(/Важно\s*:\s*Реальная отправка[\s\S]*$/i, "")
+    .replace(/Пожалуйста,\s*подтвердите[\s\S]*$/i, "")
+    .replace(/Нужно добавить:[\s\S]*$/i, "")
+    .trim();
+
+const extractProposalDraftFromApprovalMessage = (content) => {
+  const draftMatch = String(content || "").match(/Черновик отклика:\s*([\s\S]*?)(?:\nНужно добавить:|\nБезопасная команда|\nДо подтверждения|$)/i);
+  return cleanFreelancerProposalDraft(draftMatch?.[1] || "");
+};
 
 const extractProjectIdFromIndexedHistory = ({ text, historyText }) => {
   const ordinal = extractFirstNumber(text, [
@@ -436,11 +469,14 @@ const extractFreelancerProjectId = ({ text, boardContext }) => {
   });
 };
 
-const extractBidDetails = ({ text, outputText }) => {
-  const combinedText = `${text || ""}\n${outputText || ""}`;
+const extractBidDetails = ({ text, outputText, boardContext }) => {
+  const approvalContext = extractLatestFreelancerApprovalMessage(boardContext);
+  const contextDraft = extractProposalDraftFromApprovalMessage(approvalContext);
+  const combinedText = `${text || ""}\n${outputText || ""}\n${approvalContext || ""}`;
   const amount = extractFirstNumber(combinedText, [
-    /(?:amount|sum|bid|budget|rate|price|сумма|ставк[аи]?|бюджет|цена|за)\s*(?:=|:)?\s*(\d+(?:[.,]\d+)?)/i,
-    /(\d+(?:[.,]\d+)?)\s*(?:usd|aud|eur|долл|бакс)/i,
+    /(?:amount|sum|bid|rate|price|сумма|ставк[аи]?|цена|за)\s*(?:=|:)?\s*(\d[\d\s\u00a0\u202f.,]*)/i,
+    /(\d[\d\s\u00a0\u202f.,]*)\s*(?:usd|aud|eur|долл|бакс)/i,
+    /(?:budget|бюджет)\s*(?:=|:)?\s*(\d[\d\s\u00a0\u202f.,]*)/i,
   ]);
   const period = extractFirstNumber(combinedText, [
     /(?:period|days|срок|дней|дня|день)\s*(?:=|:)?\s*(\d{1,3})/i,
@@ -451,19 +487,21 @@ const extractBidDetails = ({ text, outputText }) => {
   ]);
   const explicitProposalMatch = String(text || "").match(/(?:текст|proposal|cover letter|отклик|ответ)\s*(?:=|:)\s*([\s\S]{20,})/i);
   const generatedProposalMatch = String(outputText || "").match(/(?:текст|proposal|cover letter|отклик|ответ)\s*(?:=|:)\s*([\s\S]{20,})/i);
-  const description = (explicitProposalMatch?.[1] || generatedProposalMatch?.[1] || outputText || text || "").trim();
+  const description = cleanFreelancerProposalDraft(
+    explicitProposalMatch?.[1] || generatedProposalMatch?.[1] || contextDraft || outputText || text || ""
+  );
 
   return {
     amount,
     period,
     milestonePercentage: milestonePercentage || 100,
     description,
-    hasExplicitDescription: Boolean(explicitProposalMatch?.[1]),
+    hasExplicitDescription: Boolean(explicitProposalMatch?.[1] || contextDraft),
   };
 };
 
 const hasBidConfirmation = (text) =>
-  /подтверждаю\s+отправк|можно\s+отправлять|отправляй\s+отклик|отправь\s+заявку\s+сейчас|confirm(?:ed)?\s+send|approve(?:d)?\s+bid/i.test(
+  /подтверждаю\s+отправк|можно\s+отправлять|можешь\s+отправлять|можно\s+отправить|отправляй\s+отклик|отправь\s+отклик|отправь\s+заявку\s+сейчас|согласн[аы]?\s+с\s+выбранн|согласн[аы]?[\s\S]{0,80}можешь\s+отправ|да[\s,]+отправляй|confirm(?:ed)?\s+send|approve(?:d)?\s+bid/i.test(
     String(text || "")
   );
 
@@ -1288,8 +1326,13 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, board
   }
 
   if (dispatchPlan.action === "bid_submit_confirmed") {
-    const projectId = extractFreelancerProjectId({ text: dispatchPlan.userMessage, boardContext });
-    const bidDetails = extractBidDetails({ text: dispatchPlan.userMessage, outputText });
+    const approvalContext = extractLatestFreelancerApprovalMessage(boardContext);
+    const selected = selectFreelancerProjectForExecution({ text: dispatchPlan.userMessage, boardContext });
+    const projectId =
+      extractFreelancerProjectId({ text: dispatchPlan.userMessage, boardContext }) ||
+      extractFreelancerProjectId({ text: approvalContext, boardContext }) ||
+      selected.project?.id;
+    const bidDetails = extractBidDetails({ text: dispatchPlan.userMessage, outputText, boardContext });
     if (!projectId || !bidDetails.amount || !bidDetails.period || !bidDetails.hasExplicitDescription || !bidDetails.description) {
       return {
         ok: true,
@@ -1298,7 +1341,13 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, board
         action: "apply_requires_approval",
         responseBody: {
           ok: true,
-          neonReply: buildFreelancerApprovalReply({ dispatchPlan, projectId, bidDetails }),
+          neonReply: buildFreelancerApprovalReply({
+            dispatchPlan,
+            projectId,
+            bidDetails,
+            selectedProject: selected.project,
+            boardContext,
+          }),
         },
       };
     }
@@ -1325,7 +1374,7 @@ const dispatchPipedreamConnectFreelancer = async ({ uid, prompt, metadata, board
   if (dispatchPlan.action === "apply_requires_approval") {
     const selected = selectFreelancerProjectForExecution({ text: dispatchPlan.userMessage, boardContext });
     const projectId = extractFreelancerProjectId({ text: dispatchPlan.userMessage, boardContext }) || selected.project?.id;
-    const bidDetails = extractBidDetails({ text: dispatchPlan.userMessage, outputText });
+    const bidDetails = extractBidDetails({ text: dispatchPlan.userMessage, outputText, boardContext });
     return {
       ok: true,
       transport: "pipedream-connect",
