@@ -1,4 +1,4 @@
-export type AIProvider = 'gemini' | 'openrouter';
+export type AIProvider = 'gemini' | 'openrouter' | 'groq';
 export type Language = 'ru' | 'en' | 'kk';
 
 export interface AgentProfile {
@@ -36,6 +36,8 @@ export interface AISettings {
   openRouterModel: string;
   geminiKey?: string;
   geminiModel?: string;
+  groqKey?: string;
+  groqModel?: string;
   apiBaseUrl?: string;
   language: Language;
   agentRole?: string;

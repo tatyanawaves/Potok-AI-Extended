@@ -13,6 +13,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || 'arcee-ai/trinity-large-preview:free');
   const [geminiKey, setGeminiKey] = useState(settings.geminiKey || '');
   const [geminiModel, setGeminiModel] = useState(settings.geminiModel || 'gemini-1.5-flash');
+  const [groqKey, setGroqKey] = useState(settings.groqKey || '');
+  const [groqModel, setGroqModel] = useState(settings.groqModel || 'llama-3.3-70b-versatile');
   const [aiProvider, setAiProvider] = useState<AIProvider>(settings.aiProvider || 'openrouter');
   const [apiBaseUrl, setApiBaseUrl] = useState(settings.apiBaseUrl || '');
   const [language, setLanguage] = useState<Language>(settings.language || 'ru');
@@ -30,6 +32,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       openRouterModel,
       geminiKey,
       geminiModel,
+      groqKey,
+      groqModel,
       aiProvider,
       apiBaseUrl,
       language,
@@ -132,6 +136,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
               </button>
               <button
                 type="button"
+                onClick={() => setAiProvider('groq')}
+                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'groq' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
+              >
+                GROQ
+              </button>
+              <button
+                type="button"
                 onClick={() => setAiProvider('gemini')}
                 className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'gemini' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
               >
@@ -166,6 +177,34 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                       value={openRouterModel}
                       onChange={(e) => setOpenRouterModel(e.target.value)}
                       placeholder="author/model:free"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                    />
+                  </div>
+                </>
+              ) : aiProvider === 'groq' ? (
+                <>
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      Groq {t.apiKeyLabel}
+                    </label>
+                    <input
+                      type="password"
+                      value={groqKey}
+                      onChange={(e) => setGroqKey(e.target.value)}
+                      placeholder="gsk_..."
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      Groq Model
+                    </label>
+                    <input
+                      type="text"
+                      value={groqModel}
+                      onChange={(e) => setGroqModel(e.target.value)}
+                      placeholder="llama-3.3-70b-versatile"
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
                     />
                   </div>

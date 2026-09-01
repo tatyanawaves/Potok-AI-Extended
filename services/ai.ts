@@ -1,6 +1,7 @@
 import { Thought, AIProvider, AISettings, CognitiveState } from "../types";
 import * as gemini from "./gemini";
 import * as openrouter from "./openrouter";
+import * as groq from "./groq";
 import * as imageGen from "./imageGen";
 
 /**
@@ -13,12 +14,18 @@ export const generateSeedThought = async (provider: AIProvider, settings?: AISet
   if (provider === 'openrouter') {
     return openrouter.generateSeedThought(settings);
   }
+  if (provider === 'groq') {
+    return groq.generateSeedThought(settings);
+  }
   return gemini.generateSeedThought(settings);
 };
 
 export const generateNextThought = async (provider: AIProvider, previousThought: Thought, settings?: AISettings): Promise<Thought> => {
   if (provider === 'openrouter') {
     return openrouter.generateNextThought(previousThought, settings);
+  }
+  if (provider === 'groq') {
+    return groq.generateNextThought(previousThought, settings);
   }
   return gemini.generateNextThought(previousThought, settings);
 };
@@ -32,6 +39,9 @@ export const analyzeTextChunk = async (provider: AIProvider, text: string, setti
   if (provider === 'openrouter') {
     return openrouter.analyzeTextChunk(text, settings);
   }
+  if (provider === 'groq') {
+    return groq.analyzeTextChunk(text, settings);
+  }
   return gemini.analyzeTextChunk(text, settings);
 };
 
@@ -43,6 +53,9 @@ export const generateSelfReflection = async (
 ): Promise<Thought> => {
   if (provider === 'openrouter') {
     return openrouter.generateSelfReflection(state, topSymbols, settings);
+  }
+  if (provider === 'groq') {
+    return groq.generateSelfReflection(state, topSymbols, settings);
   }
   return gemini.generateSelfReflection(state, topSymbols, settings);
 };

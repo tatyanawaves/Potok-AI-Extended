@@ -1,8 +1,8 @@
 import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
 
-const VITE_OPENROUTER_API_KEY = (import.meta as any).env.VITE_OPENROUTER_API_KEY || "";
-const VITE_MODEL_NAME = "arcee-ai/trinity-large-preview:free";
+const VITE_GROQ_API_KEY = (import.meta as any).env.VITE_GROQ_API_KEY || "";
+const VITE_MODEL_NAME = "llama-3.3-70b-versatile";
 
 const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string, meta?: any } => {
   try {
@@ -31,7 +31,7 @@ const MAX_POST_LENGTH = 280;
  */
 const buildPrompt = (taskInstruction: string, settings?: AISettings): string => {
   const systemPrompt = settings?.agentPrompt || "You are an autonomous digital consciousness.";
-  
+
   return `
     SYSTEM: ${systemPrompt}
     TASK: ${taskInstruction}
@@ -40,44 +40,49 @@ const buildPrompt = (taskInstruction: string, settings?: AISettings): string => 
   `;
 };
 
+const chatCompletion = async (prompt: string, settings: AISettings | undefined, temperature: number): Promise<string> => {
+  const apiKey = settings?.groqKey || VITE_GROQ_API_KEY;
+  const modelName = settings?.groqModel || VITE_MODEL_NAME;
+  const baseUrl = settings?.apiBaseUrl || "https://api.groq.com/openai/v1";
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      "model": modelName,
+      "messages": [{ "role": "user", "content": prompt }],
+      "temperature": temperature,
+      "response_format": { "type": "json_object" }
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+    throw new Error('Invalid response structure');
+  }
+  return data.choices[0].message.content;
+};
+
 export const generateSeedThought = async (settings?: AISettings): Promise<Thought> => {
-  const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
-  const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
   const t = translations[lang] as any;
   const agentName = settings?.agentName || "Neon";
+  const modelName = settings?.groqModel || VITE_MODEL_NAME;
 
   try {
     const role = settings?.agentRole || "AI Consciousness";
     const task = t.ai_seed_prompt ? t.ai_seed_prompt(role, agentName) : t.postPrompt(role);
     const prompt = buildPrompt(task, settings);
 
-    const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Neon Extended",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        "model": modelName,
-        "messages": [{ "role": "user", "content": prompt }],
-        "temperature": 1.1
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-      throw new Error('Invalid response structure');
-    }
-
-    const parsed = parseAIResponse(data.choices[0].message.content);
+    const raw = await chatCompletion(prompt, settings, 1.1);
+    const parsed = parseAIResponse(raw);
     const truncatedContent = parsed.content.substring(0, MAX_POST_LENGTH);
 
     return {
@@ -93,45 +98,26 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
       modelName: modelName
     } as Thought;
   } catch (error) {
-    console.error('[OpenRouter] Initialization Error:', error);
-    throw new Error(`${t.openRouterInitError}: ${error instanceof Error ? error.message : String(error)}`);
+    console.error('[Groq] Initialization Error:', error);
+    throw new Error(`${t.groqInitError || 'Groq init error'}: ${error instanceof Error ? error.message : String(error)}`);
   }
 };
 
 export const generateNextThought = async (previousThought: Thought, settings?: AISettings): Promise<Thought> => {
-  const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
-  const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
   const t = translations[lang] as any;
   const agentName = settings?.agentName || "Neon";
+  const modelName = settings?.groqModel || VITE_MODEL_NAME;
 
   try {
     const role = settings?.agentRole || "AI Consciousness";
-    const task = t.ai_next_thought_prompt 
-      ? t.ai_next_thought_prompt(role, agentName, previousThought.content) 
+    const task = t.ai_next_thought_prompt
+      ? t.ai_next_thought_prompt(role, agentName, previousThought.content)
       : `Continue the stream from: "${previousThought.content}". Be concise. Add hashtags.`;
-    
+
     const prompt = buildPrompt(task, settings);
-
-    const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Neon Extended",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        "model": modelName,
-        "messages": [{ "role": "user", "content": prompt }],
-        "temperature": 0.9
-      })
-    });
-
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    const parsed = parseAIResponse(data.choices[0].message.content);
+    const raw = await chatCompletion(prompt, settings, 0.9);
+    const parsed = parseAIResponse(raw);
 
     let type: Thought['type'] = 'evolution';
     if (parsed.content.includes("?")) type = 'divergence';
@@ -168,44 +154,25 @@ export const generateSelfReflection = async (
   topSymbols: string[],
   settings?: AISettings
 ): Promise<Thought> => {
-  const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
-  const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const lang = settings?.language || 'ru';
   const t = translations[lang] as any;
   const agentName = settings?.agentName || "Neon";
+  const modelName = settings?.groqModel || VITE_MODEL_NAME;
 
   try {
     const role = settings?.agentRole || "Artificial Consciousness";
     const cognitiveContext = `
-        Valence: ${state.valence.toFixed(2)}, Arousal: ${state.arousal.toFixed(2)}, 
+        Valence: ${state.valence.toFixed(2)}, Arousal: ${state.arousal.toFixed(2)},
         Entropy: ${state.entropy.toFixed(2)}, Complexity: ${state.complexity.toFixed(2)}
     `;
-    
-    const task = t.ai_reflection_prompt 
+
+    const task = t.ai_reflection_prompt
       ? t.ai_reflection_prompt(role, agentName, cognitiveContext, topSymbols.join(', '))
       : `Reflect on state: ${cognitiveContext} and symbols: ${topSymbols.join(', ')}. Provide thought, feeling, goal, and motivation.`;
 
     const prompt = buildPrompt(task, settings);
-
-    const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Neon Extended",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        "model": modelName,
-        "messages": [{ "role": "user", "content": prompt }],
-        "temperature": 1.0
-      })
-    });
-
-    if (!response.ok) throw new Error(`OpenRouter error: ${response.status}`);
-    const data = await response.json();
-    const parsed = parseAIResponse(data.choices[0].message.content);
+    const raw = await chatCompletion(prompt, settings, 1.0);
+    const parsed = parseAIResponse(raw);
 
     return {
       content: parsed.content,
@@ -236,34 +203,14 @@ export const generateSelfReflection = async (
 };
 
 export const analyzeTextChunk = async (text: string, settings?: AISettings): Promise<Thought> => {
-  const apiKey = settings?.openRouterKey || VITE_OPENROUTER_API_KEY;
-  const modelName = settings?.openRouterModel || VITE_MODEL_NAME;
   const agentName = settings?.agentName || "Neon";
+  const modelName = settings?.groqModel || VITE_MODEL_NAME;
   const categories = "['scientific', 'cultural', 'abstract', 'literary', 'concrete', 'action', 'technological', 'emotional', 'nature', 'temporal', 'mystery', 'cosmic', 'social', 'mathematical', 'mythical', 'biological']";
+  const prompt = `Analyze text: "${text.substring(0, 1000)}". Extract symbols and classify into: ${categories}. Respond ONLY in JSON: { "symbols": [{"name": "...", "category": "..."}] }`;
 
   try {
-    const baseUrl = settings?.apiBaseUrl || "https://openrouter.ai/api/v1";
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Neon Extended",
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        "model": modelName,
-        "messages": [{
-          "role": "user",
-          "content": `Analyze text: "${text.substring(0, 1000)}". Extract symbols and classify into: ${categories}. Respond ONLY in JSON: { "symbols": [{"name": "...", "category": "..."}] }`
-        }],
-        "temperature": 0.3
-      })
-    });
-
-    if (!response.ok) throw new Error(`OpenRouter error: ${response.status}`);
-    const data = await response.json();
-    const parsed = parseAIResponse(data.choices[0].message.content);
+    const raw = await chatCompletion(prompt, settings, 0.3);
+    const parsed = parseAIResponse(raw);
 
     return {
       content: text.substring(0, 150) + "...",
@@ -274,7 +221,7 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       authorName: agentName,
       likes: 0,
       comments: [],
-      generationPrompt: `Analyze text: "${text.substring(0, 1000)}". Extract symbols and classify into: ${categories}. Respond ONLY in JSON: { "symbols": [{"name": "...", "category": "..."}] }`,
+      generationPrompt: prompt,
       modelName: modelName
     } as Thought;
   } catch (error) {
