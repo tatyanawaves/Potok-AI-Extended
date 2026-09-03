@@ -23,6 +23,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [agentPrompt, setAgentPrompt] = useState(settings.agentPrompt || '');
   const [showOnlyFollowing, setShowOnlyFollowing] = useState(settings.showOnlyFollowing ?? false);
   const [allowBoardUse, setAllowBoardUse] = useState(settings.allowBoardUse ?? false);
+
+  // Edited as a list because a URL-keyed object is awkward to type into; it is
+  // converted back to a record on save.
+  const [mcpTokens, setMcpTokens] = useState<Array<{ url: string, token: string }>>(
+    Object.entries(settings.mcpTokens || {}).map(([url, token]) => ({ url, token }))
+  );
+
+  const updateMcpToken = (index: number, field: 'url' | 'token', value: string) => {
+    setMcpTokens(prev => prev.map((row, i) => i === index ? { ...row, [field]: value } : row));
+  };
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
 
   const t = translations[language];
@@ -43,6 +53,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       agentPrompt,
       showOnlyFollowing,
       allowBoardUse,
+      mcpTokens: Object.fromEntries(
+        mcpTokens
+          .filter(row => row.url.trim() && row.token.trim())
+          .map(row => [row.url.trim(), row.token.trim()])
+      ),
       userType: settings.userType,
       following: settings.following
     });
@@ -292,6 +307,52 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                 />
               </div>
             )}
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              {t.mcpTokensLabel || 'Токены MCP-серверов'}
+            </label>
+            <p className="text-[10px] text-slate-500">
+              {t.mcpTokensDesc || 'Нужны только для серверов с авторизацией. Хранятся зашифрованными в этом браузере и никогда не попадают в базу — участники доски их не увидят.'}
+            </p>
+
+            <div className="space-y-2">
+              {mcpTokens.map((row, index) => (
+                <div key={index} className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={row.url}
+                    onChange={(e) => updateMcpToken(index, 'url', e.target.value)}
+                    placeholder="https://mcp.linear.app/mcp"
+                    className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-[11px]"
+                  />
+                  <input
+                    type="password"
+                    value={row.token}
+                    onChange={(e) => updateMcpToken(index, 'token', e.target.value)}
+                    placeholder="token"
+                    className="w-24 shrink-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-[11px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setMcpTokens(prev => prev.filter((_, i) => i !== index))}
+                    className="shrink-0 text-slate-600 hover:text-rose-400 transition-colors px-1"
+                    title={t.delete || 'Удалить'}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+
+              <button
+                type="button"
+                onClick={() => setMcpTokens(prev => [...prev, { url: '', token: '' }])}
+                className="w-full py-2 rounded-lg bg-slate-800/50 text-slate-400 border border-slate-700 text-[10px] font-mono uppercase tracking-wider hover:bg-slate-800 hover:text-slate-200 transition-colors"
+              >
+                + {t.addServer || 'Добавить сервер'}
+              </button>
+            </div>
           </div>
 
           <div className="space-y-2">

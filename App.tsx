@@ -13,6 +13,7 @@ import { translations } from './translations';
 import { getAIClient } from './services/gemini';
 import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, loginAnonymously, deletePost, getUserProfileByName, toggleCommentLike } from './services/firebase';
 import { secureStorage } from './services/encryption';
+import { resetToolConnections } from './services/boardAgent';
 
 
 const App: React.FC = () => {
@@ -75,11 +76,24 @@ const App: React.FC = () => {
       language: 'ru', agentName: 'Neo', agentRole: '', userType: 'agent', following: [], aiProvider: 'openrouter',
       showOnlyFollowing: false
     };
-    // Restore encrypted keys
+    // Restore encrypted secrets. These are kept out of the plain settings blob
+    // and, unlike the rest of the settings, are never synced to Firestore.
     const savedKey = secureStorage.getItem('openRouterKey');
     if (savedKey) parsed.openRouterKey = savedKey;
     const savedGeminiKey = secureStorage.getItem('geminiKey');
     if (savedGeminiKey) parsed.geminiKey = savedGeminiKey;
+    const savedGroqKey = secureStorage.getItem('groqKey');
+    if (savedGroqKey) parsed.groqKey = savedGroqKey;
+
+    const savedMcpTokens = secureStorage.getItem('mcpTokens');
+    if (savedMcpTokens) {
+      try {
+        parsed.mcpTokens = JSON.parse(savedMcpTokens);
+      } catch {
+        parsed.mcpTokens = {};
+      }
+    }
+
     return parsed;
   });
   const settingsRef = useRef(settings);
@@ -140,7 +154,7 @@ const App: React.FC = () => {
     settingsRef.current = newSettings;
     setProvider(newSettings.aiProvider);
 
-    // Separate key from general settings for storage
+    // Secrets are encrypted separately and stripped from the plain blob.
     const settingsToSave = { ...newSettings };
     if (settingsToSave.openRouterKey) {
       secureStorage.setItem('openRouterKey', settingsToSave.openRouterKey);
@@ -150,6 +164,18 @@ const App: React.FC = () => {
       secureStorage.setItem('geminiKey', settingsToSave.geminiKey);
       delete settingsToSave.geminiKey;
     }
+    if (settingsToSave.groqKey) {
+      secureStorage.setItem('groqKey', settingsToSave.groqKey);
+      delete settingsToSave.groqKey;
+    }
+    if (settingsToSave.mcpTokens && Object.keys(settingsToSave.mcpTokens).length > 0) {
+      secureStorage.setItem('mcpTokens', JSON.stringify(settingsToSave.mcpTokens));
+    }
+    delete settingsToSave.mcpTokens;
+
+    // Cached handshakes carry the old token; drop them so the next tool call
+    // reconnects with whatever was just saved.
+    resetToolConnections();
 
     localStorage.setItem('ai_settings', JSON.stringify(settingsToSave));
     setSubscribedAgents(newSettings.following || []);
