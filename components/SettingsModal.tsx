@@ -1,6 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AISettings, Language, AIProvider } from '../types';
 import { translations } from '../translations';
+import {
+  isPipedreamConfigured, listConnectedAccounts, startAccountConnection,
+  ConnectedAccount
+} from '../services/pipedream';
 
 interface SettingsModalProps {
   settings: AISettings;
@@ -32,6 +36,40 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
   const updateMcpToken = (index: number, field: 'url' | 'token', value: string) => {
     setMcpTokens(prev => prev.map((row, i) => i === index ? { ...row, [field]: value } : row));
+  };
+
+  // Pipedream Connect: accounts the user has linked through the bridge worker.
+  const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [appSlug, setAppSlug] = useState('');
+
+  const refreshAccounts = useCallback(async () => {
+    if (!isPipedreamConfigured()) return;
+
+    setLoadingAccounts(true);
+    setAccountsError(null);
+    try {
+      setAccounts(await listConnectedAccounts());
+    } catch (e) {
+      setAccountsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingAccounts(false);
+    }
+  }, []);
+
+  useEffect(() => { refreshAccounts(); }, [refreshAccounts]);
+
+  const handleConnect = async () => {
+    if (!appSlug.trim()) return;
+
+    try {
+      setAccountsError(null);
+      await startAccountConnection(appSlug.trim().toLowerCase());
+      setAppSlug('');
+    } catch (e) {
+      setAccountsError(e instanceof Error ? e.message : String(e));
+    }
   };
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
 
@@ -308,6 +346,82 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
               </div>
             )}
           </div>
+
+          {isPipedreamConfigured() && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                  {t.connectedAccounts || 'Подключённые аккаунты'}
+                </label>
+                <button
+                  type="button"
+                  onClick={refreshAccounts}
+                  disabled={loadingAccounts}
+                  className="text-[10px] font-mono uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors disabled:opacity-40"
+                >
+                  {loadingAccounts ? '...' : (t.refresh || 'обновить')}
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-500">
+                {t.connectedAccountsDesc || 'Через Pipedream. Подключите сервис, чтобы бот получил его инструменты — без этого список инструментов будет пустым.'}
+              </p>
+
+              <div className="space-y-1">
+                {accounts.length === 0 ? (
+                  <p className="text-[11px] text-slate-600 py-2">
+                    {t.noAccounts || 'Пока ничего не подключено.'}
+                  </p>
+                ) : accounts.map(account => (
+                  <div
+                    key={account.id}
+                    className="flex items-center justify-between px-3 py-2 rounded-lg bg-slate-950 border border-slate-800"
+                  >
+                    <div className="min-w-0">
+                      <span className="text-sm text-slate-200 block truncate">
+                        {account.appName || account.appSlug}
+                      </span>
+                      <span className="text-[9px] font-mono text-slate-600 block truncate">
+                        {account.appSlug}{account.name ? ` · ${account.name}` : ''}
+                      </span>
+                    </div>
+                    <span
+                      className={`shrink-0 ml-2 text-[9px] font-mono uppercase ${account.healthy ? 'text-emerald-500' : 'text-amber-500'}`}
+                    >
+                      {account.healthy ? 'ok' : (t.needsAttention || 'проверьте')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <input
+                  type="text"
+                  value={appSlug}
+                  onChange={(e) => setAppSlug(e.target.value)}
+                  placeholder="slack, notion, google_sheets, github"
+                  className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-[11px]"
+                />
+                <button
+                  type="button"
+                  onClick={handleConnect}
+                  disabled={!appSlug.trim()}
+                  className="shrink-0 px-4 py-2 rounded-lg bg-indigo-900/40 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/60 transition-colors disabled:opacity-40"
+                >
+                  {t.connect || 'Подключить'}
+                </button>
+              </div>
+
+              {accountsError && (
+                <div className="px-3 py-2 rounded-lg bg-rose-950/30 border border-rose-500/30 text-rose-300 text-[11px]">
+                  {accountsError}
+                </div>
+              )}
+
+              <p className="text-[10px] text-slate-600 leading-relaxed">
+                {t.connectHint || 'Откроется страница Pipedream в новой вкладке. После подключения вернитесь сюда и нажмите «обновить».'}
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">

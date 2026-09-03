@@ -154,7 +154,10 @@ const getAccessToken = async (env: Env): Promise<string> => {
     });
 
     if (!response.ok) {
-        throw new Error(`Pipedream token exchange failed (${response.status})`);
+        // Pipedream's body says which half is wrong (unknown client vs bad
+        // secret); without it a 401 here is undiagnosable.
+        const detail = await response.text().catch(() => '');
+        throw new Error(`Pipedream token exchange failed (${response.status}): ${detail.slice(0, 300)}`);
     }
 
     const data = (await response.json()) as { access_token: string; expires_in?: number };
@@ -238,6 +241,43 @@ const handleConnectToken = async (
     return json(data, 200, cors);
 };
 
+/**
+ * Lists the accounts this user has connected, so the app can offer them as
+ * tool servers instead of asking people to type app slugs.
+ */
+const handleAccounts = async (
+    _request: Request, env: Env, uid: string, cors: Record<string, string>
+): Promise<Response> => {
+    const accessToken = await getAccessToken(env);
+
+    const url = new URL(`${PIPEDREAM_API}/connect/${env.PIPEDREAM_PROJECT_ID}/accounts`);
+    url.searchParams.set('external_user_id', uid);
+
+    const response = await fetch(url.toString(), {
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'X-PD-Environment': env.PIPEDREAM_ENVIRONMENT
+        }
+    });
+
+    const data = (await response.json().catch(() => ({}))) as any;
+
+    if (!response.ok) {
+        return json({ error: 'Pipedream rejected the account list', detail: data }, 502, cors);
+    }
+
+    // Trimmed to what the UI needs; the raw payload carries credential metadata.
+    const accounts = (data.data || []).map((account: any) => ({
+        id: account.id,
+        name: account.name || account.external_id || account.app?.name,
+        appSlug: account.app?.name_slug,
+        appName: account.app?.name,
+        healthy: account.healthy !== false
+    }));
+
+    return json({ accounts }, 200, cors);
+};
+
 /** Forwards one MCP JSON-RPC message, adding the credentials and identity. */
 const handleMcp = async (
     request: Request, env: Env, uid: string, cors: Record<string, string>
@@ -310,6 +350,9 @@ export default {
         try {
             if (url.pathname === '/pd/connect-token') {
                 return await handleConnectToken(request, env, uid, cors);
+            }
+            if (url.pathname === '/pd/accounts') {
+                return await handleAccounts(request, env, uid, cors);
             }
             if (url.pathname === '/pd/mcp') {
                 return await handleMcp(request, env, uid, cors);

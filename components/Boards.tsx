@@ -12,6 +12,9 @@ import {
     triggerAgentReplies, runBotDiscussion,
     MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS
 } from '../services/boardAgent';
+import {
+    isPipedreamConfigured, listConnectedAccounts, toolServerUrlFor, ConnectedAccount
+} from '../services/pipedream';
 
 interface BoardsProps {
     settings: AISettings;
@@ -48,6 +51,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [modalInput, setModalInput] = useState('');
     const [botPrompt, setBotPrompt] = useState('');
     const [botToolUrl, setBotToolUrl] = useState('');
+    const [pipedreamAccounts, setPipedreamAccounts] = useState<ConnectedAccount[]>([]);
     const [clonable, setClonable] = useState<Array<Record<string, any>>>([]);
     const [selectedClone, setSelectedClone] = useState<Record<string, any> | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -78,6 +82,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                     .slice(0, MAX_DISCUSSION_BOTS)
                     .map(b => b.id)
             );
+        }
+
+        if (state.kind === 'createBot' && isPipedreamConfigured()) {
+            listConnectedAccounts()
+                .then(setPipedreamAccounts)
+                .catch(() => setPipedreamAccounts([]));
         }
 
         if (state.kind === 'cloneAgent') {
@@ -852,6 +862,29 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
                                     {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'}
                                 </label>
+
+                                {pipedreamAccounts.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 mb-2">
+                                        {pipedreamAccounts.filter(a => a.appSlug).map(account => {
+                                            const url = toolServerUrlFor(account.appSlug!);
+                                            const picked = botToolUrl === url;
+
+                                            return (
+                                                <button
+                                                    key={account.id}
+                                                    type="button"
+                                                    onClick={() => setBotToolUrl(picked ? '' : url)}
+                                                    className={`text-[10px] font-mono px-2 py-1 rounded border transition-all ${picked
+                                                        ? 'bg-indigo-950/50 border-indigo-500/40 text-indigo-200'
+                                                        : 'border-slate-700 text-slate-400 hover:border-slate-500'
+                                                        }`}
+                                                >
+                                                    {account.appName || account.appSlug}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                                 <input
                                     type="text"
                                     value={botToolUrl}
