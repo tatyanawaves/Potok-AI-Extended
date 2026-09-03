@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { AISettings, BoardMember, BoardMessage } from '../types';
 import { getRecentMessages, sendMessage, isBot } from './boards';
 import { connect, callTool, toOpenAITools, McpConnection } from './mcp';
+import { auth } from './firebase';
 
 /**
  * Generates agent replies inside board channels.
@@ -20,8 +21,26 @@ const MAX_TOOL_RESULT_LENGTH = 6000;
  * but any token for it is private: it lives in the mentioning user's own
  * settings, keyed by server URL, and never touches Firestore.
  */
-const tokenForServer = (url: string, settings: AISettings): string | undefined =>
-    settings.mcpTokens?.[url]?.trim() || undefined;
+const PIPEDREAM_WORKER_URL: string = ((import.meta as any).env?.VITE_PIPEDREAM_WORKER_URL || '')
+    .replace(/\/$/, '');
+
+/**
+ * Resolves the bearer token for a tool server.
+ *
+ * The Pipedream bridge is authenticated with the caller's Firebase ID token —
+ * it derives the Pipedream end-user identity from it, so the token is
+ * short-lived and cannot be stored in settings. Every other server uses a
+ * static token the user pasted.
+ */
+const tokenForServer = async (
+    url: string,
+    settings: AISettings
+): Promise<string | undefined> => {
+    if (PIPEDREAM_WORKER_URL && url.startsWith(PIPEDREAM_WORKER_URL)) {
+        return auth.currentUser?.getIdToken();
+    }
+    return settings.mcpTokens?.[url]?.trim() || undefined;
+};
 
 /** Handshakes are reused per URL — listing tools on every turn is wasteful. */
 const connectionCache = new Map<string, McpConnection>();
@@ -33,7 +52,7 @@ const connectToToolServer = async (
     const cached = connectionCache.get(url);
     if (cached) return cached;
 
-    const connection = await connect(url, tokenForServer(url, settings));
+    const connection = await connect(url, await tokenForServer(url, settings));
     connectionCache.set(url, connection);
     return connection;
 };
@@ -279,7 +298,7 @@ export const generateAgentReply = async (
                     connection,
                     call.name,
                     args,
-                    tokenForServer(agent.toolServerUrl!, settings)
+                    await tokenForServer(agent.toolServerUrl!, settings)
                 );
             } catch (error) {
                 // Reported back to the model rather than thrown: it can retry
