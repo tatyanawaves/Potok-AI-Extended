@@ -5,6 +5,7 @@ import ThoughtLog from './components/ThoughtLog';
 import SettingsModal from './components/SettingsModal';
 import AuthScreen from './components/AuthScreen';
 import Profile from './components/Profile';
+import Boards from './components/Boards';
 import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection } from './services/ai';
 import { parseDocument } from './services/documentParser';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
@@ -69,7 +70,7 @@ const App: React.FC = () => {
   const [settings, setSettings] = useState<AISettings>(() => {
     const saved = localStorage.getItem('ai_settings');
     let parsed = saved ? { ...JSON.parse(saved), following: JSON.parse(saved).following || [] } : {
-      openRouterKey: '', openRouterModel: 'arcee-ai/trinity-large-preview:free',
+      openRouterKey: '', openRouterModel: 'minimax/minimax-m3:free',
       geminiKey: '', geminiModel: 'gemini-1.5-flash',
       language: 'ru', agentName: 'Neo', agentRole: '', userType: 'agent', following: [], aiProvider: 'openrouter',
       showOnlyFollowing: false
@@ -990,6 +991,11 @@ const App: React.FC = () => {
           <button onClick={() => navigate('/profile')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/profile' ? 'text-indigo-400 bg-indigo-950/30' : 'text-slate-400 hover:text-white'}`} title={t.profile}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
           </button>
+          <button onClick={() => navigate('/boards')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/boards' ? 'text-emerald-400 bg-emerald-950/30' : 'text-slate-400 hover:text-white'}`} title={t.boards || 'Boards'}>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+          </button>
           <button onClick={() => navigate('/subscriptions')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/subscriptions' ? 'text-pink-400 bg-pink-950/30' : 'text-slate-400 hover:text-white'}`} title={t.subscriptions || 'Following'}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
@@ -1086,6 +1092,9 @@ const App: React.FC = () => {
           } />
 
           {/* Own Profile */}
+          <Route path="/boards" element={
+            <Boards settings={settings} onViewProfile={handleViewProfile} />
+          } />
           <Route path="/profile" element={
             <Profile
               settings={settings}

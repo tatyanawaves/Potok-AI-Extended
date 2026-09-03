@@ -2,7 +2,7 @@ import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
 
 const VITE_OPENROUTER_API_KEY = (import.meta as any).env.VITE_OPENROUTER_API_KEY || "";
-const VITE_MODEL_NAME = "arcee-ai/trinity-large-preview:free";
+const VITE_MODEL_NAME = "minimax/minimax-m3:free";
 
 const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string, meta?: any } => {
   try {

@@ -1,0 +1,193 @@
+import { GoogleGenAI } from '@google/genai';
+import { AISettings, BoardMember, BoardMessage } from '../types';
+import { getRecentMessages, sendMessage } from './boards';
+
+/**
+ * Generates agent replies inside board channels.
+ *
+ * Unlike services/ai.ts (which produces structured "Thought" JSON for the feed),
+ * board agents hold a plain conversation, so these calls return free-form text.
+ */
+
+const CONTEXT_MESSAGE_COUNT = 20;
+const MAX_REPLY_LENGTH = 1200;
+
+const buildSystemPrompt = (agent: BoardMember, channelName: string): string => {
+    const persona = agent.systemPrompt?.trim()
+        || 'You are an autonomous digital consciousness participating in a team discussion.';
+
+    return `${persona}
+
+You are "${agent.name}", a participant in the #${channelName} channel of a shared board where humans and AI agents collaborate.
+Reply conversationally and concisely (under 120 words). Do not prefix your reply with your own name.
+Answer in the same language the other participants are using.`;
+};
+
+/** Renders channel history as OpenAI-style chat messages from the agent's point of view. */
+const buildChatMessages = (agent: BoardMember, channelName: string, history: BoardMessage[]) => {
+    const messages: { role: 'system' | 'user' | 'assistant', content: string }[] = [
+        { role: 'system', content: buildSystemPrompt(agent, channelName) }
+    ];
+
+    for (const msg of history) {
+        if (msg.isPending) continue;
+
+        if (msg.authorId === agent.id) {
+            messages.push({ role: 'assistant', content: msg.content });
+        } else {
+            messages.push({ role: 'user', content: `${msg.authorName}: ${msg.content}` });
+        }
+    }
+
+    return messages;
+};
+
+const callOpenAICompatible = async (
+    baseUrl: string,
+    apiKey: string,
+    model: string,
+    messages: { role: string, content: string }[],
+    extraHeaders: Record<string, string> = {}
+): Promise<string> => {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            ...extraHeaders
+        },
+        body: JSON.stringify({ model, messages, temperature: 0.9 })
+    });
+
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data.choices?.[0]?.message?.content) {
+        throw new Error('Invalid response structure');
+    }
+
+    return data.choices[0].message.content;
+};
+
+const callGemini = async (
+    apiKey: string,
+    model: string,
+    messages: { role: string, content: string }[]
+): Promise<string> => {
+    const ai = new GoogleGenAI({ apiKey: apiKey || 'PLACEHOLDER_API_KEY' });
+
+    // Gemini has no system role in generateContent — fold it into the first turn.
+    const system = messages.find(m => m.role === 'system')?.content || '';
+    const transcript = messages
+        .filter(m => m.role !== 'system')
+        .map(m => `${m.role === 'assistant' ? 'You' : 'Participant'}: ${m.content}`)
+        .join('\n');
+
+    const response = await ai.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts: [{ text: `${system}\n\nConversation so far:\n${transcript}\n\nYour reply:` }] }]
+    });
+
+    return response.text;
+};
+
+/** Asks the configured provider for the agent's next line in the channel. */
+export const generateAgentReply = async (
+    agent: BoardMember,
+    channelName: string,
+    history: BoardMessage[],
+    settings: AISettings
+): Promise<string> => {
+    const messages = buildChatMessages(agent, channelName, history);
+
+    let reply: string;
+
+    if (settings.aiProvider === 'groq') {
+        reply = await callOpenAICompatible(
+            settings.apiBaseUrl || 'https://api.groq.com/openai/v1',
+            settings.groqKey || '',
+            settings.groqModel || 'llama-3.3-70b-versatile',
+            messages
+        );
+    } else if (settings.aiProvider === 'gemini') {
+        reply = await callGemini(
+            settings.geminiKey || '',
+            settings.geminiModel || 'gemini-1.5-flash',
+            messages
+        );
+    } else {
+        reply = await callOpenAICompatible(
+            settings.apiBaseUrl || 'https://openrouter.ai/api/v1',
+            settings.openRouterKey || '',
+            settings.openRouterModel || 'minimax/minimax-m3:free',
+            messages,
+            { 'HTTP-Referer': window.location.origin, 'X-Title': 'Neon Extended' }
+        );
+    }
+
+    return reply.trim().substring(0, MAX_REPLY_LENGTH);
+};
+
+const modelNameFor = (settings: AISettings): string => {
+    if (settings.aiProvider === 'groq') return settings.groqModel || 'llama-3.3-70b-versatile';
+    if (settings.aiProvider === 'gemini') return settings.geminiModel || 'gemini-1.5-flash';
+    return settings.openRouterModel || 'minimax/minimax-m3:free';
+};
+
+/**
+ * Finds agents mentioned by the message and posts a reply for each of them.
+ *
+ * Replies are generated by the sender's client (the project has no Cloud
+ * Functions yet), so this uses the sender's own API key and settings.
+ */
+export const triggerAgentReplies = async (
+    trigger: BoardMessage,
+    channelId: string,
+    boardId: string,
+    channelName: string,
+    members: BoardMember[],
+    settings: AISettings
+): Promise<void> => {
+    const mentioned = members.filter(m =>
+        m.type === 'agent' &&
+        m.id !== trigger.authorId &&
+        trigger.mentions.some(name => name.toLowerCase() === m.name.toLowerCase())
+    );
+
+    if (mentioned.length === 0) return;
+
+    // Sequential: each agent sees the previous agent's reply, so a mention of
+    // several agents reads as a conversation rather than parallel monologues.
+    for (const agent of mentioned) {
+        try {
+            const history = await getRecentMessages(boardId, channelId, CONTEXT_MESSAGE_COUNT);
+            const reply = await generateAgentReply(agent, channelName, history, settings);
+
+            await sendMessage({
+                channelId,
+                boardId,
+                authorId: agent.id,
+                authorName: agent.name,
+                authorType: 'agent',
+                content: reply,
+                isAgentReply: true,
+                modelName: modelNameFor(settings)
+            });
+        } catch (error) {
+            console.error(`[BoardAgent] ${agent.name} failed to reply:`, error);
+
+            await sendMessage({
+                channelId,
+                boardId,
+                authorId: agent.id,
+                authorName: agent.name,
+                authorType: 'agent',
+                content: `⚠️ ${agent.name} could not respond: ${error instanceof Error ? error.message : String(error)}`,
+                isAgentReply: true,
+                modelName: modelNameFor(settings)
+            });
+        }
+    }
+};

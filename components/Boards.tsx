@@ -1,0 +1,596 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { AISettings, Board, BoardChannel, BoardMember, BoardMessage } from '../types';
+import { translations } from '../translations';
+import { auth, getUserProfileByName } from '../services/firebase';
+import {
+    createBoard, subscribeToMyBoards, deleteBoard,
+    addMember, removeMember,
+    createChannel, subscribeToChannels, deleteChannel,
+    subscribeToMessages, sendMessage, deleteMessage, parseMentions
+} from '../services/boards';
+import { triggerAgentReplies } from '../services/boardAgent';
+
+interface BoardsProps {
+    settings: AISettings;
+    onViewProfile: (name: string, id?: string) => void;
+}
+
+const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
+    const t = translations[settings.language] as any;
+    const currentUid = auth.currentUser?.uid;
+
+    const [boards, setBoards] = useState<Board[]>([]);
+    const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+    const [channels, setChannels] = useState<BoardChannel[]>([]);
+    const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
+    const [messages, setMessages] = useState<BoardMessage[]>([]);
+
+    const [draft, setDraft] = useState('');
+    const [isAgentThinking, setIsAgentThinking] = useState(false);
+    const [showMembers, setShowMembers] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    // In-app dialogs. window.prompt/confirm are blocked in some browser
+    // contexts, so every input goes through this modal instead.
+    type ModalState =
+        | { kind: 'createBoard' }
+        | { kind: 'createChannel' }
+        | { kind: 'addMember', memberType: 'human' | 'agent' }
+        | { kind: 'deleteBoard', boardId: string, boardName: string };
+
+    const [modal, setModal] = useState<ModalState | null>(null);
+    const [modalInput, setModalInput] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+    const modalInputRef = useRef<HTMLInputElement>(null);
+
+    const openModal = (state: ModalState) => {
+        setModalInput('');
+        setError(null);
+        setModal(state);
+    };
+
+    const closeModal = () => {
+        setModal(null);
+        setModalInput('');
+    };
+
+    const activeBoard = useMemo(
+        () => boards.find(b => b.id === activeBoardId) || null,
+        [boards, activeBoardId]
+    );
+    const activeChannel = useMemo(
+        () => channels.find(c => c.id === activeChannelId) || null,
+        [channels, activeChannelId]
+    );
+
+    // --- Subscriptions ---
+
+    useEffect(() => {
+        if (!currentUid) return;
+        return subscribeToMyBoards(currentUid, setBoards);
+    }, [currentUid]);
+
+    useEffect(() => {
+        if (!activeBoardId) {
+            setChannels([]);
+            return;
+        }
+        return subscribeToChannels(activeBoardId, setChannels);
+    }, [activeBoardId]);
+
+    useEffect(() => {
+        if (!activeBoardId || !activeChannelId) {
+            setMessages([]);
+            return;
+        }
+        return subscribeToMessages(activeBoardId, activeChannelId, setMessages);
+    }, [activeBoardId, activeChannelId]);
+
+    // Select the first board / channel once they load.
+    useEffect(() => {
+        if (!activeBoardId && boards.length > 0) setActiveBoardId(boards[0].id!);
+    }, [boards, activeBoardId]);
+
+    useEffect(() => {
+        if (channels.length === 0) {
+            setActiveChannelId(null);
+        } else if (!channels.some(c => c.id === activeChannelId)) {
+            setActiveChannelId(channels[0].id!);
+        }
+    }, [channels, activeChannelId]);
+
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    // --- Actions ---
+
+    const handleCreateBoard = async (name: string) => {
+        if (!name.trim() || !currentUid) return;
+
+        const created = await createBoard(name.trim(), '', { id: currentUid, name: settings.agentName || 'User' });
+        setActiveBoardId(created.id);
+    };
+
+    const handleDeleteBoard = async (boardId: string) => {
+        await deleteBoard(boardId);
+        if (activeBoardId === boardId) setActiveBoardId(null);
+    };
+
+    const handleCreateChannel = async (name: string) => {
+        if (!name.trim() || !activeBoardId) return;
+        await createChannel(activeBoardId, name.trim(), '');
+    };
+
+    const handleAddMember = async (type: 'human' | 'agent', name: string) => {
+        if (!name.trim() || !activeBoardId) return;
+
+        const profile = await getUserProfileByName(name.trim());
+        if (!profile) {
+            throw new Error(`${t.userNotFound || 'Профиль не найден'}: ${name}`);
+        }
+
+        if (activeBoard?.memberIds.includes(profile.uid)) {
+            throw new Error(t.alreadyMember || 'Уже участник доски');
+        }
+
+        await addMember(activeBoardId, {
+            id: profile.uid,
+            name: profile.agentName,
+            type,
+            systemPrompt: type === 'agent' ? profile.agentPrompt : undefined,
+            respondsToMentions: type === 'agent' ? true : undefined
+        });
+    };
+
+    /** Runs the action behind the currently open modal. */
+    const handleModalSubmit = async () => {
+        if (!modal || isSubmitting) return;
+
+        setIsSubmitting(true);
+        setError(null);
+
+        try {
+            if (modal.kind === 'createBoard') {
+                await handleCreateBoard(modalInput);
+            } else if (modal.kind === 'createChannel') {
+                await handleCreateChannel(modalInput);
+            } else if (modal.kind === 'addMember') {
+                await handleAddMember(modal.memberType, modalInput);
+            } else if (modal.kind === 'deleteBoard') {
+                await handleDeleteBoard(modal.boardId);
+            }
+            closeModal();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    const handleSend = async () => {
+        const content = draft.trim();
+        if (!content || !activeChannelId || !currentUid || !activeChannel || !activeBoard) return;
+
+        setDraft('');
+        setError(null);
+
+        try {
+            const sent = await sendMessage({
+                channelId: activeChannelId,
+                boardId: activeBoard.id!,
+                authorId: currentUid,
+                authorName: settings.agentName || 'User',
+                authorType: settings.userType === 'agent' ? 'agent' : 'human',
+                content
+            });
+
+            // Agents mentioned with @name reply using this client's API key.
+            const mentionsAgent = activeBoard.members.some(m =>
+                m.type === 'agent' &&
+                m.id !== currentUid &&
+                new RegExp(`@${m.name}\\b`, 'iu').test(content)
+            );
+
+            if (mentionsAgent) {
+                setIsAgentThinking(true);
+                try {
+                    await triggerAgentReplies(
+                        {
+                            id: sent.id,
+                            channelId: activeChannelId,
+                            boardId: activeBoard.id!,
+                            authorId: currentUid,
+                            authorName: settings.agentName || 'User',
+                            authorType: 'human',
+                            content,
+                            mentions: parseMentions(content),
+                            timestamp: Date.now()
+                        },
+                        activeChannelId,
+                        activeBoard.id!,
+                        activeChannel.name,
+                        activeBoard.members,
+                        settings
+                    );
+                } finally {
+                    setIsAgentThinking(false);
+                }
+            }
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+    };
+
+    // --- Render ---
+
+    if (!currentUid) {
+        return (
+            <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
+                {t.loginRequired || 'Войдите, чтобы использовать доски'}
+            </div>
+        );
+    }
+
+    return (
+        // Absolute rather than h-full: the routed <main> is a flex child whose
+        // height is content-driven, so a percentage height would collapse.
+        <div className="absolute inset-0 flex bg-slate-950">
+
+            {/* Board list */}
+            <aside className="w-56 shrink-0 border-r border-slate-800 bg-slate-900/40 flex flex-col">
+                <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+                    <span className="font-mono text-[10px] uppercase tracking-widest text-cyan-500 font-bold">
+                        {t.boards || 'Доски'}
+                    </span>
+                    <button
+                        onClick={() => openModal({ kind: 'createBoard' })}
+                        className="text-slate-500 hover:text-cyan-400 transition-colors"
+                        title={t.createBoard || 'Создать доску'}
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                    {boards.length === 0 ? (
+                        <p className="text-center text-slate-600 text-xs p-6 leading-relaxed">
+                            {t.noBoards || 'Пока нет досок. Создайте первую.'}
+                        </p>
+                    ) : boards.map(board => (
+                        <div
+                            key={board.id}
+                            onClick={() => setActiveBoardId(board.id!)}
+                            className={`group px-3 py-2 rounded-lg cursor-pointer border transition-all ${activeBoardId === board.id
+                                ? 'bg-cyan-950/30 border-cyan-500/30 text-cyan-300'
+                                : 'border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
+                                }`}
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium truncate">{board.name}</span>
+                                {board.ownerId === currentUid && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); openModal({ kind: 'deleteBoard', boardId: board.id!, boardName: board.name }); }}
+                                        className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                                        title={t.delete || 'Удалить'}
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                        </svg>
+                                    </button>
+                                )}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-600 mt-0.5">
+                                {board.members.length} {t.membersShort || 'уч.'} · {board.members.filter(m => m.type === 'agent').length} AI
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </aside>
+
+            {/* Channel list */}
+            {activeBoard && (
+                <aside className="w-48 shrink-0 border-r border-slate-800 bg-slate-900/20 flex flex-col">
+                    <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+                        <span className="font-mono text-[10px] uppercase tracking-widest text-indigo-400 font-bold">
+                            {t.channels || 'Каналы'}
+                        </span>
+                        <button
+                            onClick={() => openModal({ kind: 'createChannel' })}
+                            className="text-slate-500 hover:text-indigo-400 transition-colors"
+                            title={t.createChannel || 'Создать канал'}
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
+                        {channels.map(channel => (
+                            <div
+                                key={channel.id}
+                                onClick={() => setActiveChannelId(channel.id!)}
+                                className={`group px-3 py-1.5 rounded-md cursor-pointer flex items-center justify-between transition-all ${activeChannelId === channel.id
+                                    ? 'bg-indigo-950/40 text-indigo-300'
+                                    : 'text-slate-500 hover:bg-slate-800/50 hover:text-slate-300'
+                                    }`}
+                            >
+                                <span className="text-sm truncate font-mono">#{channel.name}</span>
+                                {activeBoard.ownerId === currentUid && channels.length > 1 && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); deleteChannel(activeBoard.id!, channel.id!); }}
+                                        className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                        </svg>
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </aside>
+            )}
+
+            {/* Message area */}
+            <section className="flex-1 flex flex-col min-w-0">
+                {!activeBoard ? (
+                    <div className="flex-1 flex items-center justify-center text-slate-600 text-sm px-8 text-center">
+                        {t.selectOrCreateBoard || 'Выберите доску или создайте новую'}
+                    </div>
+                ) : (
+                    <>
+                        <header className="h-14 shrink-0 border-b border-slate-800 flex items-center justify-between px-5">
+                            <div className="min-w-0">
+                                <div className="font-mono text-sm text-slate-200 truncate">
+                                    #{activeChannel?.name || '—'}
+                                </div>
+                                <div className="text-[10px] text-slate-600 truncate">{activeBoard.name}</div>
+                            </div>
+
+                            <button
+                                onClick={() => setShowMembers(!showMembers)}
+                                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showMembers
+                                    ? 'bg-cyan-950/30 border-cyan-500/30 text-cyan-300'
+                                    : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                                    }`}
+                            >
+                                {t.members || 'Участники'} ({activeBoard.members.length})
+                            </button>
+                        </header>
+
+                        {error && (
+                            <div className="mx-5 mt-3 px-3 py-2 rounded-lg bg-rose-950/30 border border-rose-500/30 text-rose-300 text-xs flex justify-between items-center">
+                                <span>{error}</span>
+                                <button onClick={() => setError(null)} className="text-rose-500 hover:text-rose-300 ml-3">✕</button>
+                            </div>
+                        )}
+
+                        <div className="flex-1 flex min-h-0">
+                            <div className="flex-1 overflow-y-auto p-5 space-y-4 min-w-0">
+                                {messages.length === 0 ? (
+                                    <p className="text-center text-slate-600 text-xs py-12 leading-relaxed">
+                                        {t.noMessages || 'Сообщений пока нет.'}<br />
+                                        {t.mentionHint || 'Упомяните агента через @имя, чтобы он ответил.'}
+                                    </p>
+                                ) : messages.map(msg => (
+                                    <div key={msg.id} className="group flex space-x-3">
+                                        <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono ${msg.authorType === 'agent'
+                                            ? 'bg-indigo-950/60 text-indigo-300 border border-indigo-500/30'
+                                            : 'bg-slate-800 text-slate-300 border border-slate-700'
+                                            }`}>
+                                            {msg.authorName.charAt(0).toUpperCase()}
+                                        </div>
+
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-baseline space-x-2">
+                                                <button
+                                                    onClick={() => onViewProfile(msg.authorName, msg.authorId)}
+                                                    className={`text-sm font-bold hover:underline ${msg.authorType === 'agent' ? 'text-indigo-300' : 'text-slate-200'}`}
+                                                >
+                                                    {msg.authorName}
+                                                </button>
+                                                {msg.authorType === 'agent' && (
+                                                    <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-950/50 text-indigo-400 border border-indigo-500/20">
+                                                        AI
+                                                    </span>
+                                                )}
+                                                <span className="text-[10px] text-slate-600 font-mono">
+                                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </span>
+                                                {msg.authorId === currentUid && (
+                                                    <button
+                                                        onClick={() => deleteMessage(activeBoard.id!, msg.channelId, msg.id!)}
+                                                        className="text-slate-700 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity text-[10px]"
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                )}
+                                            </div>
+                                            <p className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
+                                                {msg.content}
+                                            </p>
+                                            {msg.modelName && (
+                                                <div className="text-[9px] font-mono text-slate-700 mt-1">{msg.modelName}</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+
+                                {isAgentThinking && (
+                                    <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono pl-11">
+                                        <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
+                                        <span>{t.agentThinking || 'агент печатает...'}</span>
+                                    </div>
+                                )}
+
+                                <div ref={messagesEndRef} />
+                            </div>
+
+                            {/* Members panel */}
+                            {showMembers && (
+                                <aside className="w-64 shrink-0 border-l border-slate-800 bg-slate-900/30 flex flex-col">
+                                    <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-slate-400">
+                                        {t.members || 'Участники'}
+                                    </div>
+
+                                    <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                                        {activeBoard.members.map(member => (
+                                            <div key={member.id} className="group px-3 py-2 rounded-lg hover:bg-slate-800/50 flex items-center justify-between">
+                                                <div className="min-w-0">
+                                                    <button
+                                                        onClick={() => onViewProfile(member.name, member.id)}
+                                                        className={`text-sm truncate hover:underline block ${member.type === 'agent' ? 'text-indigo-300' : 'text-slate-300'}`}
+                                                    >
+                                                        {member.name}
+                                                    </button>
+                                                    <span className="text-[9px] font-mono text-slate-600 uppercase">
+                                                        {member.type === 'agent' ? 'AI Agent' : 'Human'}
+                                                        {member.role === 'owner' && ` · ${t.owner || 'владелец'}`}
+                                                    </span>
+                                                </div>
+
+                                                {activeBoard.ownerId === currentUid && member.role !== 'owner' && (
+                                                    <button
+                                                        onClick={() => removeMember(activeBoard.id!, member.id).catch(e => setError(String(e)))}
+                                                        className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                                            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                                        </svg>
+                                                    </button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {activeBoard.ownerId === currentUid && (
+                                        <div className="p-3 border-t border-slate-800 space-y-2">
+                                            <button
+                                                onClick={() => openModal({ kind: 'addMember', memberType: 'agent' })}
+                                                className="w-full py-2 rounded-lg bg-indigo-900/30 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/50 transition-colors"
+                                            >
+                                                + {t.addAgent || 'Добавить агента'}
+                                            </button>
+                                            <button
+                                                onClick={() => openModal({ kind: 'addMember', memberType: 'human' })}
+                                                className="w-full py-2 rounded-lg bg-slate-800/50 text-slate-300 border border-slate-700 text-[10px] font-mono uppercase tracking-wider hover:bg-slate-800 transition-colors"
+                                            >
+                                                + {t.addHuman || 'Добавить человека'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </aside>
+                            )}
+                        </div>
+
+                        {/* Composer */}
+                        <div className="shrink-0 border-t border-slate-800 p-4">
+                            <div className="flex items-end space-x-3">
+                                <textarea
+                                    value={draft}
+                                    onChange={(e) => setDraft(e.target.value)}
+                                    onKeyDown={handleKeyDown}
+                                    disabled={!activeChannelId}
+                                    placeholder={activeChannel
+                                        ? `${t.messagePlaceholder || 'Сообщение в'} #${activeChannel.name}  ·  @${t.mentionAgentHint || 'имя для вызова агента'}`
+                                        : (t.noChannel || 'Создайте канал')}
+                                    className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors resize-none h-[46px] max-h-32 disabled:opacity-40"
+                                />
+                                <button
+                                    onClick={handleSend}
+                                    disabled={!draft.trim() || !activeChannelId}
+                                    className="h-[46px] px-5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-bold transition-all active:scale-95 shrink-0"
+                                >
+                                    {t.send || 'Отпр.'}
+                                </button>
+                            </div>
+                        </div>
+                    </>
+                )}
+            </section>
+
+            {/* Dialogs — replaces window.prompt/confirm, which browsers may block */}
+            {modal && (
+                <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+                    <form
+                        onSubmit={(e) => { e.preventDefault(); handleModalSubmit(); }}
+                        className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-in fade-in zoom-in duration-200"
+                    >
+                        <h3 className="text-lg font-bold font-display text-white mb-1">
+                            {modal.kind === 'createBoard' && (t.createBoard || 'Создать доску')}
+                            {modal.kind === 'createChannel' && (t.createChannel || 'Создать канал')}
+                            {modal.kind === 'addMember' && (modal.memberType === 'agent'
+                                ? (t.addAgent || 'Добавить агента')
+                                : (t.addHuman || 'Добавить человека'))}
+                            {modal.kind === 'deleteBoard' && (t.deleteBoard || 'Удалить доску')}
+                        </h3>
+
+                        <p className="text-slate-500 text-xs mb-4">
+                            {modal.kind === 'createBoard' && (t.boardNameHint || 'Название нового пространства')}
+                            {modal.kind === 'createChannel' && (t.channelNameHint || 'Название канала внутри доски')}
+                            {modal.kind === 'addMember' && (t.memberNameHint || 'Имя существующего профиля в Потоке')}
+                            {modal.kind === 'deleteBoard' && `«${modal.boardName}» — ${t.boardDeleteConfirm || 'доска, каналы и все сообщения будут удалены безвозвратно.'}`}
+                        </p>
+
+                        {modal.kind !== 'deleteBoard' && (
+                            <input
+                                ref={modalInputRef}
+                                autoFocus
+                                type="text"
+                                value={modalInput}
+                                onChange={(e) => setModalInput(e.target.value)}
+                                placeholder={modal.kind === 'addMember' ? 'Neo' : (modal.kind === 'createChannel' ? 'general' : '')}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-sm mb-4"
+                            />
+                        )}
+
+                        {error && (
+                            <div className="mb-4 px-3 py-2 rounded-lg bg-rose-950/30 border border-rose-500/30 text-rose-300 text-xs">
+                                {error}
+                            </div>
+                        )}
+
+                        <div className="flex space-x-3">
+                            <button
+                                type="button"
+                                onClick={closeModal}
+                                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
+                            >
+                                {t.cancel || 'Отмена'}
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={isSubmitting || (modal.kind !== 'deleteBoard' && !modalInput.trim())}
+                                className={`flex-1 py-2.5 rounded-xl text-white font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg transition-colors disabled:opacity-40 ${modal.kind === 'deleteBoard'
+                                    ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-900/20'
+                                    : 'bg-cyan-600 hover:bg-cyan-500 shadow-cyan-900/20'
+                                    }`}
+                            >
+                                {isSubmitting
+                                    ? '...'
+                                    : modal.kind === 'deleteBoard'
+                                        ? (t.delete || 'Удалить')
+                                        : (t.create || 'Создать')}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default Boards;

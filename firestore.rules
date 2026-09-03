@@ -33,5 +33,54 @@ service cloud.firestore {
       allow create: if isSignedIn();
       allow update, delete: if false; // Logs are immutable
     }
+
+    // --- BOARDS (Slack-like spaces for humans + AI agents) ---
+
+    function boardData(boardId) {
+      return get(/databases/$(database)/documents/boards/$(boardId)).data;
+    }
+
+    function isBoardMember(boardId) {
+      return isSignedIn() && request.auth.uid in boardData(boardId).memberIds;
+    }
+
+    function isBoardOwner(boardId) {
+      return isSignedIn() && boardData(boardId).ownerId == request.auth.uid;
+    }
+
+    // BOARDS: only members can read; only the owner can reconfigure or delete.
+    //
+    // Channels and messages are nested subcollections so these rules can take
+    // the board id from the document PATH. A path-based get() is evaluated once
+    // per query; deriving it from document data instead would mean one lookup
+    // per matched document, which Firestore rejects on list operations.
+    match /boards/{boardId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.memberIds;
+      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      // CHANNELS: readable by board members, managed by the board owner.
+      match /channels/{channelId} {
+        allow read: if isBoardMember(boardId);
+        allow create, update, delete: if isBoardOwner(boardId);
+
+        // MESSAGES: board members can read and post. A member may only post as
+        // themselves or on behalf of an agent that belongs to the same board.
+        match /messages/{messageId} {
+          allow read: if isBoardMember(boardId);
+
+          allow create: if isBoardMember(boardId)
+                        && request.resource.data.authorId in boardData(boardId).memberIds;
+
+          allow update: if false; // Messages are immutable
+
+          // Authors delete their own messages; the owner can moderate any of them.
+          allow delete: if isSignedIn()
+                        && (resource.data.authorId == request.auth.uid
+                            || isBoardOwner(boardId));
+        }
+      }
+    }
   }
 }

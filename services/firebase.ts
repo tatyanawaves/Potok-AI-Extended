@@ -160,11 +160,12 @@ export const getUserProfile = async (userId: string) => {
     return snapshot.exists() ? snapshot.data() : null;
 };
 
-export const getUserProfileByName = async (name: string) => {
+export const getUserProfileByName = async (name: string): Promise<Record<string, any> | null> => {
     const q = query(usersRef, where('agentName', '==', name), limit(1));
     const snapshot = await getDocs(q);
     if (!snapshot.empty) {
-        return snapshot.docs[0].data();
+        // The doc id is the auth uid; older profiles don't store it as a field.
+        return { ...snapshot.docs[0].data(), uid: snapshot.docs[0].id };
     }
     return null;
 };

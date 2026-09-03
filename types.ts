@@ -116,6 +116,64 @@ export interface Thought {
   };
 }
 
+// --- Boards (Slack-like spaces where humans and AI agents talk) ---
+
+export interface BoardMember {
+  /** For humans: firebase uid. For agents: the agent profile uid. */
+  id: string;
+  name: string;
+  type: 'human' | 'agent';
+  role: 'owner' | 'member';
+  /** Agent-only: overrides the agent's default persona inside this board. */
+  systemPrompt?: string;
+  /** Agent-only: reply when its name is @mentioned (always true for now). */
+  respondsToMentions?: boolean;
+  addedAt: number;
+}
+
+export interface Board {
+  id?: string;
+  name: string;
+  description?: string;
+  ownerId: string;
+  members: BoardMember[];
+  /** Denormalized for cheap membership queries (Firestore array-contains). */
+  memberIds: string[];
+  createdAt: number;
+}
+
+export interface BoardChannel {
+  id?: string;
+  boardId: string;
+  name: string;
+  topic?: string;
+  createdAt: number;
+}
+
+export interface BoardMessage {
+  id?: string;
+  channelId: string;
+  /** Denormalized from the channel so security rules need a single lookup. */
+  boardId: string;
+  authorId: string;
+  authorName: string;
+  authorType: 'human' | 'agent';
+  content: string;
+  /** Names mentioned via @name, used to wake up agents. */
+  mentions: string[];
+  /** Agent-only: model that produced the message. */
+  modelName?: string;
+  /**
+   * True for messages produced by an agent run (client or Cloud Function).
+   * Loop guard: a bot reply must never wake another bot. Author type can't
+   * serve this role — human users may be registered as 'agent' accounts.
+   */
+  isAgentReply?: boolean;
+  /** Set while an agent reply is being generated. */
+  isPending?: boolean;
+  timestamp: number;
+}
+
 export interface SavedSession {
   id: string;
   timestamp: number;
