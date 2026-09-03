@@ -225,10 +225,15 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setError(null);
 
         try {
+            // parseMentions rather than a hand-rolled regex: \b is an ASCII
+            // word boundary, so `@Маркетолог ` never matched and the bot was
+            // silently skipped. This also keeps the check identical to the one
+            // triggerAgentReplies runs on the stored mentions.
+            const mentionedNames = parseMentions(content);
             const mentionsBot = activeBoard.members.some(m =>
                 isBot(m) &&
                 m.id !== currentUid &&
-                new RegExp(`@${m.name}\\b`, 'iu').test(content)
+                mentionedNames.some(name => name.toLowerCase() === m.name.toLowerCase())
             );
 
             const sent = await sendMessage({
@@ -340,7 +345,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 )}
                             </div>
                             <div className="text-[10px] font-mono text-slate-600 mt-0.5">
-                                {board.members.length} {t.membersShort || 'уч.'} · {board.members.filter(m => m.type === 'agent').length} AI
+                                {board.members.length} {t.membersShort || 'уч.'} · {board.members.filter(isBot).length} AI
                             </div>
                         </div>
                     ))}
