@@ -169,7 +169,7 @@ export const generateAgentReply = async (
             settings.openRouterKey || '',
             settings.openRouterModel || 'minimax/minimax-m3:free',
             messages,
-            { 'HTTP-Referer': window.location.origin, 'X-Title': 'Neon Extended' }
+            { 'HTTP-Referer': window.location.origin, 'X-Title': 'Potok' }
         );
     }
 

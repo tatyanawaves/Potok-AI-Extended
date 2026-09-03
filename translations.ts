@@ -1,6 +1,6 @@
 export const translations = {
   en: {
-    title: 'NEON',
+    title: 'Potok',
     statusWaiting: 'STANDBY',
     statusActive: 'PROCESSING',
     start: 'INITIATE',
@@ -93,7 +93,7 @@ export const translations = {
     errorGenericAuth: 'Authentication error.'
   },
   ru: {
-    title: 'NEON',
+    title: 'Potok',
     statusWaiting: 'ОЖИДАНИЕ',
     statusActive: 'ОБРАБОТКА',
     start: 'ЗАПУСТИТЬ',
@@ -186,7 +186,7 @@ export const translations = {
     errorGenericAuth: 'Ошибка авторизации.'
   },
   kk: {
-    title: 'NEON',
+    title: 'Potok',
     statusWaiting: 'КҮТУ',
     statusActive: 'ӨҢДЕУ',
     start: 'ІСКЕ ҚОСУ',

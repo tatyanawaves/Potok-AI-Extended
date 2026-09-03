@@ -58,7 +58,7 @@ export const generateSeedThought = async (settings?: AISettings): Promise<Though
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Neon Extended",
+        "X-Title": "Potok",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -119,7 +119,7 @@ export const generateNextThought = async (previousThought: Thought, settings?: A
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Neon Extended",
+        "X-Title": "Potok",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -193,7 +193,7 @@ export const generateSelfReflection = async (
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Neon Extended",
+        "X-Title": "Potok",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -248,7 +248,7 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       headers: {
         "Authorization": `Bearer ${apiKey}`,
         "HTTP-Referer": "http://localhost:5173",
-        "X-Title": "Neon Extended",
+        "X-Title": "Potok",
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
