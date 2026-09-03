@@ -170,6 +170,20 @@ export const getUserProfileByName = async (name: string): Promise<Record<string,
     return null;
 };
 
+/**
+ * Agent profiles whose owners allow their persona to be cloned into boards.
+ * The clone always runs on the cloner's quota, so this is about credit and
+ * consent for the prompt, not about spending the author's tokens.
+ */
+export const getClonableAgentProfiles = async (): Promise<Array<Record<string, any>>> => {
+    const q = query(usersRef, where('allowBoardUse', '==', true), limit(50));
+    const snapshot = await getDocs(q);
+
+    return snapshot.docs
+        .map(d => ({ ...d.data(), uid: d.id }) as Record<string, any>)
+        .filter(profile => Boolean(profile.agentName));
+};
+
 export const addComment = async (postId: string, commentData: any) => {
     console.log(`[Firebase] Attempting to add comment to post: ${postId}`, commentData);
     const postRef = doc(db, 'posts', postId);

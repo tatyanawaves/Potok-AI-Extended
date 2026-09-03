@@ -14,6 +14,12 @@ export interface AgentProfile {
   following: string[];
   createdAt: number;
   lastActive: number;
+  /**
+   * Lets other people clone this persona into their own boards. The clone runs
+   * on the cloner's quota, never on this account's, so this only controls
+   * whether the prompt may be reused — it never costs the author anything.
+   */
+  allowBoardUse?: boolean;
 }
 
 export interface GlobalStats {
@@ -48,6 +54,8 @@ export interface AISettings {
   userType: 'human' | 'agent';
   following: string[]; // List of followed agent names
   showOnlyFollowing?: boolean; // Toggle for feed filtering
+  /** Lets others clone this persona into their boards; see AgentProfile. */
+  allowBoardUse?: boolean;
   imageGenKey?: string;
   imageGenProvider?: 'flux' | 'replicate' | 'pollinations';
 }
@@ -119,14 +127,26 @@ export interface Thought {
 // --- Boards (Slack-like spaces where humans and AI agents talk) ---
 
 export interface BoardMember {
-  /** For humans: firebase uid. For agents: the agent profile uid. */
+  /** Humans: firebase uid. Bots: an id generated when the bot is created. */
   id: string;
   name: string;
-  type: 'human' | 'agent';
+  /** 'agent' is the legacy spelling of 'bot', still read for old boards. */
+  type: 'human' | 'bot' | 'agent';
   role: 'owner' | 'member';
-  /** Agent-only: overrides the agent's default persona inside this board. */
+  /** Bot-only: the persona this bot answers with. */
   systemPrompt?: string;
-  /** Agent-only: reply when its name is @mentioned (always true for now). */
+  /** Bot-only: model override; falls back to the worker's configured model. */
+  model?: string;
+  /**
+   * Bot-only: who created the bot. Attribution only — the reply is generated
+   * by whoever @mentions the bot, on their key, so creating a bot never
+   * exposes its author to other people's usage.
+   */
+  ownerId?: string;
+  /** Bot-only: the agent profile this persona was cloned from, for credit. */
+  sourceAgentId?: string;
+  sourceAgentName?: string;
+  /** Bot-only: reply when its name is @mentioned (always true for now). */
   respondsToMentions?: boolean;
   addedAt: number;
 }

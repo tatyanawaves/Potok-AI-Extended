@@ -1,7 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { AISettings, BoardMember, BoardMessage } from '../types';
-import { getRecentMessages, sendMessage } from './boards';
-import { auth } from './firebase';
+import { getRecentMessages, sendMessage, isBot } from './boards';
 
 /**
  * Generates agent replies inside board channels.
@@ -95,59 +94,12 @@ const callGemini = async (
 };
 
 /**
- * Worker endpoint that answers on a shared server-side key.
- *
- * When configured, board agents cost the app's key rather than the key of
- * whoever happened to @mention them — a personal key must never be spent on
- * someone else's agent. Without it the code falls back to the caller's own key.
- */
-const AGENT_WORKER_URL: string = (import.meta as any).env?.VITE_AGENT_WORKER_URL || '';
-
-export const isWorkerConfigured = (): boolean => Boolean(AGENT_WORKER_URL);
-
-const callWorker = async (
-    agent: BoardMember,
-    channelName: string,
-    history: BoardMessage[]
-): Promise<{ reply: string, modelName: string }> => {
-    const user = auth.currentUser;
-    if (!user) throw new Error('Not signed in');
-
-    const idToken = await user.getIdToken();
-
-    const response = await fetch(`${AGENT_WORKER_URL.replace(/\/$/, '')}/agent-reply`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${idToken}`,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            agentName: agent.name,
-            systemPrompt: agent.systemPrompt,
-            channelName,
-            history: history
-                .filter(m => !m.isPending)
-                .map(m => ({
-                    authorName: m.authorName,
-                    content: m.content,
-                    isSelf: m.authorId === agent.id
-                }))
-        })
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-        throw new Error((data as any).error || `Worker returned ${response.status}`);
-    }
-
-    return data as { reply: string, modelName: string };
-};
-
-/**
  * Asks for the agent's next line in the channel.
- * Returns the model that produced it, which differs between the shared worker
- * and the local fallback.
+ *
+ * Generation runs in the browser on the key of whoever @mentioned the bot:
+ * invoking a bot is what costs tokens, so the cost lands on the person who
+ * chose to invoke it. Nobody can spend another account's quota, and a bot's
+ * creator cannot be drained by other people using their bot.
  */
 export const generateAgentReply = async (
     agent: BoardMember,
@@ -155,14 +107,6 @@ export const generateAgentReply = async (
     history: BoardMessage[],
     settings: AISettings
 ): Promise<{ reply: string, modelName: string }> => {
-    if (AGENT_WORKER_URL) {
-        const result = await callWorker(agent, channelName, history);
-        return {
-            reply: result.reply.trim().substring(0, MAX_REPLY_LENGTH),
-            modelName: result.modelName
-        };
-    }
-
     const messages = buildChatMessages(agent, channelName, history);
 
     let reply: string;
@@ -203,11 +147,12 @@ const modelNameFor = (settings: AISettings): string => {
 };
 
 /**
- * Finds agents mentioned by the message and posts a reply for each of them.
+ * Finds bots mentioned by the message and posts a reply for each of them.
  *
- * The generation runs either on the shared worker (preferred — the app's key
- * pays) or, when no worker is configured, on the sender's own key. Either way
- * the reply is written to Firestore from here, by the sender's client.
+ * This runs entirely in the mentioning user's browser, on their own key. A
+ * reply therefore only happens while that tab is open — close it mid-generation
+ * and the bot stays silent, which is the accepted trade for never spending
+ * anyone else's quota.
  */
 export const triggerAgentReplies = async (
     trigger: BoardMessage,
@@ -218,7 +163,7 @@ export const triggerAgentReplies = async (
     settings: AISettings
 ): Promise<void> => {
     const mentioned = members.filter(m =>
-        m.type === 'agent' &&
+        isBot(m) &&
         m.id !== trigger.authorId &&
         trigger.mentions.some(name => name.toLowerCase() === m.name.toLowerCase())
     );

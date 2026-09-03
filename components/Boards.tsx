@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AISettings, Board, BoardChannel, BoardMember, BoardMessage } from '../types';
 import { translations } from '../translations';
-import { auth, getUserProfileByName } from '../services/firebase';
+import { auth, getUserProfileByName, getClonableAgentProfiles } from '../services/firebase';
 import {
     createBoard, subscribeToMyBoards, deleteBoard,
-    addMember, removeMember,
+    addMember, addBot, removeMember,
     createChannel, subscribeToChannels, deleteChannel,
-    subscribeToMessages, sendMessage, deleteMessage, parseMentions
+    subscribeToMessages, sendMessage, deleteMessage, parseMentions, isBot
 } from '../services/boards';
 import { triggerAgentReplies } from '../services/boardAgent';
 
@@ -35,11 +35,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     type ModalState =
         | { kind: 'createBoard' }
         | { kind: 'createChannel' }
-        | { kind: 'addMember', memberType: 'human' | 'agent' }
+        | { kind: 'addHuman' }
+        | { kind: 'createBot' }
+        | { kind: 'cloneAgent' }
         | { kind: 'deleteBoard', boardId: string, boardName: string };
 
     const [modal, setModal] = useState<ModalState | null>(null);
     const [modalInput, setModalInput] = useState('');
+    const [botPrompt, setBotPrompt] = useState('');
+    const [clonable, setClonable] = useState<Array<Record<string, any>>>([]);
+    const [selectedClone, setSelectedClone] = useState<Record<string, any> | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -47,13 +52,23 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
     const openModal = (state: ModalState) => {
         setModalInput('');
+        setBotPrompt('');
+        setSelectedClone(null);
         setError(null);
         setModal(state);
+
+        if (state.kind === 'cloneAgent') {
+            getClonableAgentProfiles()
+                .then(setClonable)
+                .catch(e => setError(e instanceof Error ? e.message : String(e)));
+        }
     };
 
     const closeModal = () => {
         setModal(null);
         setModalInput('');
+        setBotPrompt('');
+        setSelectedClone(null);
     };
 
     const activeBoard = useMemo(
@@ -124,7 +139,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         await createChannel(activeBoardId, name.trim(), '');
     };
 
-    const handleAddMember = async (type: 'human' | 'agent', name: string) => {
+    const handleAddHuman = async (name: string) => {
         if (!name.trim() || !activeBoardId) return;
 
         const profile = await getUserProfileByName(name.trim());
@@ -139,9 +154,36 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         await addMember(activeBoardId, {
             id: profile.uid,
             name: profile.agentName,
-            type,
-            systemPrompt: type === 'agent' ? profile.agentPrompt : undefined,
-            respondsToMentions: type === 'agent' ? true : undefined
+            type: 'human'
+        });
+    };
+
+    const nameIsTaken = (name: string): boolean =>
+        Boolean(activeBoard?.members.some(m => m.name.toLowerCase() === name.trim().toLowerCase()));
+
+    const handleCreateBot = async (name: string, systemPrompt: string) => {
+        if (!activeBoardId || !currentUid) return;
+
+        if (nameIsTaken(name)) {
+            throw new Error(t.nameTaken || 'Участник с таким именем уже есть — упоминания станут неоднозначными');
+        }
+
+        await addBot(activeBoardId, { name, systemPrompt, ownerId: currentUid });
+    };
+
+    const handleCloneAgent = async (profile: Record<string, any>, name: string) => {
+        if (!activeBoardId || !currentUid) return;
+
+        if (nameIsTaken(name)) {
+            throw new Error(t.nameTaken || 'Участник с таким именем уже есть — упоминания станут неоднозначными');
+        }
+
+        await addBot(activeBoardId, {
+            name,
+            systemPrompt: profile.agentPrompt || profile.agentRole || '',
+            ownerId: currentUid,
+            sourceAgentId: profile.uid,
+            sourceAgentName: profile.agentName
         });
     };
 
@@ -157,8 +199,13 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 await handleCreateBoard(modalInput);
             } else if (modal.kind === 'createChannel') {
                 await handleCreateChannel(modalInput);
-            } else if (modal.kind === 'addMember') {
-                await handleAddMember(modal.memberType, modalInput);
+            } else if (modal.kind === 'addHuman') {
+                await handleAddHuman(modalInput);
+            } else if (modal.kind === 'createBot') {
+                await handleCreateBot(modalInput, botPrompt);
+            } else if (modal.kind === 'cloneAgent') {
+                if (!selectedClone) throw new Error(t.pickAgent || 'Выберите персону');
+                await handleCloneAgent(selectedClone, modalInput || selectedClone.agentName);
             } else if (modal.kind === 'deleteBoard') {
                 await handleDeleteBoard(modal.boardId);
             }
@@ -178,6 +225,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setError(null);
 
         try {
+            const mentionsBot = activeBoard.members.some(m =>
+                isBot(m) &&
+                m.id !== currentUid &&
+                new RegExp(`@${m.name}\\b`, 'iu').test(content)
+            );
+
             const sent = await sendMessage({
                 channelId: activeChannelId,
                 boardId: activeBoard.id!,
@@ -187,37 +240,32 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 content
             });
 
-            // Agents mentioned with @name reply using this client's API key.
-            const mentionsAgent = activeBoard.members.some(m =>
-                m.type === 'agent' &&
-                m.id !== currentUid &&
-                new RegExp(`@${m.name}\\b`, 'iu').test(content)
-            );
+            if (!mentionsBot) return;
 
-            if (mentionsAgent) {
-                setIsAgentThinking(true);
-                try {
-                    await triggerAgentReplies(
-                        {
-                            id: sent.id,
-                            channelId: activeChannelId,
-                            boardId: activeBoard.id!,
-                            authorId: currentUid,
-                            authorName: settings.agentName || 'User',
-                            authorType: 'human',
-                            content,
-                            mentions: parseMentions(content),
-                            timestamp: Date.now()
-                        },
-                        activeChannelId,
-                        activeBoard.id!,
-                        activeChannel.name,
-                        activeBoard.members,
-                        settings
-                    );
-                } finally {
-                    setIsAgentThinking(false);
-                }
+            // Replies are generated here, on this user's key: mentioning a bot
+            // is what costs tokens, so the mentioner pays for it.
+            setIsAgentThinking(true);
+            try {
+                await triggerAgentReplies(
+                    {
+                        id: sent.id,
+                        channelId: activeChannelId,
+                        boardId: activeBoard.id!,
+                        authorId: currentUid,
+                        authorName: settings.agentName || 'User',
+                        authorType: 'human',
+                        content,
+                        mentions: parseMentions(content),
+                        timestamp: Date.now()
+                    },
+                    activeChannelId,
+                    activeBoard.id!,
+                    activeChannel.name,
+                    activeBoard.members,
+                    settings
+                );
+            } finally {
+                setIsAgentThinking(false);
             }
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -451,15 +499,23 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                             <div key={member.id} className="group px-3 py-2 rounded-lg hover:bg-slate-800/50 flex items-center justify-between">
                                                 <div className="min-w-0">
                                                     <button
-                                                        onClick={() => onViewProfile(member.name, member.id)}
-                                                        className={`text-sm truncate hover:underline block ${member.type === 'agent' ? 'text-indigo-300' : 'text-slate-300'}`}
+                                                        onClick={() => onViewProfile(
+                                                            member.sourceAgentName || member.name,
+                                                            member.sourceAgentId || member.id
+                                                        )}
+                                                        className={`text-sm truncate hover:underline block ${isBot(member) ? 'text-indigo-300' : 'text-slate-300'}`}
                                                     >
                                                         {member.name}
                                                     </button>
-                                                    <span className="text-[9px] font-mono text-slate-600 uppercase">
-                                                        {member.type === 'agent' ? 'AI Agent' : 'Human'}
+                                                    <span className="text-[9px] font-mono text-slate-600 uppercase block">
+                                                        {isBot(member) ? 'Bot' : 'Human'}
                                                         {member.role === 'owner' && ` · ${t.owner || 'владелец'}`}
                                                     </span>
+                                                    {isBot(member) && member.sourceAgentName && (
+                                                        <span className="text-[9px] font-mono text-slate-700 block truncate">
+                                                            ↳ {member.sourceAgentName}
+                                                        </span>
+                                                    )}
                                                 </div>
 
                                                 {activeBoard.ownerId === currentUid && member.role !== 'owner' && (
@@ -479,13 +535,19 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     {activeBoard.ownerId === currentUid && (
                                         <div className="p-3 border-t border-slate-800 space-y-2">
                                             <button
-                                                onClick={() => openModal({ kind: 'addMember', memberType: 'agent' })}
+                                                onClick={() => openModal({ kind: 'createBot' })}
                                                 className="w-full py-2 rounded-lg bg-indigo-900/30 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/50 transition-colors"
                                             >
-                                                + {t.addAgent || 'Добавить агента'}
+                                                + {t.createBot || 'Создать бота'}
                                             </button>
                                             <button
-                                                onClick={() => openModal({ kind: 'addMember', memberType: 'human' })}
+                                                onClick={() => openModal({ kind: 'cloneAgent' })}
+                                                className="w-full py-2 rounded-lg bg-indigo-900/20 text-indigo-300/80 border border-indigo-500/20 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/40 transition-colors"
+                                            >
+                                                + {t.cloneAgent || 'Бот из персоны'}
+                                            </button>
+                                            <button
+                                                onClick={() => openModal({ kind: 'addHuman' })}
                                                 className="w-full py-2 rounded-lg bg-slate-800/50 text-slate-300 border border-slate-700 text-[10px] font-mono uppercase tracking-wider hover:bg-slate-800 transition-colors"
                                             >
                                                 + {t.addHuman || 'Добавить человека'}
@@ -532,29 +594,85 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                         <h3 className="text-lg font-bold font-display text-white mb-1">
                             {modal.kind === 'createBoard' && (t.createBoard || 'Создать доску')}
                             {modal.kind === 'createChannel' && (t.createChannel || 'Создать канал')}
-                            {modal.kind === 'addMember' && (modal.memberType === 'agent'
-                                ? (t.addAgent || 'Добавить агента')
-                                : (t.addHuman || 'Добавить человека'))}
+                            {modal.kind === 'addHuman' && (t.addHuman || 'Добавить человека')}
+                            {modal.kind === 'createBot' && (t.createBot || 'Создать бота')}
+                            {modal.kind === 'cloneAgent' && (t.cloneAgent || 'Бот из персоны')}
                             {modal.kind === 'deleteBoard' && (t.deleteBoard || 'Удалить доску')}
                         </h3>
 
                         <p className="text-slate-500 text-xs mb-4">
                             {modal.kind === 'createBoard' && (t.boardNameHint || 'Название нового пространства')}
                             {modal.kind === 'createChannel' && (t.channelNameHint || 'Название канала внутри доски')}
-                            {modal.kind === 'addMember' && (t.memberNameHint || 'Имя существующего профиля в Потоке')}
+                            {modal.kind === 'addHuman' && (t.memberNameHint || 'Имя существующего профиля в Потоке')}
+                            {modal.kind === 'createBot' && (t.botHint || 'Бот живёт только в этой доске и отвечает на @имя. Токены тратит тот, кто его упомянул.')}
+                            {modal.kind === 'cloneAgent' && (t.cloneHint || 'Копия чужой персоны в вашей доске. Автору это ничего не стоит — платит тот, кто упомянул бота.')}
                             {modal.kind === 'deleteBoard' && `«${modal.boardName}» — ${t.boardDeleteConfirm || 'доска, каналы и все сообщения будут удалены безвозвратно.'}`}
                         </p>
+
+                        {modal.kind === 'cloneAgent' && (
+                            <div className="mb-4 max-h-44 overflow-y-auto space-y-1 border border-slate-800 rounded-lg p-2">
+                                {clonable.length === 0 ? (
+                                    <p className="text-[11px] text-slate-600 p-3 text-center leading-relaxed">
+                                        {t.noClonable || 'Нет доступных персон. Автор должен разрешить это в настройках профиля.'}
+                                    </p>
+                                ) : clonable.map(profile => (
+                                    <button
+                                        key={profile.uid}
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedClone(profile);
+                                            setModalInput(profile.agentName);
+                                        }}
+                                        className={`w-full text-left px-3 py-2 rounded-md border transition-all ${selectedClone?.uid === profile.uid
+                                            ? 'bg-indigo-950/40 border-indigo-500/40 text-indigo-200'
+                                            : 'border-transparent text-slate-400 hover:bg-slate-800/50'
+                                            }`}
+                                    >
+                                        <span className="text-sm block truncate">{profile.agentName}</span>
+                                        <span className="text-[10px] text-slate-600 block truncate">
+                                            {profile.agentRole || '—'}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
 
                         {modal.kind !== 'deleteBoard' && (
                             <input
                                 ref={modalInputRef}
-                                autoFocus
+                                autoFocus={modal.kind !== 'cloneAgent'}
                                 type="text"
                                 value={modalInput}
                                 onChange={(e) => setModalInput(e.target.value)}
-                                placeholder={modal.kind === 'addMember' ? 'Neo' : (modal.kind === 'createChannel' ? 'general' : '')}
+                                placeholder={
+                                    modal.kind === 'addHuman' ? 'Neo'
+                                        : modal.kind === 'createChannel' ? 'general'
+                                            : modal.kind === 'createBot' ? (t.botNamePlaceholder || 'Аналитик')
+                                                : modal.kind === 'cloneAgent' ? (t.botNameInBoard || 'Имя в доске')
+                                                    : ''
+                                }
                                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-sm mb-4"
                             />
+                        )}
+
+                        {modal.kind === 'createBot' && (
+                            <textarea
+                                value={botPrompt}
+                                onChange={(e) => setBotPrompt(e.target.value)}
+                                placeholder={t.botPromptPlaceholder || 'Ты помогаешь команде разбирать метрики. Отвечай кратко и по делу.'}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-4 font-mono"
+                            />
+                        )}
+
+                        {modal.kind === 'cloneAgent' && selectedClone && (
+                            <div className="mb-4 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800">
+                                <span className="text-[9px] font-mono uppercase tracking-wider text-slate-600 block mb-1">
+                                    {t.clonedPrompt || 'Промпт персоны'}
+                                </span>
+                                <p className="text-[11px] text-slate-400 line-clamp-4 leading-relaxed">
+                                    {selectedClone.agentPrompt || selectedClone.agentRole || (t.emptyPrompt || 'Промпт не задан')}
+                                </p>
+                            </div>
                         )}
 
                         {error && (

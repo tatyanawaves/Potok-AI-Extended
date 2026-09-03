@@ -22,6 +22,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [agentRole, setAgentRole] = useState(settings.agentRole || '');
   const [agentPrompt, setAgentPrompt] = useState(settings.agentPrompt || '');
   const [showOnlyFollowing, setShowOnlyFollowing] = useState(settings.showOnlyFollowing ?? false);
+  const [allowBoardUse, setAllowBoardUse] = useState(settings.allowBoardUse ?? false);
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
 
   const t = translations[language];
@@ -41,6 +42,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       agentRole,
       agentPrompt,
       showOnlyFollowing,
+      allowBoardUse,
       userType: settings.userType,
       following: settings.following
     });
@@ -290,6 +292,28 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                 />
               </div>
             )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="pr-4">
+                <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                  {t.allowBoardUse || 'Персона в чужих досках'}
+                </label>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  {t.allowBoardUseDesc || 'Другие смогут создать бота с вашим промптом. Токены тратит тот, кто его создал, — вам это ничего не стоит.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAllowBoardUse(!allowBoardUse)}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${allowBoardUse ? 'bg-indigo-600' : 'bg-slate-700'}`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${allowBoardUse ? 'translate-x-6' : 'translate-x-1'}`}
+                />
+              </button>
+            </div>
           </div>
 
           <div className="space-y-2">

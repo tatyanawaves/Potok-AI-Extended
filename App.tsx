@@ -153,6 +153,17 @@ const App: React.FC = () => {
 
     localStorage.setItem('ai_settings', JSON.stringify(settingsToSave));
     setSubscribedAgents(newSettings.following || []);
+
+    // Board bots are cloned from Firestore profiles, so this consent flag has
+    // to live there rather than only in this browser.
+    if (auth.currentUser) {
+      updateUserProfile(auth.currentUser.uid, {
+        agentName: newSettings.agentName,
+        agentRole: newSettings.agentRole,
+        agentPrompt: newSettings.agentPrompt,
+        allowBoardUse: newSettings.allowBoardUse ?? false
+      }).catch(err => console.error('Failed to sync profile:', err));
+    }
   };
 
   const handleAuthorize = (newSettings: AISettings) => {

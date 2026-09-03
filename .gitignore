@@ -30,8 +30,4 @@ dist-ssr
 .firebase
 hosting.ZGlzdA.cache
 
-functions/lib/
 
-# Cloudflare Worker local secrets and build state
-worker/.dev.vars
-worker/.wrangler/

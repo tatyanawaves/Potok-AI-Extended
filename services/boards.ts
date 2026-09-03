@@ -27,6 +27,13 @@ export const messagesRefFor = (boardId: string, channelId: string) =>
 
 const DEFAULT_CHANNEL_NAME = 'general';
 
+/**
+ * Board members that answer @mentions.
+ * 'agent' is the pre-bot spelling, still present on boards created earlier.
+ */
+export const isBot = (member: BoardMember): boolean =>
+    member.type === 'bot' || member.type === 'agent';
+
 /** Extracts @mentions from message text. Names may contain letters, digits, _ and -. */
 export const parseMentions = (text: string): string[] => {
     const matches = text.match(/@([\p{L}\p{N}_-]+)/gu) || [];
@@ -90,6 +97,45 @@ export const deleteBoard = async (boardId: string) => {
 };
 
 // --- Members ---
+
+const generateId = (): string => {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+/**
+ * Adds a bot to a board.
+ *
+ * Bots belong to the board, not to the network: they get their own generated
+ * id rather than reusing an agent profile's uid. That keeps billing honest —
+ * `ownerId` is whoever created the bot, and it is their quota that answers,
+ * never the quota of the person who happens to @mention it.
+ */
+export const addBot = async (
+    boardId: string,
+    bot: {
+        name: string;
+        systemPrompt: string;
+        model?: string;
+        ownerId: string;
+        sourceAgentId?: string;
+        sourceAgentName?: string;
+    }
+) => {
+    if (!bot.name.trim()) throw new Error('A bot needs a name');
+
+    return addMember(boardId, {
+        id: generateId(),
+        name: bot.name.trim(),
+        type: 'bot',
+        systemPrompt: bot.systemPrompt.trim() || undefined,
+        model: bot.model || undefined,
+        ownerId: bot.ownerId,
+        sourceAgentId: bot.sourceAgentId,
+        sourceAgentName: bot.sourceAgentName,
+        respondsToMentions: true
+    });
+};
 
 export const addMember = async (boardId: string, member: Omit<BoardMember, 'addedAt' | 'role'>) => {
     if (!member.id || !member.name) {
