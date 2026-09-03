@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { AISettings, BoardMember, BoardMessage } from '../types';
 import { getRecentMessages, sendMessage, isBot } from './boards';
+import { connect, callTool, toOpenAITools, McpConnection } from './mcp';
 
 /**
  * Generates agent replies inside board channels.
@@ -11,6 +12,34 @@ import { getRecentMessages, sendMessage, isBot } from './boards';
 
 const CONTEXT_MESSAGE_COUNT = 20;
 const MAX_REPLY_LENGTH = 1200;
+/** Tool output is untrusted and can be huge; cap what reaches the model. */
+const MAX_TOOL_RESULT_LENGTH = 6000;
+
+/**
+ * A bot's tool server URL is stored on the board and visible to its members,
+ * but any token for it is private: it lives in the mentioning user's own
+ * settings, keyed by server URL, and never touches Firestore.
+ */
+const tokenForServer = (url: string, settings: AISettings): string | undefined =>
+    settings.mcpTokens?.[url]?.trim() || undefined;
+
+/** Handshakes are reused per URL — listing tools on every turn is wasteful. */
+const connectionCache = new Map<string, McpConnection>();
+
+const connectToToolServer = async (
+    url: string,
+    settings: AISettings
+): Promise<McpConnection> => {
+    const cached = connectionCache.get(url);
+    if (cached) return cached;
+
+    const connection = await connect(url, tokenForServer(url, settings));
+    connectionCache.set(url, connection);
+    return connection;
+};
+
+/** Drops cached handshakes, e.g. after a token changes. */
+export const resetToolConnections = (): void => connectionCache.clear();
 
 /** Extra briefing given to a bot taking a turn in a multi-bot discussion. */
 export interface DiscussionContext {
@@ -80,13 +109,23 @@ const buildChatMessages = (
     return messages;
 };
 
+/** One assistant turn, which may be a tool request rather than prose. */
+interface ChatCompletion {
+    content: string | null;
+    toolCalls: Array<{ id: string, name: string, args: string }>;
+}
+
 const callOpenAICompatible = async (
     baseUrl: string,
     apiKey: string,
     model: string,
-    messages: { role: string, content: string }[],
-    extraHeaders: Record<string, string> = {}
-): Promise<string> => {
+    messages: any[],
+    extraHeaders: Record<string, string> = {},
+    tools?: any[]
+): Promise<ChatCompletion> => {
+    const body: Record<string, any> = { model, messages, temperature: 0.9 };
+    if (tools?.length) body.tools = tools;
+
     const response = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -94,7 +133,7 @@ const callOpenAICompatible = async (
             'Content-Type': 'application/json',
             ...extraHeaders
         },
-        body: JSON.stringify({ model, messages, temperature: 0.9 })
+        body: JSON.stringify(body)
     });
 
     if (!response.ok) {
@@ -102,11 +141,19 @@ const callOpenAICompatible = async (
     }
 
     const data = await response.json();
-    if (!data.choices?.[0]?.message?.content) {
+    const message = data.choices?.[0]?.message;
+    if (!message) {
         throw new Error('Invalid response structure');
     }
 
-    return data.choices[0].message.content;
+    return {
+        content: message.content ?? null,
+        toolCalls: (message.tool_calls || []).map((call: any) => ({
+            id: call.id,
+            name: call.function?.name,
+            args: call.function?.arguments || '{}'
+        }))
+    };
 };
 
 const callGemini = async (
@@ -139,43 +186,119 @@ const callGemini = async (
  * chose to invoke it. Nobody can spend another account's quota, and a bot's
  * creator cannot be drained by other people using their bot.
  */
+/** Rounds of tool calls allowed before the bot must answer with prose. */
+const MAX_TOOL_ROUNDS = 4;
+
 export const generateAgentReply = async (
     agent: BoardMember,
     channelName: string,
     history: BoardMessage[],
     settings: AISettings,
-    discussion?: DiscussionContext
-): Promise<{ reply: string, modelName: string }> => {
-    const messages = buildChatMessages(agent, channelName, history, discussion);
+    discussion?: DiscussionContext,
+    onToolCall?: (toolName: string) => void
+): Promise<{ reply: string, modelName: string, toolsUsed: string[] }> => {
+    const messages: any[] = buildChatMessages(agent, channelName, history, discussion);
+    const toolsUsed: string[] = [];
 
-    let reply: string;
-
-    if (settings.aiProvider === 'groq') {
-        reply = await callOpenAICompatible(
-            settings.apiBaseUrl || 'https://api.groq.com/openai/v1',
-            settings.groqKey || '',
-            settings.groqModel || 'llama-3.3-70b-versatile',
-            messages
-        );
-    } else if (settings.aiProvider === 'gemini') {
-        reply = await callGemini(
+    // Gemini's SDK has its own function-calling shape; tools stay OpenAI-only
+    // for now, so a Gemini-backed bot simply answers without them.
+    if (settings.aiProvider === 'gemini') {
+        const reply = await callGemini(
             settings.geminiKey || '',
             settings.geminiModel || 'gemini-1.5-flash',
             messages
         );
-    } else {
-        reply = await callOpenAICompatible(
-            settings.apiBaseUrl || 'https://openrouter.ai/api/v1',
-            settings.openRouterKey || '',
-            settings.openRouterModel || 'minimax/minimax-m3:free',
-            messages,
-            { 'HTTP-Referer': window.location.origin, 'X-Title': 'Potok' }
+        return {
+            reply: reply.trim().substring(0, MAX_REPLY_LENGTH),
+            modelName: modelNameFor(settings),
+            toolsUsed
+        };
+    }
+
+    const useGroq = settings.aiProvider === 'groq';
+    const baseUrl = settings.apiBaseUrl
+        || (useGroq ? 'https://api.groq.com/openai/v1' : 'https://openrouter.ai/api/v1');
+    const apiKey = (useGroq ? settings.groqKey : settings.openRouterKey) || '';
+    const model = (useGroq ? settings.groqModel : settings.openRouterModel)
+        || (useGroq ? 'llama-3.3-70b-versatile' : 'minimax/minimax-m3:free');
+    const headers = useGroq
+        ? {}
+        : { 'HTTP-Referer': window.location.origin, 'X-Title': 'Potok' };
+
+    // Connect lazily: a bot without a tool server behaves exactly as before.
+    let connection: McpConnection | null = null;
+    let openAiTools: any[] | undefined;
+
+    if (agent.toolServerUrl) {
+        try {
+            connection = await connectToToolServer(agent.toolServerUrl, settings);
+            openAiTools = toOpenAITools(connection.tools);
+        } catch (error) {
+            // A dead tool server must not silence the bot entirely.
+            messages.push({
+                role: 'system',
+                content: `Your tool server is unavailable (${error instanceof Error ? error.message : String(error)}). Answer from your own knowledge and say that the tools could not be reached.`
+            });
+        }
+    }
+
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+        // On the final round drop the tools so the model has to produce prose.
+        const offerTools = connection && round < MAX_TOOL_ROUNDS ? openAiTools : undefined;
+
+        const completion = await callOpenAICompatible(
+            baseUrl, apiKey, model, messages, headers, offerTools
         );
+
+        if (completion.toolCalls.length === 0 || !connection) {
+            return {
+                reply: (completion.content || '').trim().substring(0, MAX_REPLY_LENGTH),
+                modelName: model,
+                toolsUsed
+            };
+        }
+
+        messages.push({
+            role: 'assistant',
+            content: completion.content,
+            tool_calls: completion.toolCalls.map(call => ({
+                id: call.id,
+                type: 'function',
+                function: { name: call.name, arguments: call.args }
+            }))
+        });
+
+        for (const call of completion.toolCalls) {
+            onToolCall?.(call.name);
+            if (!toolsUsed.includes(call.name)) toolsUsed.push(call.name);
+
+            let result: string;
+            try {
+                const args = JSON.parse(call.args || '{}');
+                result = await callTool(
+                    connection,
+                    call.name,
+                    args,
+                    tokenForServer(agent.toolServerUrl!, settings)
+                );
+            } catch (error) {
+                // Reported back to the model rather than thrown: it can retry
+                // with different arguments or explain the failure to the user.
+                result = `Error: ${error instanceof Error ? error.message : String(error)}`;
+            }
+
+            messages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                content: result.slice(0, MAX_TOOL_RESULT_LENGTH)
+            });
+        }
     }
 
     return {
-        reply: reply.trim().substring(0, MAX_REPLY_LENGTH),
-        modelName: modelNameFor(settings)
+        reply: '',
+        modelName: model,
+        toolsUsed
     };
 };
 
@@ -214,7 +337,9 @@ export const triggerAgentReplies = async (
     for (const agent of mentioned) {
         try {
             const history = await getRecentMessages(boardId, channelId, CONTEXT_MESSAGE_COUNT);
-            const { reply, modelName } = await generateAgentReply(agent, channelName, history, settings);
+            const { reply, modelName, toolsUsed } = await generateAgentReply(
+                agent, channelName, history, settings
+            );
 
             await sendMessage({
                 channelId,
@@ -224,7 +349,8 @@ export const triggerAgentReplies = async (
                 authorType: 'agent',
                 content: reply,
                 isAgentReply: true,
-                modelName
+                modelName,
+                toolsUsed: toolsUsed.length ? toolsUsed : undefined
             });
         } catch (error) {
             console.error(`[BoardAgent] ${agent.name} failed to reply:`, error);
@@ -298,7 +424,7 @@ export const runBotDiscussion = async (options: DiscussionOptions): Promise<void
                 // Re-read every turn so each bot sees the previous one's reply.
                 const history = await getRecentMessages(boardId, channelId, CONTEXT_MESSAGE_COUNT);
 
-                const { reply, modelName } = await generateAgentReply(
+                const { reply, modelName, toolsUsed } = await generateAgentReply(
                     bot, channelName, history, settings,
                     { participants: names, task, turn, totalTurns }
                 );
@@ -311,7 +437,8 @@ export const runBotDiscussion = async (options: DiscussionOptions): Promise<void
                     authorType: 'agent',
                     content: reply,
                     isAgentReply: true,
-                    modelName
+                    modelName,
+                    toolsUsed: toolsUsed.length ? toolsUsed : undefined
                 });
             } catch (error) {
                 console.error(`[BoardAgent] ${bot.name} failed during discussion:`, error);

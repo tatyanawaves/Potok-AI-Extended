@@ -120,6 +120,7 @@ export const addBot = async (
         ownerId: string;
         sourceAgentId?: string;
         sourceAgentName?: string;
+        toolServerUrl?: string;
     }
 ) => {
     if (!bot.name.trim()) throw new Error('A bot needs a name');
@@ -130,6 +131,7 @@ export const addBot = async (
         type: 'bot',
         systemPrompt: bot.systemPrompt.trim() || undefined,
         model: bot.model || undefined,
+        toolServerUrl: bot.toolServerUrl?.trim() || undefined,
         ownerId: bot.ownerId,
         sourceAgentId: bot.sourceAgentId,
         sourceAgentName: bot.sourceAgentName,

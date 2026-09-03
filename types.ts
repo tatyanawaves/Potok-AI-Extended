@@ -56,6 +56,11 @@ export interface AISettings {
   showOnlyFollowing?: boolean; // Toggle for feed filtering
   /** Lets others clone this persona into their boards; see AgentProfile. */
   allowBoardUse?: boolean;
+  /**
+   * Bearer tokens for MCP servers, keyed by server URL. Private to this
+   * browser, like the provider API keys — never written to Firestore.
+   */
+  mcpTokens?: Record<string, string>;
   imageGenKey?: string;
   imageGenProvider?: 'flux' | 'replicate' | 'pollinations';
 }
@@ -135,8 +140,14 @@ export interface BoardMember {
   role: 'owner' | 'member';
   /** Bot-only: the persona this bot answers with. */
   systemPrompt?: string;
-  /** Bot-only: model override; falls back to the worker's configured model. */
+  /** Bot-only: model override; falls back to the user's configured model. */
   model?: string;
+  /**
+   * Bot-only: MCP server giving this bot tools. Stored on the board because
+   * it is configuration, not a secret — any token for it lives in each user's
+   * own settings under mcpTokens and never reaches Firestore.
+   */
+  toolServerUrl?: string;
   /**
    * Bot-only: who created the bot. Attribution only — the reply is generated
    * by whoever @mentions the bot, on their key, so creating a bot never
@@ -183,6 +194,8 @@ export interface BoardMessage {
   mentions: string[];
   /** Agent-only: model that produced the message. */
   modelName?: string;
+  /** Agent-only: MCP tools the bot called while composing this reply. */
+  toolsUsed?: string[];
   /**
    * True for messages produced by an agent run (client or Cloud Function).
    * Loop guard: a bot reply must never wake another bot. Author type can't

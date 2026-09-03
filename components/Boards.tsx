@@ -47,6 +47,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [modal, setModal] = useState<ModalState | null>(null);
     const [modalInput, setModalInput] = useState('');
     const [botPrompt, setBotPrompt] = useState('');
+    const [botToolUrl, setBotToolUrl] = useState('');
     const [clonable, setClonable] = useState<Array<Record<string, any>>>([]);
     const [selectedClone, setSelectedClone] = useState<Record<string, any> | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -65,6 +66,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const openModal = (state: ModalState) => {
         setModalInput('');
         setBotPrompt('');
+        setBotToolUrl('');
         setSelectedClone(null);
         setError(null);
         setModal(state);
@@ -89,6 +91,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setModal(null);
         setModalInput('');
         setBotPrompt('');
+        setBotToolUrl('');
         setSelectedClone(null);
     };
 
@@ -189,7 +192,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             throw new Error(t.nameTaken || 'Участник с таким именем уже есть — упоминания станут неоднозначными');
         }
 
-        await addBot(activeBoardId, { name, systemPrompt, ownerId: currentUid });
+        await addBot(activeBoardId, {
+            name,
+            systemPrompt,
+            ownerId: currentUid,
+            toolServerUrl: botToolUrl.trim() || undefined
+        });
     };
 
     const handleCloneAgent = async (profile: Record<string, any>, name: string) => {
@@ -555,6 +563,18 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                             <p className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
                                                 {msg.content}
                                             </p>
+                                            {msg.toolsUsed?.length ? (
+                                                <div className="flex flex-wrap gap-1 mt-2">
+                                                    {msg.toolsUsed.map(tool => (
+                                                        <span
+                                                            key={tool}
+                                                            className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-500/20"
+                                                        >
+                                                            ⚒ {tool}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            ) : null}
                                             {msg.modelName && (
                                                 <div className="text-[9px] font-mono text-slate-700 mt-1">{msg.modelName}</div>
                                             )}
@@ -616,6 +636,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                     {isBot(member) && member.sourceAgentName && (
                                                         <span className="text-[9px] font-mono text-slate-700 block truncate">
                                                             ↳ {member.sourceAgentName}
+                                                        </span>
+                                                    )}
+                                                    {member.toolServerUrl && (
+                                                        <span
+                                                            className="text-[9px] font-mono text-emerald-500/70 block truncate"
+                                                            title={member.toolServerUrl}
+                                                        >
+                                                            ⚒ {new URL(member.toolServerUrl).hostname}
                                                         </span>
                                                     )}
                                                 </div>
@@ -813,12 +841,28 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                         )}
 
                         {modal.kind === 'createBot' && (
-                            <textarea
-                                value={botPrompt}
-                                onChange={(e) => setBotPrompt(e.target.value)}
-                                placeholder={t.botPromptPlaceholder || 'Ты помогаешь команде разбирать метрики. Отвечай кратко и по делу.'}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-4 font-mono"
-                            />
+                            <>
+                                <textarea
+                                    value={botPrompt}
+                                    onChange={(e) => setBotPrompt(e.target.value)}
+                                    placeholder={t.botPromptPlaceholder || 'Ты помогаешь команде разбирать метрики. Отвечай кратко и по делу.'}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-4 font-mono"
+                                />
+
+                                <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
+                                    {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'}
+                                </label>
+                                <input
+                                    type="text"
+                                    value={botToolUrl}
+                                    onChange={(e) => setBotToolUrl(e.target.value)}
+                                    placeholder="https://mcp.deepwiki.com/mcp"
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs mb-2 font-mono"
+                                />
+                                <p className="text-[10px] text-slate-600 mb-4 leading-relaxed">
+                                    {t.toolServerHint || 'Подойдёт только сервер, разрешающий запросы из браузера (CORS). Проверено: mcp.deepwiki.com, mcp.linear.app, api.githubcopilot.com/mcp. Zapier и Composio так не умеют — им нужен сервер-посредник.'}
+                                </p>
+                            </>
                         )}
 
                         {modal.kind === 'cloneAgent' && selectedClone && (
