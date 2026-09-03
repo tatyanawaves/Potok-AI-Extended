@@ -8,7 +8,10 @@ import {
     createChannel, subscribeToChannels, deleteChannel,
     subscribeToMessages, sendMessage, deleteMessage, parseMentions, isBot
 } from '../services/boards';
-import { triggerAgentReplies } from '../services/boardAgent';
+import {
+    triggerAgentReplies, runBotDiscussion,
+    MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS
+} from '../services/boardAgent';
 
 interface BoardsProps {
     settings: AISettings;
@@ -38,6 +41,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         | { kind: 'addHuman' }
         | { kind: 'createBot' }
         | { kind: 'cloneAgent' }
+        | { kind: 'discussion' }
         | { kind: 'deleteBoard', boardId: string, boardName: string };
 
     const [modal, setModal] = useState<ModalState | null>(null);
@@ -46,6 +50,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [clonable, setClonable] = useState<Array<Record<string, any>>>([]);
     const [selectedClone, setSelectedClone] = useState<Record<string, any> | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Bot-to-bot discussion: who takes part, what for, and how long it runs.
+    const [discussionBots, setDiscussionBots] = useState<string[]>([]);
+    const [discussionRounds, setDiscussionRounds] = useState(2);
+    const [discussionProgress, setDiscussionProgress] = useState<
+        { turn: number, total: number, bot: string } | null
+    >(null);
+    const stopDiscussionRef = useRef(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const modalInputRef = useRef<HTMLInputElement>(null);
@@ -56,6 +68,15 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setSelectedClone(null);
         setError(null);
         setModal(state);
+
+        if (state.kind === 'discussion') {
+            // Preselect the bots on the board, capped at what one run allows.
+            setDiscussionBots(
+                (activeBoard?.members.filter(isBot) || [])
+                    .slice(0, MAX_DISCUSSION_BOTS)
+                    .map(b => b.id)
+            );
+        }
 
         if (state.kind === 'cloneAgent') {
             getClonableAgentProfiles()
@@ -187,6 +208,49 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         });
     };
 
+    /**
+     * Posts the brief, then lets the chosen bots take a fixed number of turns.
+     * Every turn is one API call on this user's key, so the cost is exactly
+     * bots × rounds and is shown before the run starts.
+     */
+    const handleStartDiscussion = async (task: string) => {
+        if (!activeBoard || !activeChannel || !activeChannelId || !currentUid) return;
+
+        const bots = activeBoard.members.filter(m => discussionBots.includes(m.id));
+        if (bots.length === 0) throw new Error(t.pickBots || 'Выберите хотя бы одного бота');
+        if (!task.trim()) throw new Error(t.taskRequired || 'Опишите задачу');
+
+        closeModal();
+        stopDiscussionRef.current = false;
+
+        await sendMessage({
+            channelId: activeChannelId,
+            boardId: activeBoard.id!,
+            authorId: currentUid,
+            authorName: settings.agentName || 'User',
+            authorType: settings.userType === 'agent' ? 'agent' : 'human',
+            content: `${t.discussionBrief || 'Обсуждение'}: ${task.trim()}\n${bots.map(b => `@${b.name}`).join(' ')}`
+        });
+
+        try {
+            await runBotDiscussion({
+                boardId: activeBoard.id!,
+                channelId: activeChannelId,
+                channelName: activeChannel.name,
+                bots,
+                task: task.trim(),
+                rounds: discussionRounds,
+                settings,
+                onTurn: (turn, total, bot) => setDiscussionProgress({ turn, total, bot }),
+                shouldStop: () => stopDiscussionRef.current
+            });
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setDiscussionProgress(null);
+        }
+    };
+
     /** Runs the action behind the currently open modal. */
     const handleModalSubmit = async () => {
         if (!modal || isSubmitting) return;
@@ -206,6 +270,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             } else if (modal.kind === 'cloneAgent') {
                 if (!selectedClone) throw new Error(t.pickAgent || 'Выберите персону');
                 await handleCloneAgent(selectedClone, modalInput || selectedClone.agentName);
+            } else if (modal.kind === 'discussion') {
+                // Closes the modal itself: the run continues after it is gone.
+                await handleStartDiscussion(botPrompt);
+                return;
             } else if (modal.kind === 'deleteBoard') {
                 await handleDeleteBoard(modal.boardId);
             }
@@ -413,15 +481,27 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 <div className="text-[10px] text-slate-600 truncate">{activeBoard.name}</div>
                             </div>
 
-                            <button
-                                onClick={() => setShowMembers(!showMembers)}
-                                className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showMembers
-                                    ? 'bg-cyan-950/30 border-cyan-500/30 text-cyan-300'
-                                    : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
-                                    }`}
-                            >
-                                {t.members || 'Участники'} ({activeBoard.members.length})
-                            </button>
+                            <div className="flex items-center space-x-2 shrink-0">
+                                {activeBoard.members.some(isBot) && activeChannelId && (
+                                    <button
+                                        onClick={() => openModal({ kind: 'discussion' })}
+                                        disabled={Boolean(discussionProgress)}
+                                        className="px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border border-indigo-500/30 bg-indigo-950/30 text-indigo-300 hover:bg-indigo-900/40 transition-all disabled:opacity-40"
+                                    >
+                                        {t.discussion || 'Совещание'}
+                                    </button>
+                                )}
+
+                                <button
+                                    onClick={() => setShowMembers(!showMembers)}
+                                    className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showMembers
+                                        ? 'bg-cyan-950/30 border-cyan-500/30 text-cyan-300'
+                                        : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                                        }`}
+                                >
+                                    {t.members || 'Участники'} ({activeBoard.members.length})
+                                </button>
+                            </div>
                         </header>
 
                         {error && (
@@ -482,10 +562,27 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     </div>
                                 ))}
 
-                                {isAgentThinking && (
+                                {isAgentThinking && !discussionProgress && (
                                     <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono pl-11">
                                         <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
                                         <span>{t.agentThinking || 'агент печатает...'}</span>
+                                    </div>
+                                )}
+
+                                {discussionProgress && (
+                                    <div className="flex items-center justify-between pl-11 pr-2 py-2">
+                                        <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono min-w-0">
+                                            <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse shrink-0"></span>
+                                            <span className="truncate">
+                                                {discussionProgress.bot} · {t.turn || 'ход'} {discussionProgress.turn}/{discussionProgress.total}
+                                            </span>
+                                        </div>
+                                        <button
+                                            onClick={() => { stopDiscussionRef.current = true; }}
+                                            className="shrink-0 ml-3 px-2.5 py-1 rounded-md border border-rose-500/30 bg-rose-950/20 text-rose-300 text-[10px] font-mono uppercase tracking-wider hover:bg-rose-900/30 transition-colors"
+                                        >
+                                            {t.stop || 'Стоп'}
+                                        </button>
                                     </div>
                                 )}
 
@@ -602,6 +699,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {modal.kind === 'addHuman' && (t.addHuman || 'Добавить человека')}
                             {modal.kind === 'createBot' && (t.createBot || 'Создать бота')}
                             {modal.kind === 'cloneAgent' && (t.cloneAgent || 'Бот из персоны')}
+                            {modal.kind === 'discussion' && (t.discussion || 'Совещание ботов')}
                             {modal.kind === 'deleteBoard' && (t.deleteBoard || 'Удалить доску')}
                         </h3>
 
@@ -611,6 +709,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {modal.kind === 'addHuman' && (t.memberNameHint || 'Имя существующего профиля в Потоке')}
                             {modal.kind === 'createBot' && (t.botHint || 'Бот живёт только в этой доске и отвечает на @имя. Токены тратит тот, кто его упомянул.')}
                             {modal.kind === 'cloneAgent' && (t.cloneHint || 'Копия чужой персоны в вашей доске. Автору это ничего не стоит — платит тот, кто упомянул бота.')}
+                            {modal.kind === 'discussion' && (t.discussionHint || 'Боты выскажутся по очереди, по кругу. Каждый ход — один запрос к модели с вашего ключа.')}
                             {modal.kind === 'deleteBoard' && `«${modal.boardName}» — ${t.boardDeleteConfirm || 'доска, каналы и все сообщения будут удалены безвозвратно.'}`}
                         </p>
 
@@ -642,7 +741,60 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             </div>
                         )}
 
-                        {modal.kind !== 'deleteBoard' && (
+                        {modal.kind === 'discussion' && (
+                            <>
+                                <div className="mb-4 space-y-1 max-h-36 overflow-y-auto border border-slate-800 rounded-lg p-2">
+                                    {activeBoard?.members.filter(isBot).map(bot => {
+                                        const picked = discussionBots.includes(bot.id);
+                                        const full = discussionBots.length >= MAX_DISCUSSION_BOTS;
+
+                                        return (
+                                            <button
+                                                key={bot.id}
+                                                type="button"
+                                                disabled={!picked && full}
+                                                onClick={() => setDiscussionBots(prev =>
+                                                    picked ? prev.filter(id => id !== bot.id) : [...prev, bot.id]
+                                                )}
+                                                className={`w-full text-left px-3 py-2 rounded-md border transition-all disabled:opacity-30 ${picked
+                                                    ? 'bg-indigo-950/40 border-indigo-500/40 text-indigo-200'
+                                                    : 'border-transparent text-slate-400 hover:bg-slate-800/50'
+                                                    }`}
+                                            >
+                                                <span className="text-sm">{picked ? '☑' : '☐'} {bot.name}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                <div className="mb-4">
+                                    <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
+                                        {t.rounds || 'Кругов'}: {discussionRounds}
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min={1}
+                                        max={MAX_DISCUSSION_ROUNDS}
+                                        value={discussionRounds}
+                                        onChange={(e) => setDiscussionRounds(Number(e.target.value))}
+                                        className="w-full accent-indigo-500"
+                                    />
+                                    <p className="text-[10px] text-slate-600 mt-1 font-mono">
+                                        {discussionBots.length} × {discussionRounds} = {discussionBots.length * discussionRounds} {t.turnsTotal || 'ходов (запросов к модели)'}
+                                    </p>
+                                </div>
+
+                                <textarea
+                                    autoFocus
+                                    value={botPrompt}
+                                    onChange={(e) => setBotPrompt(e.target.value)}
+                                    placeholder={t.taskPlaceholder || 'Задача: собрать 3 варианта слогана для баннера и выбрать лучший, с обоснованием.'}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-4 font-mono"
+                                />
+                            </>
+                        )}
+
+                        {modal.kind !== 'deleteBoard' && modal.kind !== 'discussion' && (
                             <input
                                 ref={modalInputRef}
                                 autoFocus={modal.kind !== 'cloneAgent'}
@@ -696,7 +848,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             </button>
                             <button
                                 type="submit"
-                                disabled={isSubmitting || (modal.kind !== 'deleteBoard' && !modalInput.trim())}
+                                disabled={
+                                    isSubmitting ||
+                                    (modal.kind === 'discussion'
+                                        ? !botPrompt.trim() || discussionBots.length === 0
+                                        : modal.kind !== 'deleteBoard' && !modalInput.trim())
+                                }
                                 className={`flex-1 py-2.5 rounded-xl text-white font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg transition-colors disabled:opacity-40 ${modal.kind === 'deleteBoard'
                                     ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-900/20'
                                     : 'bg-cyan-600 hover:bg-cyan-500 shadow-cyan-900/20'
@@ -706,7 +863,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     ? '...'
                                     : modal.kind === 'deleteBoard'
                                         ? (t.delete || 'Удалить')
-                                        : (t.create || 'Создать')}
+                                        : modal.kind === 'discussion'
+                                            ? (t.start || 'Запустить')
+                                            : (t.create || 'Создать')}
                             </button>
                         </div>
                     </form>

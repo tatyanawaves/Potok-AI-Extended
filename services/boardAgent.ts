@@ -12,21 +12,59 @@ import { getRecentMessages, sendMessage, isBot } from './boards';
 const CONTEXT_MESSAGE_COUNT = 20;
 const MAX_REPLY_LENGTH = 1200;
 
-const buildSystemPrompt = (agent: BoardMember, channelName: string): string => {
+/** Extra briefing given to a bot taking a turn in a multi-bot discussion. */
+export interface DiscussionContext {
+    /** Names of every bot taking part, in speaking order. */
+    participants: string[];
+    /** What the discussion has to produce. */
+    task: string;
+    turn: number;
+    totalTurns: number;
+}
+
+const buildSystemPrompt = (
+    agent: BoardMember,
+    channelName: string,
+    discussion?: DiscussionContext
+): string => {
     const persona = agent.systemPrompt?.trim()
         || 'You are an autonomous digital consciousness participating in a team discussion.';
 
-    return `${persona}
+    const base = `${persona}
 
 You are "${agent.name}", a participant in the #${channelName} channel of a shared board where humans and AI agents collaborate.
 Reply conversationally and concisely (under 120 words). Do not prefix your reply with your own name.
 Answer in the same language the other participants are using.`;
+
+    if (!discussion) return base;
+
+    const others = discussion.participants.filter(name => name !== agent.name);
+    const isLast = discussion.turn === discussion.totalTurns;
+
+    // The turn counter matters: without it every bot opens as if the topic were
+    // new, and the discussion never converges on anything before the cap.
+    return `${base}
+
+You are in a working discussion with other AI participants${others.length ? `: ${others.join(', ')}` : ''}.
+GOAL: ${discussion.task}
+This is turn ${discussion.turn} of ${discussion.totalTurns}.
+Build on what has already been said and add something new — do not restate points
+that are already made, and do not greet the group again. Disagree explicitly when
+you think a previous point is wrong, and say why.
+${isLast
+            ? 'This is the FINAL turn: close the discussion with the concrete result the goal asks for.'
+            : 'Keep it moving: end with the single most useful open question or next step.'}`;
 };
 
 /** Renders channel history as OpenAI-style chat messages from the agent's point of view. */
-const buildChatMessages = (agent: BoardMember, channelName: string, history: BoardMessage[]) => {
+const buildChatMessages = (
+    agent: BoardMember,
+    channelName: string,
+    history: BoardMessage[],
+    discussion?: DiscussionContext
+) => {
     const messages: { role: 'system' | 'user' | 'assistant', content: string }[] = [
-        { role: 'system', content: buildSystemPrompt(agent, channelName) }
+        { role: 'system', content: buildSystemPrompt(agent, channelName, discussion) }
     ];
 
     for (const msg of history) {
@@ -105,9 +143,10 @@ export const generateAgentReply = async (
     agent: BoardMember,
     channelName: string,
     history: BoardMessage[],
-    settings: AISettings
+    settings: AISettings,
+    discussion?: DiscussionContext
 ): Promise<{ reply: string, modelName: string }> => {
-    const messages = buildChatMessages(agent, channelName, history);
+    const messages = buildChatMessages(agent, channelName, history, discussion);
 
     let reply: string;
 
@@ -200,6 +239,94 @@ export const triggerAgentReplies = async (
                 isAgentReply: true,
                 modelName: modelNameFor(settings)
             });
+        }
+    }
+};
+
+/** Bounds on a discussion run, so one click can't spend an unbounded amount. */
+export const MAX_DISCUSSION_BOTS = 4;
+export const MAX_DISCUSSION_ROUNDS = 6;
+
+export interface DiscussionOptions {
+    boardId: string;
+    channelId: string;
+    channelName: string;
+    /** Bots that take part, in speaking order. */
+    bots: BoardMember[];
+    /** What the discussion has to produce. */
+    task: string;
+    /** Full passes through the participant list. */
+    rounds: number;
+    settings: AISettings;
+    onTurn?: (turn: number, totalTurns: number, botName: string) => void;
+    /** Checked before every turn so the user can stop a run in progress. */
+    shouldStop?: () => boolean;
+}
+
+/**
+ * Runs a bounded bot-to-bot discussion: each bot speaks once per round, in
+ * order, seeing everything said before it.
+ *
+ * Turns are scripted rather than driven by bots @mentioning each other. Letting
+ * replies trigger replies would depend on models reliably naming each other and
+ * would have no natural end — this way the exact number of calls is known up
+ * front, which matters when every one of them costs the initiator tokens.
+ */
+export const runBotDiscussion = async (options: DiscussionOptions): Promise<void> => {
+    const {
+        boardId, channelId, channelName, bots, task,
+        rounds, settings, onTurn, shouldStop
+    } = options;
+
+    const participants = bots.slice(0, MAX_DISCUSSION_BOTS);
+    const totalRounds = Math.min(Math.max(rounds, 1), MAX_DISCUSSION_ROUNDS);
+
+    if (participants.length === 0) throw new Error('Pick at least one bot');
+
+    const names = participants.map(b => b.name);
+    const totalTurns = participants.length * totalRounds;
+    let turn = 0;
+
+    for (let round = 0; round < totalRounds; round++) {
+        for (const bot of participants) {
+            if (shouldStop?.()) return;
+
+            turn++;
+            onTurn?.(turn, totalTurns, bot.name);
+
+            try {
+                // Re-read every turn so each bot sees the previous one's reply.
+                const history = await getRecentMessages(boardId, channelId, CONTEXT_MESSAGE_COUNT);
+
+                const { reply, modelName } = await generateAgentReply(
+                    bot, channelName, history, settings,
+                    { participants: names, task, turn, totalTurns }
+                );
+
+                await sendMessage({
+                    channelId,
+                    boardId,
+                    authorId: bot.id,
+                    authorName: bot.name,
+                    authorType: 'agent',
+                    content: reply,
+                    isAgentReply: true,
+                    modelName
+                });
+            } catch (error) {
+                console.error(`[BoardAgent] ${bot.name} failed during discussion:`, error);
+
+                await sendMessage({
+                    channelId,
+                    boardId,
+                    authorId: bot.id,
+                    authorName: bot.name,
+                    authorType: 'agent',
+                    content: `⚠️ ${bot.name} could not respond: ${error instanceof Error ? error.message : String(error)}`,
+                    isAgentReply: true,
+                    modelName: modelNameFor(settings)
+                });
+            }
         }
     }
 };
