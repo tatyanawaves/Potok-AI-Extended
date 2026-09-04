@@ -73,7 +73,8 @@ export interface DiscussionContext {
 const buildSystemPrompt = (
     agent: BoardMember,
     channelName: string,
-    discussion?: DiscussionContext
+    discussion?: DiscussionContext,
+    hasTools = false
 ): string => {
     const persona = agent.systemPrompt?.trim()
         || 'You are an autonomous digital consciousness participating in a team discussion.';
@@ -84,14 +85,26 @@ You are "${agent.name}", a participant in the #${channelName} channel of a share
 Reply conversationally and concisely (under 120 words). Do not prefix your reply with your own name.
 Answer in the same language the other participants are using.`;
 
-    if (!discussion) return base;
+    // Bots were seen abandoning their tools after another participant asserted
+    // the tools were broken — a claim no one had tested. Trying is cheap and
+    // the error, if real, comes back as a tool result anyway.
+    const tools = hasTools
+        ? `
+
+You have working tools connected. Call them to get real data instead of
+answering from memory. If another participant says your tools are failing,
+verify that yourself by calling one — do not take their word for it. Never
+invent identifiers, numbers or names that a tool could have given you.`
+        : '';
+
+    if (!discussion) return base + tools;
 
     const others = discussion.participants.filter(name => name !== agent.name);
     const isLast = discussion.turn === discussion.totalTurns;
 
     // The turn counter matters: without it every bot opens as if the topic were
     // new, and the discussion never converges on anything before the cap.
-    return `${base}
+    return `${base}${tools}
 
 You are in a working discussion with other AI participants${others.length ? `: ${others.join(', ')}` : ''}.
 GOAL: ${discussion.task}
@@ -109,10 +122,11 @@ const buildChatMessages = (
     agent: BoardMember,
     channelName: string,
     history: BoardMessage[],
-    discussion?: DiscussionContext
+    discussion?: DiscussionContext,
+    hasTools = false
 ) => {
     const messages: { role: 'system' | 'user' | 'assistant', content: string }[] = [
-        { role: 'system', content: buildSystemPrompt(agent, channelName, discussion) }
+        { role: 'system', content: buildSystemPrompt(agent, channelName, discussion, hasTools) }
     ];
 
     for (const msg of history) {
@@ -237,7 +251,8 @@ export const generateAgentReply = async (
     toolPolicy: ToolPolicy = 'auto',
     approveTool?: ToolApprover
 ): Promise<{ reply: string, modelName: string, toolsUsed: string[] }> => {
-    const messages: any[] = buildChatMessages(agent, channelName, history, discussion);
+    const willHaveTools = Boolean(agent.toolServerUrl) && toolPolicy !== 'off';
+    const messages: any[] = buildChatMessages(agent, channelName, history, discussion, willHaveTools);
     const toolsUsed: string[] = [];
 
     // Gemini's SDK has its own function-calling shape; tools stay OpenAI-only
