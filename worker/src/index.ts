@@ -246,6 +246,50 @@ const handleConnectToken = async (
 };
 
 /**
+ * Searches Pipedream's app catalogue so the UI can show real services with
+ * logos instead of asking people to know slugs like "google_sheets".
+ */
+const handleApps = async (
+    request: Request, env: Env, cors: Record<string, string>
+): Promise<Response> => {
+    let body: { query?: string } = {};
+    try {
+        body = (await request.json()) as any;
+    } catch {
+        // Empty query lists the most common apps.
+    }
+
+    const accessToken = await getAccessToken(env);
+
+    const url = new URL(`${PIPEDREAM_API}/apps`);
+    if (body.query?.trim()) url.searchParams.set('q', body.query.trim());
+    url.searchParams.set('limit', '40');
+
+    const response = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${accessToken}` }
+    });
+
+    const data = (await response.json().catch(() => ({}))) as any;
+
+    if (!response.ok) {
+        return json({ error: 'Pipedream rejected the app search', detail: data }, 502, cors);
+    }
+
+    const apps = (data.data || [])
+        // Only OAuth/key apps can be connected by an end user.
+        .filter((app: any) => app.name_slug)
+        .map((app: any) => ({
+            slug: app.name_slug,
+            name: app.name,
+            description: app.description,
+            imgSrc: app.img_src,
+            categories: app.categories || []
+        }));
+
+    return json({ apps }, 200, cors);
+};
+
+/**
  * Lists the accounts this user has connected, so the app can offer them as
  * tool servers instead of asking people to type app slugs.
  */
@@ -368,6 +412,9 @@ export default {
         try {
             if (url.pathname === '/pd/connect-token') {
                 return await handleConnectToken(request, env, uid, cors);
+            }
+            if (url.pathname === '/pd/apps') {
+                return await handleApps(request, env, cors);
             }
             if (url.pathname === '/pd/accounts') {
                 return await handleAccounts(request, env, uid, cors);

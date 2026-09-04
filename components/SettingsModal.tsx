@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AISettings, Language, AIProvider } from '../types';
 import { translations } from '../translations';
-import {
-  isPipedreamConfigured, listConnectedAccounts, startAccountConnection,
-  ConnectedAccount
-} from '../services/pipedream';
+import { isPipedreamConfigured, listConnectedAccounts, ConnectedAccount } from '../services/pipedream';
+import ToolCatalog from './ToolCatalog';
 
 interface SettingsModalProps {
   settings: AISettings;
@@ -42,7 +40,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
-  const [appSlug, setAppSlug] = useState('');
+  const [showCatalog, setShowCatalog] = useState(false);
 
   const refreshAccounts = useCallback(async () => {
     if (!isPipedreamConfigured()) return;
@@ -60,17 +58,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
   useEffect(() => { refreshAccounts(); }, [refreshAccounts]);
 
-  const handleConnect = async () => {
-    if (!appSlug.trim()) return;
-
-    try {
-      setAccountsError(null);
-      await startAccountConnection(appSlug.trim().toLowerCase());
-      setAppSlug('');
-    } catch (e) {
-      setAccountsError(e instanceof Error ? e.message : String(e));
-    }
-  };
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
 
   const t = translations[language];
@@ -106,6 +93,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
     e.preventDefault();
     handleSave();
   };
+
+  if (showCatalog) {
+    return (
+      <ToolCatalog
+        language={language}
+        onClose={() => { setShowCatalog(false); refreshAccounts(); }}
+      />
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
@@ -393,33 +389,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                 ))}
               </div>
 
-              <div className="flex items-center space-x-2">
-                <input
-                  type="text"
-                  value={appSlug}
-                  onChange={(e) => setAppSlug(e.target.value)}
-                  placeholder="slack, notion, google_sheets, github"
-                  className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-[11px]"
-                />
-                <button
-                  type="button"
-                  onClick={handleConnect}
-                  disabled={!appSlug.trim()}
-                  className="shrink-0 px-4 py-2 rounded-lg bg-indigo-900/40 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/60 transition-colors disabled:opacity-40"
-                >
-                  {t.connect || 'Подключить'}
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setShowCatalog(true)}
+                className="w-full py-2.5 rounded-lg bg-emerald-950/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono uppercase tracking-wider hover:bg-emerald-900/30 transition-colors"
+              >
+                ⚒ {t.browseTools || 'Каталог сервисов'}
+              </button>
 
               {accountsError && (
                 <div className="px-3 py-2 rounded-lg bg-rose-950/30 border border-rose-500/30 text-rose-300 text-[11px]">
                   {accountsError}
                 </div>
               )}
-
-              <p className="text-[10px] text-slate-600 leading-relaxed">
-                {t.connectHint || 'Откроется страница Pipedream в новой вкладке. После подключения вернитесь сюда и нажмите «обновить».'}
-              </p>
             </div>
           )}
 

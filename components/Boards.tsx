@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AISettings, Board, BoardChannel, BoardMember, BoardMessage } from '../types';
 import { translations } from '../translations';
 import { auth, getUserProfileByName, getClonableAgentProfiles } from '../services/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 import {
     createBoard, subscribeToMyBoards, deleteBoard,
     addMember, addBot, removeMember,
@@ -15,6 +16,7 @@ import {
 import {
     isPipedreamConfigured, listConnectedAccounts, toolServerUrlFor, ConnectedAccount
 } from '../services/pipedream';
+import ToolCatalog from './ToolCatalog';
 
 interface BoardsProps {
     settings: AISettings;
@@ -23,7 +25,16 @@ interface BoardsProps {
 
 const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const t = translations[settings.language] as any;
-    const currentUid = auth.currentUser?.uid;
+
+    /**
+     * Firebase restores a session asynchronously, so auth.currentUser is still
+     * null on the first render after a page load. Reading it directly left the
+     * board stuck on "please sign in" for an already-signed-in user, because
+     * nothing re-rendered once the session arrived.
+     */
+    const [currentUid, setCurrentUid] = useState<string | undefined>(auth.currentUser?.uid);
+
+    useEffect(() => onAuthStateChanged(auth, user => setCurrentUid(user?.uid)), []);
 
     const [boards, setBoards] = useState<Board[]>([]);
     const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
@@ -52,6 +63,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [botPrompt, setBotPrompt] = useState('');
     const [botToolUrl, setBotToolUrl] = useState('');
     const [pipedreamAccounts, setPipedreamAccounts] = useState<ConnectedAccount[]>([]);
+    const [showCatalog, setShowCatalog] = useState(false);
     const [clonable, setClonable] = useState<Array<Record<string, any>>>([]);
     const [selectedClone, setSelectedClone] = useState<Record<string, any> | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -500,6 +512,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             </div>
 
                             <div className="flex items-center space-x-2 shrink-0">
+                                {isPipedreamConfigured() && (
+                                    <button
+                                        onClick={() => setShowCatalog(true)}
+                                        className="px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border border-emerald-500/30 bg-emerald-950/20 text-emerald-300 hover:bg-emerald-900/30 transition-all"
+                                        title={t.toolCatalog || 'Инструменты'}
+                                    >
+                                        ⚒ {t.tools || 'Инструменты'}
+                                    </button>
+                                )}
+
                                 {activeBoard.members.some(isBot) && activeChannelId && (
                                     <button
                                         onClick={() => openModal({ kind: 'discussion' })}
@@ -724,6 +746,23 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 )}
             </section>
 
+            {showCatalog && (
+                <ToolCatalog
+                    language={settings.language}
+                    onClose={() => {
+                        setShowCatalog(false);
+                        // Newly connected services should appear in the bot dialog.
+                        if (isPipedreamConfigured()) {
+                            listConnectedAccounts().then(setPipedreamAccounts).catch(() => { });
+                        }
+                    }}
+                    onPick={modal?.kind === 'createBot' ? (slug) => {
+                        setBotToolUrl(toolServerUrlFor(slug));
+                        setShowCatalog(false);
+                    } : undefined}
+                />
+            )}
+
             {/* Dialogs — replaces window.prompt/confirm, which browsers may block */}
             {modal && (
                 <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
@@ -863,8 +902,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'}
                                 </label>
 
-                                {pipedreamAccounts.length > 0 && (
-                                    <div className="flex flex-wrap gap-1 mb-2">
+                                {isPipedreamConfigured() && (
+                                    <div className="flex flex-wrap items-center gap-1 mb-2">
                                         {pipedreamAccounts.filter(a => a.appSlug).map(account => {
                                             const url = toolServerUrlFor(account.appSlug!);
                                             const picked = botToolUrl === url;
@@ -875,14 +914,22 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                     type="button"
                                                     onClick={() => setBotToolUrl(picked ? '' : url)}
                                                     className={`text-[10px] font-mono px-2 py-1 rounded border transition-all ${picked
-                                                        ? 'bg-indigo-950/50 border-indigo-500/40 text-indigo-200'
+                                                        ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-200'
                                                         : 'border-slate-700 text-slate-400 hover:border-slate-500'
                                                         }`}
                                                 >
-                                                    {account.appName || account.appSlug}
+                                                    {picked ? '✓ ' : ''}{account.appName || account.appSlug}
                                                 </button>
                                             );
                                         })}
+
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowCatalog(true)}
+                                            className="text-[10px] font-mono px-2 py-1 rounded border border-dashed border-slate-600 text-slate-400 hover:border-emerald-500/40 hover:text-emerald-300 transition-all"
+                                        >
+                                            + {t.chooseService || 'выбрать сервис'}
+                                        </button>
                                     </div>
                                 )}
                                 <input

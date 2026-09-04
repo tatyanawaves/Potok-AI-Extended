@@ -45,6 +45,20 @@ const post = async (path: string, body: unknown = {}): Promise<any> => {
     return data;
 };
 
+export interface CatalogApp {
+    slug: string;
+    name: string;
+    description?: string;
+    imgSrc?: string;
+    categories: string[];
+}
+
+/** Searches Pipedream's app catalogue. An empty query returns popular apps. */
+export const searchApps = async (query: string): Promise<CatalogApp[]> => {
+    const data = await post('/pd/apps', { query });
+    return (data.apps || []) as CatalogApp[];
+};
+
 export const listConnectedAccounts = async (): Promise<ConnectedAccount[]> => {
     const data = await post('/pd/accounts');
     return (data.accounts || []) as ConnectedAccount[];
