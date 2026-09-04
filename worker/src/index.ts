@@ -178,7 +178,11 @@ const corsHeaders = (env: Env, origin: string | null): Record<string, string> =>
     return {
         'Access-Control-Allow-Origin': isAllowed ? origin : allowed[0] || '',
         'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        // MCP-Protocol-Version and Mcp-Session-Id are sent by the MCP client;
+        // omitting them here fails the preflight before the request is made.
+        'Access-Control-Allow-Headers':
+            'Content-Type, Authorization, MCP-Protocol-Version, Mcp-Session-Id',
+        'Access-Control-Expose-Headers': 'Mcp-Session-Id',
         'Access-Control-Max-Age': '86400',
         Vary: 'Origin'
     };
@@ -290,27 +294,41 @@ const handleMcp = async (
     const accessToken = await getAccessToken(env);
     const rpcBody = await request.text();
 
+    const upstreamHeaders: Record<string, string> = {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+        'x-pd-project-id': env.PIPEDREAM_PROJECT_ID,
+        'x-pd-environment': env.PIPEDREAM_ENVIRONMENT,
+        'x-pd-external-user-id': uid,
+        'x-pd-app-slug': appSlug
+    };
+
+    // Carry the session across turns when the client established one.
+    const session = request.headers.get('mcp-session-id');
+    if (session) upstreamHeaders['Mcp-Session-Id'] = session;
+
+    const protocol = request.headers.get('mcp-protocol-version');
+    if (protocol) upstreamHeaders['MCP-Protocol-Version'] = protocol;
+
     const response = await fetch(PIPEDREAM_MCP, {
         method: 'POST',
-        headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json, text/event-stream',
-            'x-pd-project-id': env.PIPEDREAM_PROJECT_ID,
-            'x-pd-environment': env.PIPEDREAM_ENVIRONMENT,
-            'x-pd-external-user-id': uid,
-            'x-pd-app-slug': appSlug
-        },
+        headers: upstreamHeaders,
         body: rpcBody
     });
 
-    // Passed through as-is: the MCP client understands both JSON and SSE.
+    const outHeaders: Record<string, string> = {
+        ...cors,
+        'Content-Type': response.headers.get('content-type') || 'application/json'
+    };
+
+    const upstreamSession = response.headers.get('mcp-session-id');
+    if (upstreamSession) outHeaders['Mcp-Session-Id'] = upstreamSession;
+
+    // Body passed through as-is: the MCP client understands JSON and SSE alike.
     return new Response(response.body, {
         status: response.status,
-        headers: {
-            ...cors,
-            'Content-Type': response.headers.get('content-type') || 'application/json'
-        }
+        headers: outHeaders
     });
 };
 
