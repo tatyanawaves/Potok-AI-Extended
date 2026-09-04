@@ -252,18 +252,21 @@ const handleConnectToken = async (
 const handleApps = async (
     request: Request, env: Env, cors: Record<string, string>
 ): Promise<Response> => {
-    let body: { query?: string } = {};
+    let body: { query?: string; after?: string } = {};
     try {
         body = (await request.json()) as any;
     } catch {
-        // Empty query lists the most common apps.
+        // Empty query lists apps alphabetically from the start.
     }
 
     const accessToken = await getAccessToken(env);
 
     const url = new URL(`${PIPEDREAM_API}/apps`);
     if (body.query?.trim()) url.searchParams.set('q', body.query.trim());
-    url.searchParams.set('limit', '40');
+    url.searchParams.set('limit', '60');
+    // The catalogue is alphabetical and far larger than one page: without
+    // forwarding the cursor the UI never gets past the A's.
+    if (body.after) url.searchParams.set('after', body.after);
 
     const response = await fetch(url.toString(), {
         headers: { Authorization: `Bearer ${accessToken}` }
@@ -286,7 +289,11 @@ const handleApps = async (
             categories: app.categories || []
         }));
 
-    return json({ apps }, 200, cors);
+    return json({
+        apps,
+        nextCursor: data.page_info?.end_cursor ?? null,
+        total: data.page_info?.total_count ?? null
+    }, 200, cors);
 };
 
 /**

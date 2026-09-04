@@ -53,10 +53,24 @@ export interface CatalogApp {
     categories: string[];
 }
 
-/** Searches Pipedream's app catalogue. An empty query returns popular apps. */
-export const searchApps = async (query: string): Promise<CatalogApp[]> => {
-    const data = await post('/pd/apps', { query });
-    return (data.apps || []) as CatalogApp[];
+export interface AppPage {
+    apps: CatalogApp[];
+    /** Pass back as `after` for the next page; null when the list is exhausted. */
+    nextCursor: string | null;
+    total: number | null;
+}
+
+/**
+ * One page of Pipedream's app catalogue. An empty query lists everything
+ * alphabetically — over three thousand entries — so callers must page.
+ */
+export const searchApps = async (query: string, after?: string): Promise<AppPage> => {
+    const data = await post('/pd/apps', { query, after });
+    return {
+        apps: (data.apps || []) as CatalogApp[],
+        nextCursor: data.nextCursor ?? null,
+        total: data.total ?? null
+    };
 };
 
 export const listConnectedAccounts = async (): Promise<ConnectedAccount[]> => {

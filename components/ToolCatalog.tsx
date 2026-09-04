@@ -24,8 +24,11 @@ const ToolCatalog: React.FC<ToolCatalogProps> = ({ language, onClose, onPick }) 
 
     const [query, setQuery] = useState('');
     const [apps, setApps] = useState<CatalogApp[]>([]);
+    const [cursor, setCursor] = useState<string | null>(null);
+    const [total, setTotal] = useState<number | null>(null);
     const [connected, setConnected] = useState<ConnectedAccount[]>([]);
     const [loading, setLoading] = useState(false);
+    const [loadingMore, setLoadingMore] = useState(false);
     const [connecting, setConnecting] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
@@ -43,13 +46,32 @@ const ToolCatalog: React.FC<ToolCatalogProps> = ({ language, onClose, onPick }) 
         setLoading(true);
         setError(null);
         try {
-            setApps(await searchApps(value));
+            const page = await searchApps(value);
+            setApps(page.apps);
+            setCursor(page.nextCursor);
+            setTotal(page.total);
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
             setLoading(false);
         }
     }, []);
+
+    const loadMore = useCallback(async () => {
+        if (!cursor || loadingMore) return;
+
+        setLoadingMore(true);
+        try {
+            const page = await searchApps(query, cursor);
+            // Appended rather than replaced: this is paging, not a new search.
+            setApps(prev => [...prev, ...page.apps]);
+            setCursor(page.nextCursor);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setLoadingMore(false);
+        }
+    }, [cursor, loadingMore, query]);
 
     useEffect(() => {
         refreshConnected();
@@ -206,11 +228,23 @@ const ToolCatalog: React.FC<ToolCatalogProps> = ({ language, onClose, onPick }) 
                             })}
                         </div>
                     )}
+
+                    {cursor && (
+                        <button
+                            onClick={loadMore}
+                            disabled={loadingMore}
+                            className="w-full mt-3 py-2.5 rounded-lg border border-slate-700 text-slate-400 text-[10px] font-mono uppercase tracking-wider hover:border-slate-500 hover:text-slate-200 transition-colors disabled:opacity-40"
+                        >
+                            {loadingMore ? '...' : (t.loadMore || 'Показать ещё')}
+                        </button>
+                    )}
                 </div>
 
                 <div className="p-4 border-t border-slate-800 flex items-center justify-between shrink-0">
                     <span className="text-[10px] text-slate-600">
-                        {t.connectOpensTab || 'Подключение откроется в новой вкладке'}
+                        {total
+                            ? `${apps.length} ${t.of || 'из'} ${total} · ${t.searchIsFaster || 'поиск быстрее пролистывания'}`
+                            : (t.connectOpensTab || 'Подключение откроется в новой вкладке')}
                     </span>
                     <button
                         onClick={refreshConnected}

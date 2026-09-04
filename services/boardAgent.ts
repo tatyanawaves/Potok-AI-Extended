@@ -208,13 +208,34 @@ const callGemini = async (
 /** Rounds of tool calls allowed before the bot must answer with prose. */
 const MAX_TOOL_ROUNDS = 4;
 
+/**
+ * How much freedom a bot has with its tools.
+ *
+ *  'off'     — tools are withheld entirely; the bot answers from knowledge.
+ *  'ask'     — every call needs the operator's approval first.
+ *  'auto'    — the bot calls whatever it needs.
+ *
+ * Tools act on real accounts, so 'ask' is the sensible default for anything
+ * running unattended, like a multi-bot discussion.
+ */
+export type ToolPolicy = 'off' | 'ask' | 'auto';
+
+/** Asked to approve one call; returning false makes the bot work without it. */
+export type ToolApprover = (
+    botName: string,
+    toolName: string,
+    args: Record<string, any>
+) => Promise<boolean>;
+
 export const generateAgentReply = async (
     agent: BoardMember,
     channelName: string,
     history: BoardMessage[],
     settings: AISettings,
     discussion?: DiscussionContext,
-    onToolCall?: (toolName: string) => void
+    onToolCall?: (toolName: string) => void,
+    toolPolicy: ToolPolicy = 'auto',
+    approveTool?: ToolApprover
 ): Promise<{ reply: string, modelName: string, toolsUsed: string[] }> => {
     const messages: any[] = buildChatMessages(agent, channelName, history, discussion);
     const toolsUsed: string[] = [];
@@ -248,7 +269,7 @@ export const generateAgentReply = async (
     let connection: McpConnection | null = null;
     let openAiTools: any[] | undefined;
 
-    if (agent.toolServerUrl) {
+    if (agent.toolServerUrl && toolPolicy !== 'off') {
         try {
             connection = await connectToToolServer(agent.toolServerUrl, settings);
             openAiTools = toOpenAITools(connection.tools);
@@ -288,12 +309,28 @@ export const generateAgentReply = async (
         });
 
         for (const call of completion.toolCalls) {
-            onToolCall?.(call.name);
-            if (!toolsUsed.includes(call.name)) toolsUsed.push(call.name);
-
             let result: string;
             try {
                 const args = JSON.parse(call.args || '{}');
+
+                if (toolPolicy === 'ask' && approveTool) {
+                    const allowed = await approveTool(agent.name, call.name, args);
+
+                    if (!allowed) {
+                        // Refusal is reported to the model, not thrown: it can
+                        // still answer, just without this call's result.
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: call.id,
+                            content: 'The operator declined this tool call. Continue without it and say so.'
+                        });
+                        continue;
+                    }
+                }
+
+                onToolCall?.(call.name);
+                if (!toolsUsed.includes(call.name)) toolsUsed.push(call.name);
+
                 result = await callTool(
                     connection,
                     call.name,
@@ -406,6 +443,9 @@ export interface DiscussionOptions {
     onTurn?: (turn: number, totalTurns: number, botName: string) => void;
     /** Checked before every turn so the user can stop a run in progress. */
     shouldStop?: () => boolean;
+    /** Defaults to 'ask': a discussion runs many turns without supervision. */
+    toolPolicy?: ToolPolicy;
+    approveTool?: ToolApprover;
 }
 
 /**
@@ -420,7 +460,8 @@ export interface DiscussionOptions {
 export const runBotDiscussion = async (options: DiscussionOptions): Promise<void> => {
     const {
         boardId, channelId, channelName, bots, task,
-        rounds, settings, onTurn, shouldStop
+        rounds, settings, onTurn, shouldStop,
+        toolPolicy = 'ask', approveTool
     } = options;
 
     const participants = bots.slice(0, MAX_DISCUSSION_BOTS);
@@ -445,7 +486,8 @@ export const runBotDiscussion = async (options: DiscussionOptions): Promise<void
 
                 const { reply, modelName, toolsUsed } = await generateAgentReply(
                     bot, channelName, history, settings,
-                    { participants: names, task, turn, totalTurns }
+                    { participants: names, task, turn, totalTurns },
+                    undefined, toolPolicy, approveTool
                 );
 
                 await sendMessage({

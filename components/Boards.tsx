@@ -11,7 +11,7 @@ import {
 } from '../services/boards';
 import {
     triggerAgentReplies, runBotDiscussion,
-    MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS
+    MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, ToolPolicy
 } from '../services/boardAgent';
 import {
     isPipedreamConfigured, listConnectedAccounts, toolServerUrlFor, ConnectedAccount
@@ -74,7 +74,24 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [discussionProgress, setDiscussionProgress] = useState<
         { turn: number, total: number, bot: string } | null
     >(null);
+    const [toolPolicy, setToolPolicy] = useState<ToolPolicy>('ask');
     const stopDiscussionRef = useRef(false);
+
+    /**
+     * Pending tool approval. The promise is resolved by the dialog's buttons,
+     * which suspends the bot's turn until the operator decides.
+     */
+    const [pendingTool, setPendingTool] = useState<
+        { bot: string, tool: string, args: Record<string, any>, resolve: (ok: boolean) => void } | null
+    >(null);
+
+    const requestToolApproval = (bot: string, tool: string, args: Record<string, any>) =>
+        new Promise<boolean>(resolve => setPendingTool({ bot, tool, args, resolve }));
+
+    const answerToolApproval = (allowed: boolean) => {
+        pendingTool?.resolve(allowed);
+        setPendingTool(null);
+    };
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const modalInputRef = useRef<HTMLInputElement>(null);
@@ -272,7 +289,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 rounds: discussionRounds,
                 settings,
                 onTurn: (turn, total, bot) => setDiscussionProgress({ turn, total, bot }),
-                shouldStop: () => stopDiscussionRef.current
+                shouldStop: () => stopDiscussionRef.current,
+                toolPolicy,
+                approveTool: requestToolApproval
             });
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -746,6 +765,46 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 )}
             </section>
 
+            {pendingTool && (
+                <div className="fixed inset-0 z-[170] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+                    <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl shadow-2xl max-w-md w-full p-6">
+                        <h3 className="text-lg font-bold font-display text-white mb-1">
+                            {t.toolRequest || 'Запрос инструмента'}
+                        </h3>
+                        <p className="text-slate-500 text-xs mb-4">
+                            <span className="text-indigo-300">{pendingTool.bot}</span>{' '}
+                            {t.wantsToCall || 'хочет вызвать инструмент. Это действие в вашем подключённом аккаунте.'}
+                        </p>
+
+                        <div className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 mb-4">
+                            <div className="text-[11px] font-mono text-emerald-400 break-all">
+                                ⚒ {pendingTool.tool}
+                            </div>
+                            {Object.keys(pendingTool.args).length > 0 && (
+                                <pre className="text-[10px] text-slate-500 mt-2 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                                    {JSON.stringify(pendingTool.args, null, 2)}
+                                </pre>
+                            )}
+                        </div>
+
+                        <div className="flex space-x-3">
+                            <button
+                                onClick={() => answerToolApproval(false)}
+                                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
+                            >
+                                {t.deny || 'Отклонить'}
+                            </button>
+                            <button
+                                onClick={() => answerToolApproval(true)}
+                                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg shadow-emerald-900/20 transition-colors"
+                            >
+                                {t.allow || 'Разрешить'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {showCatalog && (
                 <ToolCatalog
                     language={settings.language}
@@ -860,6 +919,40 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         {discussionBots.length} × {discussionRounds} = {discussionBots.length * discussionRounds} {t.turnsTotal || 'ходов (запросов к модели)'}
                                     </p>
                                 </div>
+
+                                {activeBoard?.members.some(m => discussionBots.includes(m.id) && m.toolServerUrl) && (
+                                    <div className="mb-4">
+                                        <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
+                                            {t.toolAccess || 'Доступ к инструментам'}
+                                        </label>
+                                        <div className="flex space-x-1">
+                                            {([
+                                                ['off', t.toolsOff || 'Выключить'],
+                                                ['ask', t.toolsAsk || 'С подтверждением'],
+                                                ['auto', t.toolsAuto || 'Полный']
+                                            ] as [ToolPolicy, string][]).map(([value, label]) => (
+                                                <button
+                                                    key={value}
+                                                    type="button"
+                                                    onClick={() => setToolPolicy(value)}
+                                                    className={`flex-1 py-2 rounded-lg border text-[10px] font-mono uppercase tracking-wider transition-all ${toolPolicy === value
+                                                        ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                                                        : 'border-slate-700 text-slate-500 hover:border-slate-500'
+                                                        }`}
+                                                >
+                                                    {label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <p className="text-[10px] text-slate-600 mt-1.5 leading-relaxed">
+                                            {toolPolicy === 'auto'
+                                                ? (t.toolsAutoHint || 'Боты вызовут инструменты сами, без спроса. Это действия в ваших подключённых аккаунтах.')
+                                                : toolPolicy === 'ask'
+                                                    ? (t.toolsAskHint || 'Каждый вызов покажем и спросим разрешения.')
+                                                    : (t.toolsOffHint || 'Боты обсудят задачу, не трогая внешние сервисы.')}
+                                        </p>
+                                    </div>
+                                )}
 
                                 <textarea
                                     autoFocus
