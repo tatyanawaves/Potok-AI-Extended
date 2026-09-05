@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { translations } from '../translations';
 import { Language } from '../types';
 import {
-    searchApps, listConnectedAccounts, startAccountConnection,
+    searchApps, listConnectedAccounts, startAccountConnection, disconnectAccount,
     CatalogApp, ConnectedAccount
 } from '../services/pipedream';
 
@@ -90,6 +90,19 @@ const ToolCatalog: React.FC<ToolCatalogProps> = ({ language, onClose, onPick }) 
 
     const connectedSlugs = new Set(connected.map(a => a.appSlug).filter(Boolean) as string[]);
 
+    const [confirmDisconnect, setConfirmDisconnect] = useState<ConnectedAccount | null>(null);
+
+    const handleDisconnect = async (account: ConnectedAccount) => {
+        setConfirmDisconnect(null);
+        setError(null);
+        try {
+            await disconnectAccount(account.id);
+            setConnected(prev => prev.filter(a => a.id !== account.id));
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+    };
+
     const handleConnect = async (app: CatalogApp) => {
         setConnecting(app.slug);
         setError(null);
@@ -101,6 +114,38 @@ const ToolCatalog: React.FC<ToolCatalogProps> = ({ language, onClose, onPick }) 
             setConnecting(null);
         }
     };
+
+    if (confirmDisconnect) {
+        return (
+            <div className="fixed inset-0 z-[165] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+                <div className="bg-slate-900 border border-rose-500/30 rounded-2xl shadow-2xl max-w-sm w-full p-6">
+                    <h3 className="text-lg font-bold font-display text-white mb-1">
+                        {t.disconnectTitle || 'Отключить сервис'}
+                    </h3>
+                    <p className="text-slate-500 text-xs mb-4 leading-relaxed">
+                        {confirmDisconnect.appName || confirmDisconnect.appSlug}
+                        {confirmDisconnect.name ? ` · ${confirmDisconnect.name}` : ''} —{' '}
+                        {t.disconnectHint || 'боты, использующие этот сервис, потеряют доступ к его инструментам. Подключить другой аккаунт можно сразу после отключения.'}
+                    </p>
+
+                    <div className="flex space-x-3">
+                        <button
+                            onClick={() => setConfirmDisconnect(null)}
+                            className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
+                        >
+                            {t.cancel || 'Отмена'}
+                        </button>
+                        <button
+                            onClick={() => handleDisconnect(confirmDisconnect)}
+                            className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg shadow-rose-900/20 transition-colors"
+                        >
+                            {t.disconnect || 'Отключить'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
@@ -142,14 +187,26 @@ const ToolCatalog: React.FC<ToolCatalogProps> = ({ language, onClose, onPick }) 
                             </span>
                             <div className="flex flex-wrap gap-1.5 mt-2">
                                 {connected.map(account => (
-                                    <button
+                                    <span
                                         key={account.id}
-                                        onClick={() => account.appSlug && onPick?.(account.appSlug, account.appName || account.appSlug)}
-                                        disabled={!onPick}
-                                        className={`text-[11px] px-2.5 py-1 rounded-md border border-emerald-500/30 bg-emerald-950/30 text-emerald-300 ${onPick ? 'hover:bg-emerald-900/40 cursor-pointer' : 'cursor-default'}`}
+                                        className="inline-flex items-center text-[11px] rounded-md border border-emerald-500/30 bg-emerald-950/30 text-emerald-300 overflow-hidden"
+                                        title={account.name}
                                     >
-                                        ✓ {account.appName || account.appSlug}
-                                    </button>
+                                        <button
+                                            onClick={() => account.appSlug && onPick?.(account.appSlug, account.appName || account.appSlug)}
+                                            disabled={!onPick}
+                                            className={`px-2.5 py-1 ${onPick ? 'hover:bg-emerald-900/40 cursor-pointer' : 'cursor-default'}`}
+                                        >
+                                            ✓ {account.appName || account.appSlug}
+                                        </button>
+                                        <button
+                                            onClick={() => setConfirmDisconnect(account)}
+                                            title={t.disconnect || 'Отключить'}
+                                            className="px-2 py-1 border-l border-emerald-500/20 text-emerald-500/60 hover:text-rose-300 hover:bg-rose-950/30 transition-colors"
+                                        >
+                                            ✕
+                                        </button>
+                                    </span>
                                 ))}
                             </div>
                         </div>

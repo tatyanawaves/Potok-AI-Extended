@@ -79,6 +79,15 @@ export const listConnectedAccounts = async (): Promise<ConnectedAccount[]> => {
 };
 
 /**
+ * Revokes one connection. Bots pointed at that service keep their tool server
+ * URL but will find no credentials behind it, so the account can be replaced
+ * by connecting a different one under the same service.
+ */
+export const disconnectAccount = async (accountId: string): Promise<void> => {
+    await post('/pd/disconnect', { accountId });
+};
+
+/**
  * Starts the account-connection flow.
  *
  * Opens Pipedream's hosted page in a new tab rather than embedding their

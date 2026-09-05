@@ -333,6 +333,65 @@ const handleAccounts = async (
     return json({ accounts }, 200, cors);
 };
 
+/**
+ * Disconnects one of this user's accounts.
+ *
+ * The account is looked up among the caller's own connections first: Pipedream
+ * would happily delete any account id in the project, so without that check a
+ * signed-in user could disconnect someone else's integrations.
+ */
+const handleDisconnect = async (
+    request: Request, env: Env, uid: string, cors: Record<string, string>
+): Promise<Response> => {
+    let body: { accountId?: string } = {};
+    try {
+        body = (await request.json()) as any;
+    } catch {
+        return json({ error: 'Body must be JSON' }, 400, cors);
+    }
+
+    if (!body.accountId) {
+        return json({ error: 'accountId is required' }, 400, cors);
+    }
+
+    const accessToken = await getAccessToken(env);
+
+    const ownedUrl = new URL(`${PIPEDREAM_API}/connect/${env.PIPEDREAM_PROJECT_ID}/accounts`);
+    ownedUrl.searchParams.set('external_user_id', uid);
+
+    const ownedResponse = await fetch(ownedUrl.toString(), {
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'X-PD-Environment': env.PIPEDREAM_ENVIRONMENT
+        }
+    });
+
+    const owned = (await ownedResponse.json().catch(() => ({}))) as any;
+    const isOwn = (owned.data || []).some((account: any) => account.id === body.accountId);
+
+    if (!isOwn) {
+        return json({ error: 'That account does not belong to you' }, 403, cors);
+    }
+
+    const response = await fetch(
+        `${PIPEDREAM_API}/connect/${env.PIPEDREAM_PROJECT_ID}/accounts/${body.accountId}`,
+        {
+            method: 'DELETE',
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'X-PD-Environment': env.PIPEDREAM_ENVIRONMENT
+            }
+        }
+    );
+
+    if (!response.ok && response.status !== 204) {
+        const detail = await response.text().catch(() => '');
+        return json({ error: `Pipedream refused the disconnect (${response.status})`, detail }, 502, cors);
+    }
+
+    return json({ ok: true }, 200, cors);
+};
+
 /** Forwards one MCP JSON-RPC message, adding the credentials and identity. */
 const handleMcp = async (
     request: Request, env: Env, uid: string, cors: Record<string, string>
@@ -422,6 +481,9 @@ export default {
             }
             if (url.pathname === '/pd/apps') {
                 return await handleApps(request, env, cors);
+            }
+            if (url.pathname === '/pd/disconnect') {
+                return await handleDisconnect(request, env, uid, cors);
             }
             if (url.pathname === '/pd/accounts') {
                 return await handleAccounts(request, env, uid, cors);
