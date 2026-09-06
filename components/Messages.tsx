@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { AISettings, Conversation, DirectMessage } from '../types';
+import { FollowedProfile } from '../services/social';
 import { translations } from '../translations';
-import { auth, getUserProfileByName, searchProfiles } from '../services/firebase';
+import { auth, searchProfiles } from '../services/firebase';
 import {
     subscribeToConversations, subscribeToMessages, openConversation,
     sendDirectMessage, editDirectMessage, deleteDirectMessage,
@@ -12,11 +13,13 @@ import {
 interface MessagesProps {
     settings: AISettings;
     onViewProfile: (name: string, id?: string) => void;
+    /** Subscriptions, already resolved to uid and name. */
+    followedProfiles: FollowedProfile[];
     /** Adds someone to the user's subscriptions, the app's contact list. */
-    onFollow: (name: string) => void;
+    onFollow: (name: string, uid?: string) => void;
 }
 
-const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow }) => {
+const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, followedProfiles }) => {
     const t = translations[settings.language] as any;
 
     // Firebase restores a session asynchronously, so reading currentUser
@@ -101,23 +104,6 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow }
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
-            setBusy(false);
-        }
-    };
-
-    /**
-     * Opens the thread with a subscription. Subscriptions are stored as names,
-     * so the uid a conversation needs has to be looked up first.
-     */
-    const startWithName = async (name: string) => {
-        setBusy(true);
-        setError(null);
-        try {
-            const profile = await getUserProfileByName(name);
-            if (!profile) throw new Error(`${t.userNotFound || 'Профиль не найден'}: ${name}`);
-            await startWith(profile.uid, profile.agentName);
-        } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
             setBusy(false);
         }
     };
@@ -401,23 +387,23 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow }
                         <div className="flex-1 overflow-y-auto px-5 pb-5 min-h-0 space-y-4">
                             {/* Subscriptions first: messaging someone you already
                                 follow is the common case, and it needs no typing. */}
-                            {!search.trim() && settings.following.length > 0 && (
+                            {!search.trim() && followedProfiles.length > 0 && (
                                 <div>
                                     <span className="text-[9px] font-mono uppercase tracking-widest text-slate-600">
                                         {t.subscriptions || 'Подписки'}
                                     </span>
                                     <div className="space-y-1 mt-2">
-                                        {settings.following.map(name => (
+                                        {followedProfiles.map(profile => (
                                             <button
-                                                key={name}
+                                                key={profile.uid}
                                                 disabled={busy}
-                                                onClick={() => startWithName(name)}
+                                                onClick={() => startWith(profile.uid, profile.name)}
                                                 className="w-full flex items-center space-x-3 px-3 py-2 rounded-lg border border-transparent text-slate-300 hover:bg-slate-800/60 hover:border-slate-700 transition-all disabled:opacity-40"
                                             >
                                                 <span className="w-8 h-8 shrink-0 rounded-full bg-gradient-to-br from-pink-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold uppercase">
-                                                    {name.charAt(0)}
+                                                    {profile.name.charAt(0)}
                                                 </span>
-                                                <span className="text-sm truncate">{name}</span>
+                                                <span className="text-sm truncate">{profile.name}</span>
                                             </button>
                                         ))}
                                     </div>
@@ -437,7 +423,7 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow }
                                             {t.nobodyFound || 'Никого не нашлось'}
                                         </p>
                                     ) : results.map(profile => {
-                                        const isFollowed = settings.following.includes(profile.agentName);
+                                        const isFollowed = settings.following.includes(profile.uid);
 
                                         return (
                                             <div
@@ -463,7 +449,7 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow }
                                                 </button>
 
                                                 <button
-                                                    onClick={() => onFollow(profile.agentName)}
+                                                    onClick={() => onFollow(profile.agentName, profile.uid)}
                                                     disabled={isFollowed}
                                                     className={`shrink-0 text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border transition-colors ${isFollowed
                                                         ? 'border-slate-700 text-slate-600'

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 import ThoughtSymbolMap2D from './components/ThoughtSymbolMap2D';
 import ThoughtLog from './components/ThoughtLog';
@@ -14,6 +14,7 @@ import { translations } from './translations';
 import { getAIClient } from './services/gemini';
 import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, loginAnonymously, deletePost, getUserProfileByName, toggleCommentLike } from './services/firebase';
 import { secureStorage } from './services/encryption';
+import { resolveFollowing, isFromFollowed, FollowedProfile } from './services/social';
 import { resetToolConnections } from './services/boardAgent';
 
 
@@ -99,7 +100,17 @@ const App: React.FC = () => {
   });
   const settingsRef = useRef(settings);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
-  const [subscribedAgents, setSubscribedAgents] = useState<string[]>(settings.following || []);
+  /**
+   * Followed profiles, resolved from the uids in settings.following.
+   *
+   * Names are kept alongside because the rest of the UI identifies authors by
+   * name — posts written before authorId existed carry nothing else.
+   */
+  const [followedProfiles, setFollowedProfiles] = useState<FollowedProfile[]>([]);
+  const subscribedAgents = useMemo(
+    () => followedProfiles.map(p => p.name),
+    [followedProfiles]
+  );
 
 
   const t = translations[settings.language || 'ru'];
@@ -179,7 +190,6 @@ const App: React.FC = () => {
     resetToolConnections();
 
     localStorage.setItem('ai_settings', JSON.stringify(settingsToSave));
-    setSubscribedAgents(newSettings.following || []);
 
     // Board bots are cloned from Firestore profiles, so this consent flag has
     // to live there rather than only in this browser.
@@ -202,20 +212,66 @@ const App: React.FC = () => {
     setIsAuthorized(false);
   };
 
-  const handleFollow = (agentName: string) => {
+  /**
+   * Subscribes to someone.
+   *
+   * Callers that already know the uid pass it; the rest still work by name,
+   * which is all a post or a profile card has to hand, and it is resolved here.
+   */
+  const handleFollow = async (agentName: string, uid?: string) => {
     if (agentName === settings.agentName) return; // Prevent self-following
-    if (!settings.following.includes(agentName)) {
-      const newFollowing = [...settings.following, agentName];
-      handleSaveSettings({ ...settings, following: newFollowing });
-      if (auth.currentUser) updateUserProfile(auth.currentUser.uid, { following: newFollowing });
-    }
-  };
 
-  const handleUnfollow = (agentName: string) => {
-    const newFollowing = settings.following.filter(name => name !== agentName);
+    const targetUid = uid || (await getUserProfileByName(agentName))?.uid;
+    if (!targetUid || settings.following.includes(targetUid)) return;
+
+    const newFollowing = [...settings.following, targetUid];
     handleSaveSettings({ ...settings, following: newFollowing });
+    setFollowedProfiles(prev => [...prev, { uid: targetUid, name: agentName }]);
     if (auth.currentUser) updateUserProfile(auth.currentUser.uid, { following: newFollowing });
   };
+
+  /** Unsubscribes. Takes a name because that is what the UI displays. */
+  const handleUnfollow = (agentName: string) => {
+    const target = followedProfiles.find(p => p.name === agentName);
+    if (!target) return;
+
+    const newFollowing = settings.following.filter(uid => uid !== target.uid);
+    handleSaveSettings({ ...settings, following: newFollowing });
+    setFollowedProfiles(prev => prev.filter(p => p.uid !== target.uid));
+    if (auth.currentUser) updateUserProfile(auth.currentUser.uid, { following: newFollowing });
+  };
+
+  /**
+   * Resolves subscriptions once the user is known, upgrading any legacy name
+   * entries to uids and writing the corrected list back.
+   */
+  useEffect(() => {
+    if (!firebaseReady) return;
+
+    let cancelled = false;
+
+    resolveFollowing(settingsRef.current.following || [], { byUid: getUserProfile, byName: getUserProfileByName })
+      .then(({ profiles, uids, migrated }) => {
+        if (cancelled) return;
+
+        setFollowedProfiles(profiles);
+
+        if (migrated) {
+          const current = settingsRef.current;
+          handleSaveSettings({ ...current, following: uids });
+          if (auth.currentUser) {
+            updateUserProfile(auth.currentUser.uid, { following: uids })
+              .catch(err => console.error('Failed to persist migrated subscriptions:', err));
+          }
+        }
+      })
+      .catch(err => console.error('Failed to resolve subscriptions:', err));
+
+    return () => { cancelled = true; };
+    // Deliberately keyed on sign-in only: re-running on every settings change
+    // would loop, since the migration writes settings back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firebaseReady]);
 
   const loadProfileData = async (name: string, id?: string) => {
     console.log(`[Data] Loading profile data for: ${name} (ID: ${id})`);
@@ -611,7 +667,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (settings.userType === 'agent' && thoughts.length > 0) {
       const lastThought = thoughts[thoughts.length - 1];
-      if (lastThought.authorType === 'agent' && lastThought.authorName !== settings.agentName && settings.following.includes(lastThought.authorName)) {
+      if (lastThought.authorType === 'agent' && lastThought.authorName !== settings.agentName && isFromFollowed(lastThought, settings.following, subscribedAgents)) {
         // Simulate a delay before commenting
         const commentDelay = Math.random() * 5000 + 2000; // 2-7 seconds
         setTimeout(() => {
@@ -1110,8 +1166,10 @@ const App: React.FC = () => {
                   thoughts={settings.showOnlyFollowing ? thoughts.filter(t => 
                     // 1. Always show my own posts
                     t.authorName === settings.agentName || 
-                    // 2. Show posts from people I follow
-                    subscribedAgents.includes(t.authorName) ||
+                    // 2. Show posts from people I follow. Matched on uid where
+                    // the post has one, on name otherwise: posts written before
+                    // authorId existed carry nothing else.
+                    isFromFollowed(t, settings.following, subscribedAgents) ||
                     // 3. Always show posts explicitly marked as human-generated
                     t.authorType === 'human' ||
                     t.type === 'human_post' ||
@@ -1144,7 +1202,7 @@ const App: React.FC = () => {
             <Boards settings={settings} onViewProfile={handleViewProfile} />
           } />
           <Route path="/messages" element={
-            <Messages settings={settings} onViewProfile={handleViewProfile} onFollow={handleFollow} />
+            <Messages settings={settings} onViewProfile={handleViewProfile} onFollow={handleFollow} followedProfiles={followedProfiles} />
           } />
           <Route path="/profile" element={
             <Profile
