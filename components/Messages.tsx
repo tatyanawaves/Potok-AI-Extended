@@ -23,6 +23,10 @@ import {
  * alone is not enough of an affordance: a small one, a broken one, or one
  * still loading is indistinguishable from no attachment at all.
  *
+ * The preview and the download are separate controls. Making the whole tile a
+ * download button meant clicking a photo asked the browser where to save it,
+ * when looking at it is what a click on a picture is for.
+ *
  * Images are fetched into an object URL rather than linked directly, because
  * the worker only serves a file to an authenticated participant and a bare src
  * carries no credentials. The URL is revoked on unmount, since an undisposed
@@ -31,8 +35,9 @@ import {
 const AttachmentView: React.FC<{
     attachment: MessageAttachment;
     failedLabel: string;
-    openLabel: string;
-}> = ({ attachment, failedLabel, openLabel }) => {
+    saveLabel: string;
+    onOpen: (url: string, attachment: MessageAttachment) => void;
+}> = ({ attachment, failedLabel, saveLabel, onOpen }) => {
     const [preview, setPreview] = useState<string | null>(null);
     const [failed, setFailed] = useState(false);
     const wantsPreview = isImage(attachment);
@@ -61,13 +66,13 @@ const AttachmentView: React.FC<{
     }, [attachment, wantsPreview]);
 
     return (
-        <button
-            onClick={() => saveAttachment(attachment).catch(() => setFailed(true))}
-            title={`${attachment.name} — ${openLabel}`}
-            className="block w-full mt-2 rounded-lg border border-slate-700 bg-slate-950/60 overflow-hidden hover:border-cyan-500/40 transition-colors text-left"
-        >
+        <div className="mt-2 rounded-lg border border-slate-700 bg-slate-950/60 overflow-hidden">
             {wantsPreview && (
-                <span className="block bg-slate-900/60 border-b border-slate-800">
+                <button
+                    onClick={() => preview && onOpen(preview, attachment)}
+                    disabled={!preview}
+                    className="block w-full bg-slate-900/60 border-b border-slate-800 hover:bg-slate-900 transition-colors disabled:cursor-default"
+                >
                     {preview ? (
                         <img
                             src={preview}
@@ -82,10 +87,10 @@ const AttachmentView: React.FC<{
                             {failed ? failedLabel : '…'}
                         </span>
                     )}
-                </span>
+                </button>
             )}
 
-            <span className="flex items-center space-x-2 px-3 py-2">
+            <div className="flex items-center space-x-2 px-3 py-2">
                 <span className="text-base shrink-0">{wantsPreview ? '🖼' : '📎'}</span>
                 <span className="min-w-0 flex-1">
                     <span className="text-xs text-slate-200 truncate block">{attachment.name}</span>
@@ -93,11 +98,14 @@ const AttachmentView: React.FC<{
                         {failed ? failedLabel : formatSize(attachment.size)}
                     </span>
                 </span>
-                <span className="text-[9px] font-mono uppercase tracking-wider text-slate-600 shrink-0">
-                    {openLabel}
-                </span>
-            </span>
-        </button>
+                <button
+                    onClick={() => saveAttachment(attachment).catch(() => setFailed(true))}
+                    className="shrink-0 text-[9px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-slate-700 text-slate-400 hover:text-cyan-300 hover:border-cyan-500/40 transition-colors"
+                >
+                    {saveLabel}
+                </button>
+            </div>
+        </div>
     );
 };
 
@@ -128,6 +136,9 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
     const [showNew, setShowNew] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    /** Full-size image view, opened by clicking a preview. */
+    const [lightbox, setLightbox] = useState<{ url: string, name: string } | null>(null);
 
     /** Files chosen but not yet sent. */
     const [pending, setPending] = useState<File[]>([]);
@@ -420,7 +431,8 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                                             key={a.key}
                                                             attachment={a}
                                                             failedLabel={t.downloadFailed || 'не удалось открыть'}
-                                                            openLabel={t.saveFile || 'скачать'}
+                                                            saveLabel={t.saveFile || 'скачать'}
+                                                            onOpen={(url, a) => setLightbox({ url, name: a.name })}
                                                         />
                                                     ))}
                                                 </div>
@@ -526,6 +538,35 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                     </>
                 )}
             </section>
+
+            {lightbox && (
+                <div
+                    className="fixed inset-0 z-[160] flex flex-col bg-black/90 backdrop-blur-sm"
+                    onClick={() => setLightbox(null)}
+                >
+                    <div className="flex items-center justify-between px-5 py-3 shrink-0">
+                        <span className="text-sm text-slate-300 truncate">{lightbox.name}</span>
+                        <button
+                            onClick={() => setLightbox(null)}
+                            className="text-slate-400 hover:text-white transition-colors shrink-0 ml-4"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div className="flex-1 flex items-center justify-center min-h-0 p-5">
+                        {/* Stops a click on the picture itself from closing the view. */}
+                        <img
+                            src={lightbox.url}
+                            alt={lightbox.name}
+                            onClick={(e) => e.stopPropagation()}
+                            className="max-h-full max-w-full object-contain"
+                        />
+                    </div>
+                </div>
+            )}
 
             {showNew && (
                 <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
