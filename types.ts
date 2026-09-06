@@ -229,12 +229,21 @@ export interface Conversation {
   updatedAt: number;
 }
 
+/** A file stored in R2 behind the worker; see services/attachments.ts. */
+export interface MessageAttachment {
+  key: string;
+  name: string;
+  size: number;
+  contentType: string;
+}
+
 export interface DirectMessage {
   id?: string;
   conversationId: string;
   authorId: string;
   authorName: string;
   content: string;
+  attachments?: MessageAttachment[];
   timestamp: number;
   /** Set when the author edits, so the change is visible rather than silent. */
   editedAt?: number;

@@ -2,6 +2,11 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { AISettings, Conversation, DirectMessage } from '../types';
 import { FollowedProfile } from '../services/social';
+import {
+    uploadAttachment, saveAttachment, fetchAttachmentUrl,
+    attachmentsAvailable, isImage, formatSize, MAX_FILE_BYTES
+} from '../services/attachments';
+import { MessageAttachment } from '../types';
 import { translations } from '../translations';
 import { auth, searchProfiles } from '../services/firebase';
 import {
@@ -9,6 +14,72 @@ import {
     sendDirectMessage, editDirectMessage, deleteDirectMessage,
     otherParticipant
 } from '../services/messages';
+
+
+/**
+ * One attachment inside a message.
+ *
+ * Images are fetched into an object URL rather than linked directly: the
+ * worker only serves a file to an authenticated participant, so a bare src
+ * would be refused. The URL is revoked on unmount, since an undisposed blob
+ * keeps the file in memory for the life of the page.
+ */
+const AttachmentView: React.FC<{ attachment: MessageAttachment; label: string }> = ({
+    attachment, label
+}) => {
+    const [preview, setPreview] = useState<string | null>(null);
+    const [failed, setFailed] = useState(false);
+
+    useEffect(() => {
+        if (!isImage(attachment)) return;
+
+        let url: string | null = null;
+        let cancelled = false;
+
+        fetchAttachmentUrl(attachment)
+            .then(objectUrl => {
+                url = objectUrl;
+                if (cancelled) {
+                    URL.revokeObjectURL(objectUrl);
+                    return;
+                }
+                setPreview(objectUrl);
+            })
+            .catch(() => setFailed(true));
+
+        return () => {
+            cancelled = true;
+            if (url) URL.revokeObjectURL(url);
+        };
+    }, [attachment]);
+
+    if (isImage(attachment) && preview) {
+        return (
+            <button
+                onClick={() => saveAttachment(attachment).catch(() => setFailed(true))}
+                className="block mt-2 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-500 transition-colors"
+                title={attachment.name}
+            >
+                <img src={preview} alt={attachment.name} className="max-h-56 max-w-full object-contain" />
+            </button>
+        );
+    }
+
+    return (
+        <button
+            onClick={() => saveAttachment(attachment).catch(() => setFailed(true))}
+            className="flex items-center space-x-2 mt-2 px-3 py-2 rounded-lg bg-slate-950/60 border border-slate-700 hover:border-slate-500 transition-colors w-full text-left"
+        >
+            <span className="text-base shrink-0">📎</span>
+            <span className="min-w-0 flex-1">
+                <span className="text-xs text-slate-200 truncate block">{attachment.name}</span>
+                <span className="text-[10px] text-slate-500">
+                    {failed ? label : formatSize(attachment.size)}
+                </span>
+            </span>
+        </button>
+    );
+};
 
 interface MessagesProps {
     settings: AISettings;
@@ -37,6 +108,11 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
     const [showNew, setShowNew] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    /** Files chosen but not yet sent. */
+    const [pending, setPending] = useState<File[]>([]);
+    const [uploading, setUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // People picker: subscriptions first, search for everyone else.
     const [search, setSearch] = useState('');
@@ -110,16 +186,49 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
 
     const handleSend = async () => {
         const content = draft.trim();
-        if (!content || !activeId || !currentUid) return;
+        const files = pending;
+
+        if ((!content && files.length === 0) || !activeId || !currentUid) return;
 
         setDraft('');
+        setPending([]);
         setError(null);
+
         try {
-            await sendDirectMessage(activeId, me(), content);
+            // Uploaded before the message is written, so a message never
+            // references a file that failed to store.
+            let attachments: MessageAttachment[] = [];
+
+            if (files.length) {
+                setUploading(true);
+                attachments = await Promise.all(
+                    files.map(file => uploadAttachment(activeId, file))
+                );
+            }
+
+            await sendDirectMessage(activeId, me(), content, attachments);
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
             setDraft(content);
+            setPending(files);
+        } finally {
+            setUploading(false);
         }
+    };
+
+    const handlePickFiles = (list: FileList | null) => {
+        if (!list) return;
+
+        const chosen = Array.from(list);
+        const tooBig = chosen.find(f => f.size > MAX_FILE_BYTES);
+
+        if (tooBig) {
+            setError(`${tooBig.name}: ${t.fileTooBig || 'файл больше'} ${Math.round(MAX_FILE_BYTES / 1024 / 1024)} MB`);
+            return;
+        }
+
+        setError(null);
+        setPending(prev => [...prev, ...chosen]);
     };
 
     const handleSaveEdit = async () => {
@@ -285,6 +394,14 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                                     {isDeleted
                                                         ? (t.messageDeleted || 'сообщение удалено')
                                                         : message.content}
+
+                                                    {!isDeleted && message.attachments?.map(a => (
+                                                        <AttachmentView
+                                                            key={a.key}
+                                                            attachment={a}
+                                                            label={t.downloadFailed || 'не удалось открыть'}
+                                                        />
+                                                    ))}
                                                 </div>
                                             )}
 
@@ -322,7 +439,51 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                         </div>
 
                         <div className="shrink-0 border-t border-slate-800 p-4">
+                            {pending.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mb-3">
+                                    {pending.map((file, index) => (
+                                        <span
+                                            key={`${file.name}-${index}`}
+                                            className="inline-flex items-center space-x-2 px-2 py-1 rounded-lg bg-slate-800/60 border border-slate-700 text-[11px] text-slate-300"
+                                        >
+                                            <span className="truncate max-w-[160px]">{file.name}</span>
+                                            <span className="text-slate-600">{formatSize(file.size)}</span>
+                                            <button
+                                                onClick={() => setPending(prev => prev.filter((_, i) => i !== index))}
+                                                className="text-slate-500 hover:text-rose-400 transition-colors"
+                                            >
+                                                ✕
+                                            </button>
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+
                             <div className="flex items-end space-x-3">
+                                {attachmentsAvailable() && (
+                                    <>
+                                        <input
+                                            ref={fileInputRef}
+                                            type="file"
+                                            multiple
+                                            hidden
+                                            onChange={(e) => {
+                                                handlePickFiles(e.target.files);
+                                                // Reset so picking the same file twice still fires.
+                                                e.target.value = '';
+                                            }}
+                                        />
+                                        <button
+                                            onClick={() => fileInputRef.current?.click()}
+                                            disabled={uploading}
+                                            title={t.attachFile || 'Прикрепить файл'}
+                                            className="h-[46px] w-[46px] shrink-0 rounded-xl border border-slate-700 text-slate-400 hover:text-cyan-400 hover:border-cyan-500/40 transition-colors disabled:opacity-40"
+                                        >
+                                            📎
+                                        </button>
+                                    </>
+                                )}
+
                                 <textarea
                                     value={draft}
                                     onChange={(e) => setDraft(e.target.value)}
@@ -334,10 +495,10 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                 />
                                 <button
                                     onClick={handleSend}
-                                    disabled={!draft.trim()}
+                                    disabled={(!draft.trim() && pending.length === 0) || uploading}
                                     className="h-[46px] px-5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-bold transition-all active:scale-95 shrink-0"
                                 >
-                                    {t.send || 'Отпр.'}
+                                    {uploading ? '...' : (t.send || 'Отпр.')}
                                 </button>
                             </div>
                         </div>

@@ -13,3 +13,9 @@ PIPEDREAM_CLIENT_ID = "AlIRbtjBsD6mmQuM4_vrZ7HVl67Z9Bpg63Bij8pawI8"
 PIPEDREAM_ENVIRONMENT = "development"
 
 ALLOWED_ORIGINS = "http://localhost:3000,http://localhost:3001,https://neon-extended.web.app,https://neon-extended.firebaseapp.com"
+
+# Attachment storage. Firebase Storage needs the Blaze plan, which this project
+# is not on; R2's free tier covers this and the worker already authenticates.
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "potok-files"

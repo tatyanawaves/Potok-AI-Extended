@@ -19,6 +19,28 @@
  *   GET  /health
  */
 
+import {
+    MAX_FILE_BYTES, keyFor, putFile,
+    mayAccessConversation, conversationOfKey
+} from './files';
+
+/**
+ * R2 binding, typed structurally for the same reason FileBucket is: the test
+ * suite compiles this file under the app's tsconfig, which has no Cloudflare
+ * globals. `get` is only needed here, for downloads.
+ */
+interface AttachmentBucket {
+    put(
+        key: string,
+        value: ArrayBuffer,
+        options?: { httpMetadata?: { contentType?: string; contentDisposition?: string } }
+    ): Promise<unknown>;
+    get(key: string): Promise<{
+        body: ReadableStream | null;
+        httpMetadata?: { contentType?: string };
+    } | null>;
+}
+
 export interface Env {
     FIREBASE_PROJECT_ID: string;
     PIPEDREAM_PROJECT_ID: string;
@@ -26,6 +48,8 @@ export interface Env {
     PIPEDREAM_ENVIRONMENT: string;
     ALLOWED_ORIGINS: string;
     PIPEDREAM_CLIENT_SECRET?: string;
+    /** Attachment storage. Absent until the R2 bucket is bound. */
+    FILES?: AttachmentBucket;
 }
 
 // --- Firebase ID token verification ---------------------------------------
@@ -442,6 +466,72 @@ const handleMcp = async (
     });
 };
 
+/** Accepts one attachment for a conversation the caller belongs to. */
+const handleFileUpload = async (
+    request: Request, env: Env, uid: string, cors: Record<string, string>
+): Promise<Response> => {
+    if (!env.FILES) {
+        return json({ error: 'Attachment storage is not configured' }, 501, cors);
+    }
+
+    const url = new URL(request.url);
+    const conversationId = url.searchParams.get('conversationId') || '';
+    const name = url.searchParams.get('name') || 'file';
+
+    if (!mayAccessConversation(conversationId, uid)) {
+        return json({ error: 'That conversation is not yours' }, 403, cors);
+    }
+
+    const body = await request.arrayBuffer();
+
+    if (body.byteLength === 0) {
+        return json({ error: 'Empty file' }, 400, cors);
+    }
+    if (body.byteLength > MAX_FILE_BYTES) {
+        return json(
+            { error: `File is larger than ${Math.round(MAX_FILE_BYTES / 1024 / 1024)} MB` },
+            413, cors
+        );
+    }
+
+    const contentType = request.headers.get('content-type') || 'application/octet-stream';
+    const key = keyFor(conversationId, name);
+
+    await putFile(env.FILES, key, body, contentType);
+
+    return json({ key, name, size: body.byteLength, contentType }, 200, cors);
+};
+
+/** Streams an attachment back to a participant of its conversation. */
+const handleFileDownload = async (
+    request: Request, env: Env, uid: string, cors: Record<string, string>
+): Promise<Response> => {
+    if (!env.FILES) {
+        return json({ error: 'Attachment storage is not configured' }, 501, cors);
+    }
+
+    const key = new URL(request.url).searchParams.get('key') || '';
+    const conversationId = conversationOfKey(key);
+
+    if (!conversationId || !mayAccessConversation(conversationId, uid)) {
+        return json({ error: 'That file is not yours' }, 403, cors);
+    }
+
+    const object = await env.FILES.get(key);
+    if (!object) return json({ error: 'File not found' }, 404, cors);
+
+    return new Response(object.body, {
+        headers: {
+            ...cors,
+            'Content-Type': object.httpMetadata?.contentType || 'application/octet-stream',
+            // Served as a download rather than rendered here: an uploaded HTML
+            // or SVG would otherwise execute on the worker's own origin.
+            'Content-Disposition': 'attachment',
+            'Cache-Control': 'private, max-age=3600'
+        }
+    });
+};
+
 export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const origin = request.headers.get('Origin');
@@ -457,11 +547,13 @@ export default {
                 ok: true,
                 project: env.PIPEDREAM_PROJECT_ID,
                 environment: env.PIPEDREAM_ENVIRONMENT,
-                secretConfigured: Boolean(env.PIPEDREAM_CLIENT_SECRET)
+                secretConfigured: Boolean(env.PIPEDREAM_CLIENT_SECRET),
+                attachments: Boolean(env.FILES)
             }, 200, cors);
         }
 
-        if (request.method !== 'POST') {
+        // Downloads are GETs; everything else here is a POST.
+        if (request.method !== 'POST' && !(request.method === 'GET' && url.pathname === '/files')) {
             return json({ error: 'Not found' }, 404, cors);
         }
 
@@ -478,6 +570,12 @@ export default {
         try {
             if (url.pathname === '/pd/connect-token') {
                 return await handleConnectToken(request, env, uid, cors);
+            }
+            if (url.pathname === '/files' && request.method === 'GET') {
+                return await handleFileDownload(request, env, uid, cors);
+            }
+            if (url.pathname === '/files/upload') {
+                return await handleFileUpload(request, env, uid, cors);
             }
             if (url.pathname === '/pd/apps') {
                 return await handleApps(request, env, cors);

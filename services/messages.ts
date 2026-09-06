@@ -3,7 +3,7 @@ import {
     getDoc, query, where, onSnapshot, limit, orderBy
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { Conversation, ConversationParticipant, DirectMessage } from '../types';
+import { Conversation, ConversationParticipant, DirectMessage, MessageAttachment } from '../types';
 
 /**
  * Direct messages between two people.
@@ -99,10 +99,14 @@ export const subscribeToMessages = (
 export const sendDirectMessage = async (
     conversationId: string,
     author: ConversationParticipant,
-    content: string
+    content: string,
+    attachments: MessageAttachment[] = []
 ) => {
     const trimmed = content.trim();
-    if (!trimmed) throw new Error('Cannot send an empty message');
+    // A message carrying only files is still a message.
+    if (!trimmed && attachments.length === 0) {
+        throw new Error('Cannot send an empty message');
+    }
 
     const timestamp = Date.now();
 
@@ -111,6 +115,7 @@ export const sendDirectMessage = async (
         authorId: author.id,
         authorName: author.name,
         content: trimmed,
+        ...(attachments.length ? { attachments } : {}),
         timestamp
     });
 
@@ -118,7 +123,11 @@ export const sendDirectMessage = async (
     // every thread's messages.
     await updateDoc(doc(db, 'conversations', conversationId), {
         updatedAt: timestamp,
-        lastMessage: { content: trimmed, authorId: author.id, timestamp }
+        lastMessage: {
+            content: trimmed || `📎 ${attachments.map(a => a.name).join(', ')}`,
+            authorId: author.id,
+            timestamp
+        }
     });
 
     return created;
