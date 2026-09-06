@@ -3,6 +3,7 @@ import {
     doc, updateDoc, getDoc, getDocs, deleteDoc, arrayUnion, arrayRemove
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { isBot, parseMentions } from './mentions';
 import { Board, BoardChannel, BoardMember, BoardMessage } from '../types';
 
 /**
@@ -27,18 +28,9 @@ export const messagesRefFor = (boardId: string, channelId: string) =>
 
 const DEFAULT_CHANNEL_NAME = 'general';
 
-/**
- * Board members that answer @mentions.
- * 'agent' is the pre-bot spelling, still present on boards created earlier.
- */
-export const isBot = (member: BoardMember): boolean =>
-    member.type === 'bot' || member.type === 'agent';
-
-/** Extracts @mentions from message text. Names may contain letters, digits, _ and -. */
-export const parseMentions = (text: string): string[] => {
-    const matches = text.match(/@([\p{L}\p{N}_-]+)/gu) || [];
-    return [...new Set(matches.map(m => m.slice(1)))];
-};
+// Re-exported so existing imports keep working; defined in ./mentions, which
+// stays free of the Firestore connection this module opens.
+export { isBot, parseMentions };
 
 // --- Boards ---
 

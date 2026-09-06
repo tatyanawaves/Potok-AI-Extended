@@ -38,6 +38,29 @@ interface JsonRpcResponse {
 let nextId = 1;
 
 /**
+ * Pulls the first JSON-RPC response out of an SSE body.
+ *
+ * Exported for tests: servers differ in how much framing they send around the
+ * payload, and getting this wrong fails silently as "empty response".
+ */
+export const parseSseFrames = (text: string): JsonRpcResponse | null => {
+    for (const line of text.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+
+        try {
+            const payload = JSON.parse(line.slice(5).trim());
+            if (payload && (payload.result !== undefined || payload.error !== undefined)) {
+                return payload as JsonRpcResponse;
+            }
+        } catch {
+            // Keep-alive comments and partial frames are expected here.
+        }
+    }
+
+    return null;
+};
+
+/**
  * Streamable HTTP allows a JSON body or an SSE stream for the same request.
  * Reads whichever came back and returns the first JSON-RPC response in it.
  */
@@ -45,22 +68,7 @@ const readResponse = async (response: Response): Promise<JsonRpcResponse | null>
     const contentType = response.headers.get('content-type') || '';
 
     if (contentType.includes('text/event-stream')) {
-        const text = await response.text();
-
-        for (const line of text.split('\n')) {
-            if (!line.startsWith('data:')) continue;
-
-            try {
-                const payload = JSON.parse(line.slice(5).trim());
-                if (payload && (payload.result !== undefined || payload.error !== undefined)) {
-                    return payload as JsonRpcResponse;
-                }
-            } catch {
-                // Keep-alive comments and partial frames are expected here.
-            }
-        }
-
-        return null;
+        return parseSseFrames(await response.text());
     }
 
     if (!contentType.includes('application/json')) return null;

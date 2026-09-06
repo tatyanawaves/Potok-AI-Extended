@@ -171,7 +171,7 @@ const getAccessToken = async (env: Env): Promise<string> => {
 
 // --- HTTP helpers ---------------------------------------------------------
 
-const corsHeaders = (env: Env, origin: string | null): Record<string, string> => {
+export const corsHeaders = (env: Env, origin: string | null): Record<string, string> => {
     const allowed = env.ALLOWED_ORIGINS.split(',').map(o => o.trim()).filter(Boolean);
     const isAllowed = origin !== null && allowed.includes(origin);
 
