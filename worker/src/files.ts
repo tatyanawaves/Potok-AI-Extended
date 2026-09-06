@@ -1,10 +1,16 @@
 /**
  * Attachment storage on R2.
  *
- * Access is decided from the object key alone. A direct-message conversation id
- * is `dm_<uidA>_<uidB>`, so a key under `dm/<conversationId>/…` already names
- * everyone entitled to the file — the worker checks the caller's verified uid
- * against it and needs no database of its own.
+ * Two namespaces, because the two chat surfaces prove membership differently.
+ *
+ * `dm/<conversationId>/…` needs no lookup at all: a conversation id is
+ * `dm_<uidA>_<uidB>`, so the key already names everyone entitled to the file.
+ *
+ * `board/<boardId>/…` cannot work that way — a board id says nothing about who
+ * belongs to it. Rather than give this worker admin credentials, membership is
+ * checked by reading the board from Firestore's REST API with the *caller's*
+ * own ID token, which makes Firestore apply the same security rules it applies
+ * to the app. A member gets 200, everyone else gets denied.
  */
 
 /**
@@ -63,11 +69,44 @@ const safeName = (name: string): string => {
 export const keyFor = (conversationId: string, name: string): string =>
     `dm/${conversationId}/${crypto.randomUUID()}-${safeName(name)}`;
 
+export const boardKeyFor = (boardId: string, name: string): string =>
+    `board/${boardId}/${crypto.randomUUID()}-${safeName(name)}`;
+
 /** The conversation a key belongs to, or null if the key is not one of ours. */
 export const conversationOfKey = (key: string): string | null => {
     const parts = key.split('/');
     if (parts.length < 3 || parts[0] !== 'dm') return null;
     return parts[1] || null;
+};
+
+/** The board a key belongs to, or null if the key is not a board attachment. */
+export const boardOfKey = (key: string): string | null => {
+    const parts = key.split('/');
+    if (parts.length < 3 || parts[0] !== 'board') return null;
+    return parts[1] || null;
+};
+
+/**
+ * Whether the caller belongs to a board, asked of Firestore as the caller.
+ *
+ * Passing the user's own ID token makes Firestore enforce the board's read
+ * rule, which already restricts reads to members. That keeps this worker free
+ * of any credential that could read data on its own behalf.
+ */
+export const isBoardMember = async (
+    projectId: string,
+    boardId: string,
+    idToken: string
+): Promise<boolean> => {
+    const url =
+        `https://firestore.googleapis.com/v1/projects/${projectId}` +
+        `/databases/(default)/documents/boards/${encodeURIComponent(boardId)}`;
+
+    const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${idToken}` }
+    });
+
+    return response.ok;
 };
 
 export const putFile = async (

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mayAccessConversation, conversationOfKey, keyFor } from '../worker/src/files';
+import { mayAccessConversation, conversationOfKey, keyFor, boardKeyFor, boardOfKey } from '../worker/src/files';
 
 const A = 'QWnFDPg4ElP0deecnCfJot2ttyf1';
 const B = '8g3YsNP5ogZveUzOLShpHyBnW1y2';
@@ -55,5 +55,32 @@ describe('keyFor', () => {
 
     it('falls back to a placeholder when nothing usable is left', () => {
         expect(keyFor(conversation, '///')).toMatch(/-file$/);
+    });
+});
+
+describe('board keys', () => {
+    const board = '3UYvjxvoL0Hy4O5StEhb';
+
+    it('places a board file under its board', () => {
+        expect(boardKeyFor(board, 'схема.png')).toMatch(
+            new RegExp(`^board/${board}/[0-9a-f-]{36}-схема\.png$`)
+        );
+    });
+
+    it('reads the board out of a key', () => {
+        expect(boardOfKey(`board/${board}/abc-схема.png`)).toBe(board);
+    });
+
+    it('does not mistake a conversation key for a board one, or the reverse', () => {
+        // The two namespaces are checked by different rules — a key answering
+        // to both would let a DM participant reach board files.
+        const dmKey = keyFor(`dm_${A}_${B}`, 'x.png');
+        expect(boardOfKey(dmKey)).toBeNull();
+        expect(conversationOfKey(boardKeyFor(board, 'x.png'))).toBeNull();
+    });
+
+    it('rejects a key outside both namespaces', () => {
+        expect(boardOfKey('secrets/x.png')).toBeNull();
+        expect(conversationOfKey('secrets/x.png')).toBeNull();
     });
 });

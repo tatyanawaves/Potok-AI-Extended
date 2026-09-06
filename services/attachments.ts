@@ -39,8 +39,15 @@ const authHeader = async (): Promise<string> => {
     return `Bearer ${await user.getIdToken()}`;
 };
 
+/**
+ * Uploads a file for a conversation or a board.
+ *
+ * The worker decides access differently for each: a conversation id already
+ * names its participants, while board membership is checked against Firestore
+ * using the caller's own token.
+ */
 export const uploadAttachment = async (
-    conversationId: string,
+    target: { conversationId: string } | { boardId: string },
     file: File
 ): Promise<Attachment> => {
     if (!PIPEDREAM_WORKER_URL) throw new Error('Attachment storage is not configured');
@@ -50,7 +57,11 @@ export const uploadAttachment = async (
     }
 
     const url = new URL(`${PIPEDREAM_WORKER_URL}/files/upload`);
-    url.searchParams.set('conversationId', conversationId);
+    if ('conversationId' in target) {
+        url.searchParams.set('conversationId', target.conversationId);
+    } else {
+        url.searchParams.set('boardId', target.boardId);
+    }
     url.searchParams.set('name', file.name);
 
     const response = await fetch(url.toString(), {

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { AISettings, Board, BoardChannel, BoardMember, BoardMessage } from '../types';
+import { AISettings, Board, BoardChannel, BoardMember, BoardMessage, MessageAttachment } from '../types';
+import { uploadAttachment, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
+import { AttachmentView, ImageLightbox } from './Attachments';
 import { translations } from '../translations';
 import { auth, getUserProfileByName, getClonableAgentProfiles } from '../services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -43,6 +45,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [messages, setMessages] = useState<BoardMessage[]>([]);
 
     const [draft, setDraft] = useState('');
+    /** Files chosen but not yet sent, and the image opened for viewing. */
+    const [pending, setPending] = useState<File[]>([]);
+    const [uploading, setUploading] = useState(false);
+    const [lightbox, setLightbox] = useState<{ url: string, name: string } | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     const [isAgentThinking, setIsAgentThinking] = useState(false);
     const [showMembers, setShowMembers] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -334,11 +341,29 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         }
     };
 
+    const handlePickFiles = (list: FileList | null) => {
+        if (!list) return;
+
+        const chosen = Array.from(list);
+        const tooBig = chosen.find(f => f.size > MAX_FILE_BYTES);
+
+        if (tooBig) {
+            setError(`${tooBig.name}: ${t.fileTooBig || 'файл больше'} ${Math.round(MAX_FILE_BYTES / 1024 / 1024)} MB`);
+            return;
+        }
+
+        setError(null);
+        setPending(prev => [...prev, ...chosen]);
+    };
+
     const handleSend = async () => {
         const content = draft.trim();
-        if (!content || !activeChannelId || !currentUid || !activeChannel || !activeBoard) return;
+        const files = pending;
+
+        if ((!content && files.length === 0) || !activeChannelId || !currentUid || !activeChannel || !activeBoard) return;
 
         setDraft('');
+        setPending([]);
         setError(null);
 
         try {
@@ -353,13 +378,26 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 mentionedNames.some(name => name.toLowerCase() === m.name.toLowerCase())
             );
 
+            // Uploaded before the message is written, so a message never
+            // references a file that failed to store.
+            let attachments: MessageAttachment[] = [];
+
+            if (files.length) {
+                setUploading(true);
+                attachments = await Promise.all(
+                    files.map(file => uploadAttachment({ boardId: activeBoard.id! }, file))
+                );
+                setUploading(false);
+            }
+
             const sent = await sendMessage({
                 channelId: activeChannelId,
                 boardId: activeBoard.id!,
                 authorId: currentUid,
                 authorName: settings.agentName || 'User',
                 authorType: settings.userType === 'agent' ? 'agent' : 'human',
-                content
+                content,
+                ...(attachments.length ? { attachments } : {})
             });
 
             if (!mentionsBot) return;
@@ -391,6 +429,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             }
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
+            setDraft(content);
+            setPending(files);
+        } finally {
+            setUploading(false);
         }
     };
 
@@ -614,6 +656,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                             <p className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
                                                 {msg.content}
                                             </p>
+
+                                            {msg.attachments?.map(a => (
+                                                <AttachmentView
+                                                    key={a.key}
+                                                    attachment={a}
+                                                    failedLabel={t.downloadFailed || 'не удалось открыть'}
+                                                    saveLabel={t.saveFile || 'скачать'}
+                                                    onOpen={(url, at) => setLightbox({ url, name: at.name })}
+                                                />
+                                            ))}
                                             {msg.toolsUsed?.length ? (
                                                 <div className="flex flex-wrap gap-1 mt-2">
                                                     {msg.toolsUsed.map(tool => (
@@ -741,7 +793,51 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
                         {/* Composer */}
                         <div className="shrink-0 border-t border-slate-800 p-4">
+                            {pending.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mb-3">
+                                    {pending.map((file, index) => (
+                                        <span
+                                            key={`${file.name}-${index}`}
+                                            className="inline-flex items-center space-x-2 px-2 py-1 rounded-lg bg-slate-800/60 border border-slate-700 text-[11px] text-slate-300"
+                                        >
+                                            <span className="truncate max-w-[160px]">{file.name}</span>
+                                            <span className="text-slate-600">{formatSize(file.size)}</span>
+                                            <button
+                                                onClick={() => setPending(prev => prev.filter((_, i) => i !== index))}
+                                                className="text-slate-500 hover:text-rose-400 transition-colors"
+                                            >
+                                                ✕
+                                            </button>
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+
                             <div className="flex items-end space-x-3">
+                                {attachmentsAvailable() && (
+                                    <>
+                                        <input
+                                            ref={fileInputRef}
+                                            type="file"
+                                            multiple
+                                            hidden
+                                            onChange={(e) => {
+                                                handlePickFiles(e.target.files);
+                                                // Reset so picking the same file twice still fires.
+                                                e.target.value = '';
+                                            }}
+                                        />
+                                        <button
+                                            onClick={() => fileInputRef.current?.click()}
+                                            disabled={uploading || !activeChannelId}
+                                            title={t.attachFile || 'Прикрепить файл'}
+                                            className="h-[46px] w-[46px] shrink-0 rounded-xl border border-slate-700 text-slate-400 hover:text-cyan-400 hover:border-cyan-500/40 transition-colors disabled:opacity-40"
+                                        >
+                                            📎
+                                        </button>
+                                    </>
+                                )}
+
                                 <textarea
                                     value={draft}
                                     onChange={(e) => setDraft(e.target.value)}
@@ -754,16 +850,26 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 />
                                 <button
                                     onClick={handleSend}
-                                    disabled={!draft.trim() || !activeChannelId}
+                                    disabled={(!draft.trim() && pending.length === 0) || !activeChannelId || uploading}
                                     className="h-[46px] px-5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-bold transition-all active:scale-95 shrink-0"
                                 >
-                                    {t.send || 'Отпр.'}
+                                    {uploading ? '...' : (t.send || 'Отпр.')}
                                 </button>
                             </div>
                         </div>
                     </>
                 )}
             </section>
+
+            {lightbox && (
+                <ImageLightbox
+                    url={lightbox.url}
+                    name={lightbox.name}
+                    zoomLabel={t.actualSize || 'увеличить'}
+                    fitLabel={t.fitToWindow || 'вписать'}
+                    onClose={() => setLightbox(null)}
+                />
+            )}
 
             {pendingTool && (
                 <div className="fixed inset-0 z-[170] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">

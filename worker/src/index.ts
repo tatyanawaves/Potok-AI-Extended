@@ -20,8 +20,8 @@
  */
 
 import {
-    MAX_FILE_BYTES, keyFor, putFile,
-    mayAccessConversation, conversationOfKey
+    MAX_FILE_BYTES, keyFor, boardKeyFor, putFile,
+    mayAccessConversation, conversationOfKey, boardOfKey, isBoardMember
 } from './files';
 
 /**
@@ -218,11 +218,18 @@ const json = (body: unknown, status: number, headers: Record<string, string>) =>
         headers: { ...headers, 'Content-Type': 'application/json' }
     });
 
-const requireUid = async (request: Request, env: Env): Promise<string> => {
+/**
+ * Verifies the caller and hands back both the uid and the raw token — board
+ * membership is checked by replaying that token against Firestore.
+ */
+const requireCaller = async (
+    request: Request, env: Env
+): Promise<{ uid: string; idToken: string }> => {
     const authHeader = request.headers.get('Authorization') || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token) throw new Error('Missing Firebase ID token');
-    return verifyIdToken(token, env.FIREBASE_PROJECT_ID);
+
+    return { uid: await verifyIdToken(token, env.FIREBASE_PROJECT_ID), idToken: token };
 };
 
 // --- Handlers -------------------------------------------------------------
@@ -466,20 +473,42 @@ const handleMcp = async (
     });
 };
 
-/** Accepts one attachment for a conversation the caller belongs to. */
+/**
+ * Decides where an upload may go, and under what key.
+ * Returns null when the caller has no claim to the target.
+ */
+const resolveUploadKey = async (
+    env: Env, uid: string, idToken: string, url: URL, name: string
+): Promise<string | null> => {
+    const conversationId = url.searchParams.get('conversationId');
+    if (conversationId) {
+        return mayAccessConversation(conversationId, uid) ? keyFor(conversationId, name) : null;
+    }
+
+    const boardId = url.searchParams.get('boardId');
+    if (boardId) {
+        return (await isBoardMember(env.FIREBASE_PROJECT_ID, boardId, idToken))
+            ? boardKeyFor(boardId, name)
+            : null;
+    }
+
+    return null;
+};
+
+/** Accepts one attachment for a conversation or board the caller belongs to. */
 const handleFileUpload = async (
-    request: Request, env: Env, uid: string, cors: Record<string, string>
+    request: Request, env: Env, uid: string, idToken: string, cors: Record<string, string>
 ): Promise<Response> => {
     if (!env.FILES) {
         return json({ error: 'Attachment storage is not configured' }, 501, cors);
     }
 
     const url = new URL(request.url);
-    const conversationId = url.searchParams.get('conversationId') || '';
     const name = url.searchParams.get('name') || 'file';
 
-    if (!mayAccessConversation(conversationId, uid)) {
-        return json({ error: 'That conversation is not yours' }, 403, cors);
+    const key = await resolveUploadKey(env, uid, idToken, url, name);
+    if (!key) {
+        return json({ error: 'That conversation or board is not yours' }, 403, cors);
     }
 
     const body = await request.arrayBuffer();
@@ -495,27 +524,31 @@ const handleFileUpload = async (
     }
 
     const contentType = request.headers.get('content-type') || 'application/octet-stream';
-    const key = keyFor(conversationId, name);
-
     await putFile(env.FILES, key, body, contentType);
 
     return json({ key, name, size: body.byteLength, contentType }, 200, cors);
 };
 
-/** Streams an attachment back to a participant of its conversation. */
+/** Streams an attachment back to someone entitled to its conversation or board. */
 const handleFileDownload = async (
-    request: Request, env: Env, uid: string, cors: Record<string, string>
+    request: Request, env: Env, uid: string, idToken: string, cors: Record<string, string>
 ): Promise<Response> => {
     if (!env.FILES) {
         return json({ error: 'Attachment storage is not configured' }, 501, cors);
     }
 
     const key = new URL(request.url).searchParams.get('key') || '';
-    const conversationId = conversationOfKey(key);
 
-    if (!conversationId || !mayAccessConversation(conversationId, uid)) {
-        return json({ error: 'That file is not yours' }, 403, cors);
-    }
+    const conversationId = conversationOfKey(key);
+    const boardId = boardOfKey(key);
+
+    const allowed = conversationId
+        ? mayAccessConversation(conversationId, uid)
+        : boardId
+            ? await isBoardMember(env.FIREBASE_PROJECT_ID, boardId, idToken)
+            : false;
+
+    if (!allowed) return json({ error: 'That file is not yours' }, 403, cors);
 
     const object = await env.FILES.get(key);
     if (!object) return json({ error: 'File not found' }, 404, cors);
@@ -562,8 +595,9 @@ export default {
         }
 
         let uid: string;
+        let idToken: string;
         try {
-            uid = await requireUid(request, env);
+            ({ uid, idToken } = await requireCaller(request, env));
         } catch (error) {
             return json(
                 { error: `Unauthorized: ${error instanceof Error ? error.message : String(error)}` },
@@ -576,10 +610,10 @@ export default {
                 return await handleConnectToken(request, env, uid, cors);
             }
             if (url.pathname === '/files' && request.method === 'GET') {
-                return await handleFileDownload(request, env, uid, cors);
+                return await handleFileDownload(request, env, uid, idToken, cors);
             }
             if (url.pathname === '/files/upload') {
-                return await handleFileUpload(request, env, uid, cors);
+                return await handleFileUpload(request, env, uid, idToken, cors);
             }
             if (url.pathname === '/pd/apps') {
                 return await handleApps(request, env, cors);

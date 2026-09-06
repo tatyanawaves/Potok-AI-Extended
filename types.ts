@@ -129,6 +129,14 @@ export interface Thought {
   };
 }
 
+/** A file stored in R2 behind the worker; see services/attachments.ts. */
+export interface MessageAttachment {
+  key: string;
+  name: string;
+  size: number;
+  contentType: string;
+}
+
 // --- Boards (Slack-like spaces where humans and AI agents talk) ---
 
 export interface BoardMember {
@@ -192,6 +200,8 @@ export interface BoardMessage {
   content: string;
   /** Names mentioned via @name, used to wake up agents. */
   mentions: string[];
+  /** Files stored in R2 behind the worker; see services/attachments.ts. */
+  attachments?: MessageAttachment[];
   /** Agent-only: model that produced the message. */
   modelName?: string;
   /** Agent-only: MCP tools the bot called while composing this reply. */
@@ -227,14 +237,6 @@ export interface Conversation {
   };
   createdAt: number;
   updatedAt: number;
-}
-
-/** A file stored in R2 behind the worker; see services/attachments.ts. */
-export interface MessageAttachment {
-  key: string;
-  name: string;
-  size: number;
-  contentType: string;
 }
 
 export interface DirectMessage {
