@@ -139,6 +139,8 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
 
     /** Full-size image view, opened by clicking a preview. */
     const [lightbox, setLightbox] = useState<{ url: string, name: string } | null>(null);
+    /** Whether the open image is shown at its own size rather than fitted. */
+    const [zoomed, setZoomed] = useState(false);
 
     /** Files chosen but not yet sent. */
     const [pending, setPending] = useState<File[]>([]);
@@ -432,7 +434,7 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                                             attachment={a}
                                                             failedLabel={t.downloadFailed || 'не удалось открыть'}
                                                             saveLabel={t.saveFile || 'скачать'}
-                                                            onOpen={(url, a) => setLightbox({ url, name: a.name })}
+                                                            onOpen={(url, a) => { setZoomed(false); setLightbox({ url, name: a.name }); }}
                                                         />
                                                     ))}
                                                 </div>
@@ -541,28 +543,42 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
 
             {lightbox && (
                 <div
-                    className="fixed inset-0 z-[160] flex flex-col bg-black/90 backdrop-blur-sm"
+                    className="fixed inset-0 z-[160] bg-black/95 backdrop-blur-sm"
                     onClick={() => setLightbox(null)}
                 >
-                    <div className="flex items-center justify-between px-5 py-3 shrink-0">
+                    {/* Floating rather than a row of its own: a header taking
+                        vertical space is height the picture does not get. */}
+                    <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-between px-5 py-3 bg-gradient-to-b from-black/70 to-transparent">
                         <span className="text-sm text-slate-300 truncate">{lightbox.name}</span>
-                        <button
-                            onClick={() => setLightbox(null)}
-                            className="text-slate-400 hover:text-white transition-colors shrink-0 ml-4"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
+                        <div className="flex items-center space-x-3 shrink-0 ml-4">
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setZoomed(z => !z); }}
+                                className="text-[10px] font-mono uppercase tracking-wider text-slate-400 hover:text-white transition-colors"
+                            >
+                                {zoomed ? (t.fitToWindow || 'вписать') : (t.actualSize || 'увеличить')}
+                            </button>
+                            <button
+                                onClick={() => setLightbox(null)}
+                                className="text-slate-400 hover:text-white transition-colors"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
                     </div>
 
-                    <div className="flex-1 flex items-center justify-center min-h-0 p-5">
-                        {/* Stops a click on the picture itself from closing the view. */}
+                    <div className={`absolute inset-0 flex items-center justify-center ${zoomed ? 'overflow-auto' : ''}`}>
+                        {/* Contain by default so nothing is cropped; zooming
+                            shows the file at its own size, scrollable when it
+                            no longer fits. Clicks here must not close the view. */}
                         <img
                             src={lightbox.url}
                             alt={lightbox.name}
-                            onClick={(e) => e.stopPropagation()}
-                            className="max-h-full max-w-full object-contain"
+                            onClick={(e) => { e.stopPropagation(); setZoomed(z => !z); }}
+                            className={zoomed
+                                ? 'max-w-none cursor-zoom-out'
+                                : 'max-h-full max-w-full object-contain cursor-zoom-in'}
                         />
                     </div>
                 </div>
