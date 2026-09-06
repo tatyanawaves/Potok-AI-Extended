@@ -295,12 +295,17 @@ const App: React.FC = () => {
       const authorName = settings.agentName || 'Neo';
       const commentId = crypto.randomUUID();
 
+      // A new comment starts unliked. addComment defaults these too, but
+      // stating them here is what makes this a complete Comment rather than a
+      // partial one that only happens to work.
       const newComment: Comment = {
         id: commentId,
         authorName: authorName,
         authorType: settings.userType,
         content: isAgentCommand ? `AI, ${cleanContent}` : content,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        likes: 0,
+        likedBy: []
       };
 
       if (parentId) {

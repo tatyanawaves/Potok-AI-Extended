@@ -354,9 +354,14 @@ const ThoughtGraph3D: React.FC<ThoughtGraph3DProps> = ({ thoughts, language = 'r
           
           return group;
         }}
-        linkColor={(link: any) => link.type === 'cluster' ? 'rgba(0,0,0,0)' : (link.isActive ? '#22d3ee' : '#1e293b')} 
-        linkWidth={(link: any) => link.isActive ? 1.5 : 1} 
-        linkOpacity={(link: any) => link.isActive ? 0.8 : 0.08}
+        // Opacity rides along in the colour because linkOpacity takes a number,
+        // not an accessor: the per-link function it used to get was ignored, so
+        // active and inactive links were drawn identically.
+        linkColor={(link: any) => link.type === 'cluster'
+          ? 'rgba(0,0,0,0)'
+          : (link.isActive ? 'rgba(34,211,238,0.8)' : 'rgba(30,41,59,0.08)')}
+        linkWidth={(link: any) => link.isActive ? 1.5 : 1}
+        linkOpacity={1}
         linkDirectionalParticles={(link: any) => link.isActive ? 2 : 0} 
         linkDirectionalParticleWidth={1.5} 
         linkDirectionalParticleSpeed={0.004}

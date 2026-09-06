@@ -9,7 +9,9 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: '0.0.0.0',
-      https: true,
+      // HTTPS comes from basicSsl() below. `https: true` used to mean "with a
+      // self-signed cert" but now expects an options object, so it was both a
+      // type error and a no-op.
     },
     plugins: [
       react(),

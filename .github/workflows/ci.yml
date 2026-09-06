@@ -27,13 +27,8 @@ jobs:
       - name: Tests
         run: npm test
 
-      # Not a gate yet: four type errors predate this workflow, in
-      # ThoughtGraph3D, documentParser, App.tsx and vite.config.ts. Failing on
-      # them would block every PR, so the step reports and moves on until they
-      # are cleared, at which point continue-on-error should be removed.
       - name: Types
         run: npm run typecheck
-        continue-on-error: true
 
       - name: Build
         run: npm run build
