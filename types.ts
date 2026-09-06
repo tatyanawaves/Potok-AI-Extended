@@ -229,6 +229,13 @@ export interface Conversation {
   participants: ConversationParticipant[];
   /** Denormalized ids so a member can query their own threads. */
   participantIds: string[];
+  /**
+   * Participants who removed the thread from their own list.
+   *
+   * A conversation belongs to two people, so one deleting it must not destroy
+   * the other's copy. Once both are here the whole thing is purged.
+   */
+  deletedFor?: string[];
   /** Preview for the conversation list, avoiding a read per thread. */
   lastMessage?: {
     content: string;

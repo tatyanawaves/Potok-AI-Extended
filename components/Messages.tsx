@@ -9,7 +9,7 @@ import { translations } from '../translations';
 import { auth, searchProfiles } from '../services/firebase';
 import {
     subscribeToConversations, subscribeToMessages, openConversation,
-    sendDirectMessage, editDirectMessage, deleteDirectMessage,
+    sendDirectMessage, editDirectMessage, deleteDirectMessage, deleteConversation,
     otherParticipant
 } from '../services/messages';
 
@@ -38,6 +38,7 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
     const [draft, setDraft] = useState('');
     const [editing, setEditing] = useState<{ id: string, content: string } | null>(null);
     const [confirmDelete, setConfirmDelete] = useState<DirectMessage | null>(null);
+    const [confirmDeleteThread, setConfirmDeleteThread] = useState<Conversation | null>(null);
     const [showNew, setShowNew] = useState(false);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -192,6 +193,20 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
         }
     };
 
+    const handleDeleteThread = async () => {
+        if (!confirmDeleteThread || !currentUid) return;
+
+        const target = confirmDeleteThread;
+        setConfirmDeleteThread(null);
+
+        try {
+            await deleteConversation(target.id!, currentUid);
+            if (activeId === target.id) setActiveId(null);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+    };
+
     if (!currentUid) {
         return (
             <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
@@ -229,24 +244,38 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                         const isActive = conversation.id === activeId;
 
                         return (
-                            <button
+                            <div
                                 key={conversation.id}
-                                onClick={() => setActiveId(conversation.id!)}
-                                className={`w-full text-left px-3 py-2 rounded-lg border transition-all ${isActive
-                                    ? 'bg-cyan-950/30 border-cyan-500/30 text-cyan-300'
-                                    : 'border-transparent text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
+                                className={`group relative rounded-lg border transition-all ${isActive
+                                    ? 'bg-cyan-950/30 border-cyan-500/30'
+                                    : 'border-transparent hover:bg-slate-800/50'
                                     }`}
                             >
-                                <span className="text-sm font-medium truncate block">
-                                    {other?.name || '—'}
-                                </span>
-                                {conversation.lastMessage && (
-                                    <span className="text-[10px] text-slate-600 truncate block mt-0.5">
-                                        {conversation.lastMessage.authorId === currentUid ? `${t.you || 'вы'}: ` : ''}
-                                        {conversation.lastMessage.content || (t.messageDeleted || 'сообщение удалено')}
+                                <button
+                                    onClick={() => setActiveId(conversation.id!)}
+                                    className={`w-full text-left px-3 py-2 pr-8 ${isActive ? 'text-cyan-300' : 'text-slate-400 group-hover:text-slate-200'}`}
+                                >
+                                    <span className="text-sm font-medium truncate block">
+                                        {other?.name || '—'}
                                     </span>
-                                )}
-                            </button>
+                                    {conversation.lastMessage && (
+                                        <span className="text-[10px] text-slate-600 truncate block mt-0.5">
+                                            {conversation.lastMessage.authorId === currentUid ? `${t.you || 'вы'}: ` : ''}
+                                            {conversation.lastMessage.content || (t.messageDeleted || 'сообщение удалено')}
+                                        </span>
+                                    )}
+                                </button>
+
+                                <button
+                                    onClick={() => setConfirmDeleteThread(conversation)}
+                                    title={t.deleteConversation || 'Удалить диалог'}
+                                    className="absolute top-2 right-2 text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                                    </svg>
+                                </button>
+                            </div>
                         );
                     })}
                 </div>
@@ -579,6 +608,47 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                     </div>
                 </div>
             )}
+
+            {confirmDeleteThread && (() => {
+                const other = otherParticipant(confirmDeleteThread, currentUid);
+                // The other side having already hidden it makes this the final
+                // deletion rather than a personal one, which the wording has to
+                // say before the button is pressed, not after.
+                const isFinal = (confirmDeleteThread.participantIds || [])
+                    .filter(id => id !== currentUid)
+                    .every(id => (confirmDeleteThread.deletedFor || []).includes(id));
+
+                return (
+                    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+                        <div className="bg-slate-900 border border-rose-500/30 rounded-2xl shadow-2xl max-w-sm w-full p-6">
+                            <h3 className="text-lg font-bold font-display text-white mb-1">
+                                {t.deleteConversation || 'Удалить диалог'}
+                            </h3>
+                            <p className="text-slate-500 text-xs mb-4 leading-relaxed">
+                                {other?.name ? `${other.name} — ` : ''}
+                                {isFinal
+                                    ? (t.deleteThreadFinal || 'собеседник уже удалил этот диалог, поэтому переписка и вложенные файлы будут стёрты безвозвратно.')
+                                    : (t.deleteThreadMine || 'диалог исчезнет у вас. У собеседника переписка останется, пока он не удалит её сам.')}
+                            </p>
+
+                            <div className="flex space-x-3">
+                                <button
+                                    onClick={() => setConfirmDeleteThread(null)}
+                                    className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
+                                >
+                                    {t.cancel || 'Отмена'}
+                                </button>
+                                <button
+                                    onClick={handleDeleteThread}
+                                    className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
+                                >
+                                    {t.delete || 'Удалить'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {confirmDelete && (
                 <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">

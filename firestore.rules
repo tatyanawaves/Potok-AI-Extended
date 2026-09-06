@@ -44,6 +44,11 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid in conversationData(conversationId).participantIds;
     }
 
+    /** Every participant has removed the thread from their own list. */
+    function bothHaveHidden(conversation) {
+      return conversation.get('deletedFor', []).hasAll(conversation.participantIds);
+    }
+
     match /conversations/{conversationId} {
       // get and list are split because a conversation is opened by reading a
       // deterministic id that may not exist yet. On a missing document
@@ -67,7 +72,12 @@ service cloud.firestore {
                     && request.resource.data.participantIds == resource.data.participantIds
                     && request.resource.data.participants == resource.data.participants;
 
-      allow delete: if false;
+      // Removing the thread outright is only allowed once the other side has
+      // also hidden it — otherwise one participant could destroy the other's
+      // copy of a shared conversation.
+      allow delete: if isSignedIn()
+                    && request.auth.uid in resource.data.participantIds
+                    && bothHaveHidden(resource.data);
 
       match /messages/{messageId} {
         allow read: if isParticipant(conversationId);
@@ -81,7 +91,12 @@ service cloud.firestore {
                       && resource.data.authorId == request.auth.uid
                       && request.resource.data.authorId == resource.data.authorId;
 
-        allow delete: if isSignedIn() && resource.data.authorId == request.auth.uid;
+        // Normally only the author may delete their own message. The exception
+        // is the final purge: once both participants have hidden the thread,
+        // either may clear out what is left.
+        allow delete: if isSignedIn()
+                      && (resource.data.authorId == request.auth.uid
+                          || bothHaveHidden(conversationData(conversationId)));
       }
     }
 

@@ -1,7 +1,8 @@
 import {
     collection, doc, setDoc, addDoc, updateDoc, deleteDoc,
-    getDoc, query, where, onSnapshot, limit, orderBy
+    getDoc, getDocs, query, where, onSnapshot, limit, orderBy, arrayUnion
 } from 'firebase/firestore';
+import { deleteAttachments } from './attachments';
 import { db } from './firebase';
 import { Conversation, ConversationParticipant, DirectMessage, MessageAttachment } from '../types';
 
@@ -71,8 +72,11 @@ export const subscribeToConversations = (
     );
 
     return onSnapshot(q, snapshot => {
-        const conversations = snapshot.docs
-            .map(d => ({ id: d.id, ...d.data() })) as Conversation[];
+        const conversations = (snapshot.docs
+            .map(d => ({ id: d.id, ...d.data() })) as Conversation[])
+            // Hidden by this user: still live for the other participant, but
+            // gone from this list.
+            .filter(c => !(c.deletedFor || []).includes(userId));
 
         // Sorted client-side: ordering by updatedAt alongside the
         // array-contains filter would need a composite index.
@@ -167,4 +171,45 @@ export const deleteDirectMessage = async (conversationId: string, messageId: str
 /** Removes the tombstone too. Only meaningful for the author's own message. */
 export const purgeDirectMessage = async (conversationId: string, messageId: string) => {
     await deleteDoc(doc(db, 'conversations', conversationId, 'messages', messageId));
+};
+
+/**
+ * Removes a conversation for one participant.
+ *
+ * The thread belongs to two people, so this hides it rather than destroying
+ * the other person's copy. When the second participant does the same there is
+ * nobody left to keep it for, and the messages and their files are purged.
+ *
+ * Returns whether that final purge happened, which is worth telling the user:
+ * "removed from your list" and "gone for good" are different outcomes.
+ */
+export const deleteConversation = async (
+    conversationId: string,
+    userId: string
+): Promise<{ purged: boolean }> => {
+    const ref = doc(db, 'conversations', conversationId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) return { purged: false };
+
+    const conversation = snapshot.data() as Conversation;
+    const others = (conversation.participantIds || []).filter(id => id !== userId);
+    const alreadyHiddenByOther = others.every(id => (conversation.deletedFor || []).includes(id));
+
+    if (!alreadyHiddenByOther) {
+        await updateDoc(ref, { deletedFor: arrayUnion(userId) });
+        return { purged: false };
+    }
+
+    // Both sides are done with it. Files go before the documents naming them,
+    // since their keys live nowhere else.
+    const messages = await getDocs(messagesRefFor(conversationId));
+
+    await deleteAttachments(
+        messages.docs.flatMap(m => (m.data() as DirectMessage).attachments || [])
+    );
+
+    await Promise.all(messages.docs.map(m => deleteDoc(m.ref)));
+    await deleteDoc(ref);
+
+    return { purged: true };
 };
