@@ -4,6 +4,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { isBot, parseMentions } from './mentions';
+import { deleteAttachments } from './attachments';
 import { Board, BoardChannel, BoardMember, BoardMessage } from '../types';
 
 /**
@@ -81,6 +82,13 @@ export const deleteBoard = async (boardId: string) => {
 
     for (const channelDoc of channels.docs) {
         const messages = await getDocs(messagesRefFor(boardId, channelDoc.id));
+
+        // Attachment keys live only on the messages, so the files have to go
+        // before the documents naming them do.
+        await deleteAttachments(
+            messages.docs.flatMap(m => (m.data() as BoardMessage).attachments || [])
+        );
+
         await Promise.all(messages.docs.map(m => deleteDoc(m.ref)));
         await deleteDoc(channelDoc.ref);
     }
@@ -194,6 +202,11 @@ export const subscribeToChannels = (boardId: string, callback: (channels: BoardC
 
 export const deleteChannel = async (boardId: string, channelId: string) => {
     const messages = await getDocs(messagesRefFor(boardId, channelId));
+
+    await deleteAttachments(
+        messages.docs.flatMap(m => (m.data() as BoardMessage).attachments || [])
+    );
+
     await Promise.all(messages.docs.map(m => deleteDoc(m.ref)));
     await deleteDoc(doc(db, 'boards', boardId, 'channels', channelId));
 };

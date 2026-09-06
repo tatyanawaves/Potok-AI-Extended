@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { AISettings, Conversation, DirectMessage } from '../types';
 import { FollowedProfile } from '../services/social';
-import { uploadAttachment, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
+import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
 import { AttachmentView, ImageLightbox } from './Attachments';
 import { MessageAttachment } from '../types';
 import { translations } from '../translations';
@@ -182,6 +182,9 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
         if (!confirmDelete || !activeId) return;
 
         try {
+            // Files first: their keys live only on the message, so removing it
+            // first would leave nothing to delete them by.
+            await deleteAttachments(confirmDelete.attachments || []);
             await deleteDirectMessage(activeId, confirmDelete.id!);
             setConfirmDelete(null);
         } catch (e) {

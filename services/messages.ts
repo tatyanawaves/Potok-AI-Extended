@@ -157,7 +157,10 @@ export const editDirectMessage = async (
 export const deleteDirectMessage = async (conversationId: string, messageId: string) => {
     await updateDoc(doc(db, 'conversations', conversationId, 'messages', messageId), {
         deletedAt: Date.now(),
-        content: ''
+        content: '',
+        // Cleared alongside the text: the files themselves are removed from
+        // storage, so leaving the references would render as broken tiles.
+        attachments: []
     });
 };
 

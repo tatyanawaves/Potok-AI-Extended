@@ -103,6 +103,31 @@ export const fetchAttachmentUrl = async (attachment: Attachment): Promise<string
     return URL.createObjectURL(await response.blob());
 };
 
+/**
+ * Removes attachments whose message is being deleted.
+ *
+ * Best effort by design: the message is removed either way. A file that fails
+ * to delete is wasted storage, while refusing to delete the message because of
+ * it would leave the user unable to carry out what they asked for.
+ */
+export const deleteAttachments = async (attachments: Attachment[]): Promise<void> => {
+    if (!PIPEDREAM_WORKER_URL || attachments.length === 0) return;
+
+    const header = await authHeader();
+
+    await Promise.all(attachments.map(async attachment => {
+        try {
+            await fetch(`${PIPEDREAM_WORKER_URL}/files/delete`, {
+                method: 'POST',
+                headers: { 'Authorization': header, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: attachment.key })
+            });
+        } catch (error) {
+            console.error('[Attachments] Could not delete', attachment.key, error);
+        }
+    }));
+};
+
 /** Downloads an attachment to disk under its original name. */
 export const saveAttachment = async (attachment: Attachment): Promise<void> => {
     const url = await fetchAttachmentUrl(attachment);

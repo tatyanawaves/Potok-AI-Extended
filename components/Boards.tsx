@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AISettings, Board, BoardChannel, BoardMember, BoardMessage, MessageAttachment } from '../types';
-import { uploadAttachment, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
+import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
 import { AttachmentView, ImageLightbox } from './Attachments';
 import { translations } from '../translations';
 import { auth, getUserProfileByName, getClonableAgentProfiles } from '../services/firebase';
@@ -646,7 +646,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 </span>
                                                 {msg.authorId === currentUid && (
                                                     <button
-                                                        onClick={() => deleteMessage(activeBoard.id!, msg.channelId, msg.id!)}
+                                                        onClick={async () => {
+                                                            // Keys live only on the message; delete
+                                                            // the files before it is gone.
+                                                            await deleteAttachments(msg.attachments || []);
+                                                            await deleteMessage(activeBoard.id!, msg.channelId, msg.id!);
+                                                        }}
                                                         className="text-slate-700 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity text-[10px]"
                                                     >
                                                         ✕

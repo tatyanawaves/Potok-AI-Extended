@@ -39,6 +39,7 @@ interface AttachmentBucket {
         body: ReadableStream | null;
         httpMetadata?: { contentType?: string };
     } | null>;
+    delete(key: string): Promise<void>;
 }
 
 export interface Env {
@@ -529,6 +530,52 @@ const handleFileUpload = async (
     return json({ key, name, size: body.byteLength, contentType }, 200, cors);
 };
 
+/**
+ * Whether the caller may touch a key at all.
+ *
+ * Shared by download and delete: the same membership decides both, and having
+ * one place for it keeps them from drifting apart.
+ */
+const mayAccessKey = async (
+    env: Env, uid: string, idToken: string, key: string
+): Promise<boolean> => {
+    const conversationId = conversationOfKey(key);
+    if (conversationId) return mayAccessConversation(conversationId, uid);
+
+    const boardId = boardOfKey(key);
+    if (boardId) return isBoardMember(env.FIREBASE_PROJECT_ID, boardId, idToken);
+
+    return false;
+};
+
+/** Removes an attachment, once its message is gone. */
+const handleFileDelete = async (
+    request: Request, env: Env, uid: string, idToken: string, cors: Record<string, string>
+): Promise<Response> => {
+    if (!env.FILES) {
+        return json({ error: 'Attachment storage is not configured' }, 501, cors);
+    }
+
+    let body: { key?: string } = {};
+    try {
+        body = (await request.json()) as any;
+    } catch {
+        return json({ error: 'Body must be JSON' }, 400, cors);
+    }
+
+    if (!body.key) return json({ error: 'key is required' }, 400, cors);
+
+    if (!(await mayAccessKey(env, uid, idToken, body.key))) {
+        return json({ error: 'That file is not yours' }, 403, cors);
+    }
+
+    // R2 treats deleting a missing object as success, which is what we want:
+    // a retry after a partial failure should not error.
+    await env.FILES.delete(body.key);
+
+    return json({ ok: true }, 200, cors);
+};
+
 /** Streams an attachment back to someone entitled to its conversation or board. */
 const handleFileDownload = async (
     request: Request, env: Env, uid: string, idToken: string, cors: Record<string, string>
@@ -539,16 +586,9 @@ const handleFileDownload = async (
 
     const key = new URL(request.url).searchParams.get('key') || '';
 
-    const conversationId = conversationOfKey(key);
-    const boardId = boardOfKey(key);
-
-    const allowed = conversationId
-        ? mayAccessConversation(conversationId, uid)
-        : boardId
-            ? await isBoardMember(env.FIREBASE_PROJECT_ID, boardId, idToken)
-            : false;
-
-    if (!allowed) return json({ error: 'That file is not yours' }, 403, cors);
+    if (!(await mayAccessKey(env, uid, idToken, key))) {
+        return json({ error: 'That file is not yours' }, 403, cors);
+    }
 
     const object = await env.FILES.get(key);
     if (!object) return json({ error: 'File not found' }, 404, cors);
@@ -560,7 +600,11 @@ const handleFileDownload = async (
             // Served as a download rather than rendered here: an uploaded HTML
             // or SVG would otherwise execute on the worker's own origin.
             'Content-Disposition': 'attachment',
-            'Cache-Control': 'private, max-age=3600',
+            // Short on purpose: a deleted attachment stays readable from the
+            // browser cache for as long as this lasts. Five minutes still
+            // covers scrolling a thread away and back, which is what the
+            // caching is for.
+            'Cache-Control': 'private, max-age=300',
             // The credential is in a header, not the URL, so without varying on
             // it the browser would serve this cached body to a later request
             // carrying no token at all — including after the user signs out.
@@ -611,6 +655,9 @@ export default {
             }
             if (url.pathname === '/files' && request.method === 'GET') {
                 return await handleFileDownload(request, env, uid, idToken, cors);
+            }
+            if (url.pathname === '/files/delete') {
+                return await handleFileDelete(request, env, uid, idToken, cors);
             }
             if (url.pathname === '/files/upload') {
                 return await handleFileUpload(request, env, uid, idToken, cors);
