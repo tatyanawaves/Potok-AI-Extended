@@ -21,7 +21,7 @@ const MAX_TOOL_RESULT_LENGTH = 6000;
  * but any token for it is private: it lives in the mentioning user's own
  * settings, keyed by server URL, and never touches Firestore.
  */
-const PIPEDREAM_WORKER_URL: string = ((import.meta as any).env?.VITE_PIPEDREAM_WORKER_URL || '')
+const PIPEDREAM_WORKER_URL: string = (import.meta.env.VITE_PIPEDREAM_WORKER_URL || '')
     .replace(/\/$/, '');
 
 /**

@@ -6,7 +6,7 @@ import { translations } from "../translations";
 
 // Initialize Gemini Client
 export const getAIClient = (apiKey?: string) => new GoogleGenAI({
-  apiKey: apiKey || (import.meta as any).env.VITE_GEMINI_API_KEY || "PLACEHOLDER_API_KEY"
+  apiKey: apiKey || import.meta.env.VITE_GEMINI_API_KEY || "PLACEHOLDER_API_KEY"
 });
 
 const MODEL_NAME = 'gemini-1.5-flash';

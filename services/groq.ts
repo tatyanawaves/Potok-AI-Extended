@@ -1,7 +1,7 @@
 import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
 
-const VITE_GROQ_API_KEY = (import.meta as any).env.VITE_GROQ_API_KEY || "";
+const VITE_GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
 const VITE_MODEL_NAME = "llama-3.3-70b-versatile";
 
 const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string, meta?: any } => {

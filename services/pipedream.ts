@@ -9,7 +9,7 @@ import { auth } from './firebase';
  */
 
 export const PIPEDREAM_WORKER_URL: string =
-    ((import.meta as any).env?.VITE_PIPEDREAM_WORKER_URL || '').replace(/\/$/, '');
+    (import.meta.env.VITE_PIPEDREAM_WORKER_URL || '').replace(/\/$/, '');
 
 export const isPipedreamConfigured = (): boolean => Boolean(PIPEDREAM_WORKER_URL);
 
