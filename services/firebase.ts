@@ -171,6 +171,29 @@ export const getUserProfileByName = async (name: string): Promise<Record<string,
 };
 
 /**
+ * Finds profiles by name.
+ *
+ * Filtered in the client rather than with a Firestore range query: those are
+ * case-sensitive and would miss "neo" for "Neo". The network is small enough
+ * that fetching a page and filtering here is both correct and cheap; past a
+ * few thousand profiles this needs a lowercased field to query on instead.
+ */
+export const searchProfiles = async (
+    term: string,
+    excludeUid?: string
+): Promise<Array<Record<string, any>>> => {
+    const snapshot = await getDocs(query(usersRef, limit(200)));
+    const needle = term.trim().toLowerCase();
+
+    return snapshot.docs
+        .map(d => ({ ...d.data(), uid: d.id }) as Record<string, any>)
+        .filter(profile => profile.agentName && profile.uid !== excludeUid)
+        .filter(profile => !needle || String(profile.agentName).toLowerCase().includes(needle))
+        .sort((a, b) => String(a.agentName).localeCompare(String(b.agentName)))
+        .slice(0, 30);
+};
+
+/**
  * Agent profiles whose owners allow their persona to be cloned into boards.
  * The clone always runs on the cloner's quota, so this is about credit and
  * consent for the prompt, not about spending the author's tokens.

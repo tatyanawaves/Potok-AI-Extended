@@ -207,6 +207,45 @@ export interface BoardMessage {
   timestamp: number;
 }
 
+// --- Direct messages ------------------------------------------------------
+
+export interface ConversationParticipant {
+  id: string;
+  name: string;
+}
+
+export interface Conversation {
+  id?: string;
+  participants: ConversationParticipant[];
+  /** Denormalized ids so a member can query their own threads. */
+  participantIds: string[];
+  /** Preview for the conversation list, avoiding a read per thread. */
+  lastMessage?: {
+    content: string;
+    authorId: string;
+    timestamp: number;
+  };
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DirectMessage {
+  id?: string;
+  conversationId: string;
+  authorId: string;
+  authorName: string;
+  content: string;
+  timestamp: number;
+  /** Set when the author edits, so the change is visible rather than silent. */
+  editedAt?: number;
+  /**
+   * Soft delete. The document stays so the thread keeps its shape and the
+   * other participant sees that something was removed rather than finding a
+   * gap in a conversation they had already read.
+   */
+  deletedAt?: number;
+}
+
 export interface SavedSession {
   id: string;
   timestamp: number;
