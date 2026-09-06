@@ -19,19 +19,26 @@ import {
 /**
  * One attachment inside a message.
  *
- * Images are fetched into an object URL rather than linked directly: the
- * worker only serves a file to an authenticated participant, so a bare src
- * would be refused. The URL is revoked on unmount, since an undisposed blob
- * keeps the file in memory for the life of the page.
+ * Always framed and labelled with its name and size, whatever it is. An image
+ * alone is not enough of an affordance: a small one, a broken one, or one
+ * still loading is indistinguishable from no attachment at all.
+ *
+ * Images are fetched into an object URL rather than linked directly, because
+ * the worker only serves a file to an authenticated participant and a bare src
+ * carries no credentials. The URL is revoked on unmount, since an undisposed
+ * blob keeps the file in memory for the life of the page.
  */
-const AttachmentView: React.FC<{ attachment: MessageAttachment; label: string }> = ({
-    attachment, label
-}) => {
+const AttachmentView: React.FC<{
+    attachment: MessageAttachment;
+    failedLabel: string;
+    openLabel: string;
+}> = ({ attachment, failedLabel, openLabel }) => {
     const [preview, setPreview] = useState<string | null>(null);
     const [failed, setFailed] = useState(false);
+    const wantsPreview = isImage(attachment);
 
     useEffect(() => {
-        if (!isImage(attachment)) return;
+        if (!wantsPreview) return;
 
         let url: string | null = null;
         let cancelled = false;
@@ -51,30 +58,43 @@ const AttachmentView: React.FC<{ attachment: MessageAttachment; label: string }>
             cancelled = true;
             if (url) URL.revokeObjectURL(url);
         };
-    }, [attachment]);
-
-    if (isImage(attachment) && preview) {
-        return (
-            <button
-                onClick={() => saveAttachment(attachment).catch(() => setFailed(true))}
-                className="block mt-2 rounded-lg overflow-hidden border border-slate-700 hover:border-slate-500 transition-colors"
-                title={attachment.name}
-            >
-                <img src={preview} alt={attachment.name} className="max-h-56 max-w-full object-contain" />
-            </button>
-        );
-    }
+    }, [attachment, wantsPreview]);
 
     return (
         <button
             onClick={() => saveAttachment(attachment).catch(() => setFailed(true))}
-            className="flex items-center space-x-2 mt-2 px-3 py-2 rounded-lg bg-slate-950/60 border border-slate-700 hover:border-slate-500 transition-colors w-full text-left"
+            title={`${attachment.name} — ${openLabel}`}
+            className="block w-full mt-2 rounded-lg border border-slate-700 bg-slate-950/60 overflow-hidden hover:border-cyan-500/40 transition-colors text-left"
         >
-            <span className="text-base shrink-0">📎</span>
-            <span className="min-w-0 flex-1">
-                <span className="text-xs text-slate-200 truncate block">{attachment.name}</span>
-                <span className="text-[10px] text-slate-500">
-                    {failed ? label : formatSize(attachment.size)}
+            {wantsPreview && (
+                <span className="block bg-slate-900/60 border-b border-slate-800">
+                    {preview ? (
+                        <img
+                            src={preview}
+                            alt={attachment.name}
+                            // A tiny image would otherwise render as a speck;
+                            // min-height keeps every preview a visible tile.
+                            className="max-h-56 max-w-full mx-auto object-contain"
+                            style={{ minHeight: '3rem' }}
+                        />
+                    ) : (
+                        <span className="flex items-center justify-center h-16 text-[10px] font-mono text-slate-600">
+                            {failed ? failedLabel : '…'}
+                        </span>
+                    )}
+                </span>
+            )}
+
+            <span className="flex items-center space-x-2 px-3 py-2">
+                <span className="text-base shrink-0">{wantsPreview ? '🖼' : '📎'}</span>
+                <span className="min-w-0 flex-1">
+                    <span className="text-xs text-slate-200 truncate block">{attachment.name}</span>
+                    <span className="text-[10px] text-slate-500">
+                        {failed ? failedLabel : formatSize(attachment.size)}
+                    </span>
+                </span>
+                <span className="text-[9px] font-mono uppercase tracking-wider text-slate-600 shrink-0">
+                    {openLabel}
                 </span>
             </span>
         </button>
@@ -399,7 +419,8 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                                         <AttachmentView
                                                             key={a.key}
                                                             attachment={a}
-                                                            label={t.downloadFailed || 'не удалось открыть'}
+                                                            failedLabel={t.downloadFailed || 'не удалось открыть'}
+                                                            openLabel={t.saveFile || 'скачать'}
                                                         />
                                                     ))}
                                                 </div>
