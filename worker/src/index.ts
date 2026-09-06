@@ -527,7 +527,11 @@ const handleFileDownload = async (
             // Served as a download rather than rendered here: an uploaded HTML
             // or SVG would otherwise execute on the worker's own origin.
             'Content-Disposition': 'attachment',
-            'Cache-Control': 'private, max-age=3600'
+            'Cache-Control': 'private, max-age=3600',
+            // The credential is in a header, not the URL, so without varying on
+            // it the browser would serve this cached body to a later request
+            // carrying no token at all — including after the user signs out.
+            Vary: 'Origin, Authorization'
         }
     });
 };
