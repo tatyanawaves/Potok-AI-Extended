@@ -91,6 +91,28 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
         markRead(currentUid, { conversationId: activeId }).catch(() => { });
     }, [activeId, currentUid, messages.length]);
 
+    // Jump to the end when the thread changes; see the note in Boards.tsx —
+    // a smooth scroll loses the race against an image loading above it.
+    useEffect(() => {
+        endRef.current?.scrollIntoView({ behavior: 'auto' });
+    }, [activeId]);
+
+
+    /**
+     * Images finish loading after the scroll has already happened, and each one
+     * pushes the newest message further down. Nothing fires on that, so the
+     * load events of the images themselves are the signal to catch up.
+     */
+    useEffect(() => {
+        const end = endRef.current;
+        const scroller = end?.parentElement;
+        if (!scroller) return;
+
+        const stick = () => end?.scrollIntoView({ behavior: 'auto' });
+        scroller.addEventListener('load', stick, true);
+        return () => scroller.removeEventListener('load', stick, true);
+    }, [activeId]);
+
     useEffect(() => {
         endRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
@@ -232,7 +254,10 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
     return (
         <div className="absolute inset-0 flex bg-slate-950">
 
-            <aside className="w-64 shrink-0 border-r border-slate-800 bg-slate-900/40 flex flex-col">
+            {/* One column at a time on a narrow screen: the list, then the
+                thread. Which one shows follows the open conversation, so there
+                is no separate notion of "where you are" to keep in sync. */}
+            <aside className={`${activeId ? 'hidden md:flex' : 'flex'} w-full md:w-64 shrink-0 border-r border-slate-800 bg-slate-900/40 flex-col`}>
                 <div className="p-4 border-b border-slate-800 flex items-center justify-between">
                     <span className="font-mono text-[10px] uppercase tracking-widest text-cyan-500 font-bold">
                         {t.directMessages || 'Сообщения'}
@@ -299,7 +324,7 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                 </div>
             </aside>
 
-            <section className="flex-1 flex flex-col min-w-0">
+            <section className={`${activeId ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0`}>
                 {!active ? (
                     <div className="flex-1 flex items-center justify-center text-slate-600 text-sm px-8 text-center">
                         {t.selectConversation || 'Выберите диалог или начните новый'}
@@ -307,6 +332,16 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                 ) : (
                     <>
                         <header className="h-14 shrink-0 border-b border-slate-800 flex items-center px-5">
+                            <button
+                                onClick={() => setActiveId(null)}
+                                className="md:hidden mr-3 shrink-0 text-slate-500 hover:text-white transition-colors"
+                                title={t.backToConversations || 'К диалогам'}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                                </svg>
+                            </button>
+
                             <button
                                 onClick={() => {
                                     const other = otherParticipant(active, currentUid);

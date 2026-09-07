@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useIsWide } from '../hooks/useIsWide';
 import { subscribeToReadState, markRead, isBoardUnread, isChannelUnread, EMPTY_READ_STATE } from '../services/reads';
 import { subscribeToSpend } from '../services/spend';
 import { spendOn, formatTokens, estimateDiscussionRequests } from '../services/usage';
@@ -39,6 +40,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
      * nothing re-rendered once the session arrived.
      */
     const [currentUid, setCurrentUid] = useState<string | undefined>(auth.currentUser?.uid);
+
+    const isWide = useIsWide();
 
     useEffect(() => onAuthStateChanged(auth, user => setCurrentUid(user?.uid)), []);
 
@@ -198,9 +201,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     }, [activeBoardId, activeChannelId]);
 
     // Select the first board / channel once they load.
+    // Picking the first board for the user only helps when the list stays
+    // visible beside it. On one column it would undo every tap on "back".
     useEffect(() => {
-        if (!activeBoardId && boards.length > 0) setActiveBoardId(boards[0].id!);
-    }, [boards, activeBoardId]);
+        if (isWide && !activeBoardId && boards.length > 0) setActiveBoardId(boards[0].id!);
+    }, [boards, activeBoardId, isWide]);
 
     useEffect(() => {
         if (!currentUid) return;
@@ -245,10 +250,41 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     useEffect(() => {
         if (channels.length === 0) {
             setActiveChannelId(null);
-        } else if (!channels.some(c => c.id === activeChannelId)) {
+        } else if (activeChannelId && !channels.some(c => c.id === activeChannelId)) {
+            // The open channel is gone (deleted): move to a surviving one.
+            setActiveChannelId(channels[0].id!);
+        } else if (isWide && !activeChannelId) {
             setActiveChannelId(channels[0].id!);
         }
-    }, [channels, activeChannelId]);
+    }, [channels, activeChannelId, isWide]);
+
+    /**
+     * Keep the newest message in view.
+     *
+     * Jumping, not gliding, when the channel changes: a smooth scroll over a
+     * long history is still travelling when an attachment image finishes
+     * loading and grows the page, and the animation ends somewhere in the
+     * middle of old messages — which reads as an empty channel.
+     */
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    }, [activeChannelId]);
+
+
+    /**
+     * Images finish loading after the scroll has already happened, and each one
+     * pushes the newest message further down. Nothing fires on that, so the
+     * load events of the images themselves are the signal to catch up.
+     */
+    useEffect(() => {
+        const end = messagesEndRef.current;
+        const scroller = end?.parentElement;
+        if (!scroller) return;
+
+        const stick = () => end?.scrollIntoView({ behavior: 'auto' });
+        scroller.addEventListener('load', stick, true);
+        return () => scroller.removeEventListener('load', stick, true);
+    }, [activeChannelId]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -532,10 +568,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     return (
         // Absolute rather than h-full: the routed <main> is a flex child whose
         // height is content-driven, so a percentage height would collapse.
+        //
+        // Three fixed columns need about 700px before the messages themselves
+        // get any room, so on a narrow screen they become one column at a
+        // time: boards, then channels, then the conversation. Which one shows
+        // follows the selection that already exists, so there is no second
+        // idea of "where you are" to keep in sync.
         <div className="absolute inset-0 flex bg-slate-950">
 
             {/* Board list */}
-            <aside className="w-56 shrink-0 border-r border-slate-800 bg-slate-900/40 flex flex-col">
+            <aside className={`${activeBoardId ? 'hidden md:flex' : 'flex'} w-full md:w-56 shrink-0 border-r border-slate-800 bg-slate-900/40 flex-col`}>
                 <div className="p-4 border-b border-slate-800 flex items-center justify-between">
                     <span className="font-mono text-[10px] uppercase tracking-widest text-cyan-500 font-bold">
                         {t.boards || 'Доски'}
@@ -594,9 +636,18 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
             {/* Channel list */}
             {activeBoard && (
-                <aside className="w-48 shrink-0 border-r border-slate-800 bg-slate-900/20 flex flex-col">
+                <aside className={`${activeChannelId ? 'hidden md:flex' : 'flex'} w-full md:w-48 shrink-0 border-r border-slate-800 bg-slate-900/20 flex-col`}>
                     <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-                        <span className="font-mono text-[10px] uppercase tracking-widest text-indigo-400 font-bold">
+                        <span className="font-mono text-[10px] uppercase tracking-widest text-indigo-400 font-bold flex items-center">
+                            <button
+                                onClick={() => setActiveBoardId(null)}
+                                className="md:hidden mr-2 text-slate-500 hover:text-white transition-colors"
+                                title={t.backToBoards || 'К доскам'}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                                </svg>
+                            </button>
                             {t.channels || 'Каналы'}
                         </span>
                         <button
@@ -647,14 +698,24 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             )}
 
             {/* Message area */}
-            <section className="flex-1 flex flex-col min-w-0">
+            <section className={`${activeChannelId ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0`}>
                 {!activeBoard ? (
                     <div className="flex-1 flex items-center justify-center text-slate-600 text-sm px-8 text-center">
                         {t.selectOrCreateBoard || 'Выберите доску или создайте новую'}
                     </div>
                 ) : (
                     <>
-                        <header className="h-14 shrink-0 border-b border-slate-800 flex items-center justify-between px-5">
+                        <header className="min-h-14 shrink-0 border-b border-slate-800 flex items-center justify-between gap-2 flex-wrap px-3 md:px-5 py-2">
+                            <button
+                                onClick={() => setActiveChannelId(null)}
+                                className="md:hidden mr-3 shrink-0 text-slate-500 hover:text-white transition-colors"
+                                title={t.backToChannels || 'К каналам'}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                                </svg>
+                            </button>
+
                             <div className="min-w-0">
                                 <div className="font-mono text-sm text-slate-200 truncate">
                                     #{activeChannel?.name || '—'}
@@ -822,7 +883,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
                             {/* Members panel */}
                             {showMembers && (
-                                <aside className="w-64 shrink-0 border-l border-slate-800 bg-slate-900/30 flex flex-col">
+                                <aside className="absolute md:relative inset-y-0 right-0 z-20 w-64 shrink-0 border-l border-slate-800 bg-slate-900 md:bg-slate-900/30 flex flex-col">
                                     <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-slate-400">
                                         {t.members || 'Участники'}
                                     </div>
@@ -952,7 +1013,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     onKeyDown={handleKeyDown}
                                     disabled={!activeChannelId}
                                     placeholder={activeChannel
-                                        ? `${t.messagePlaceholder || 'Сообщение в'} #${activeChannel.name}  ·  @${t.mentionAgentHint || 'имя для вызова агента'}`
+                                        // The full hint wraps to a second line on a phone,
+                                        // where the field is one line tall — so it is cut in
+                                        // half rather than shown.
+                                        ? (isWide
+                                            ? `${t.messagePlaceholder || 'Сообщение в'} #${activeChannel.name}  ·  @${t.mentionAgentHint || 'имя для вызова агента'}`
+                                            : `#${activeChannel.name}  ·  @${t.mentionAgentHint || 'имя'}`)
                                         : (t.noChannel || 'Создайте канал')}
                                     className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors resize-none h-[46px] max-h-32 disabled:opacity-40"
                                 />

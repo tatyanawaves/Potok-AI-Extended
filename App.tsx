@@ -1060,15 +1060,21 @@ const App: React.FC = () => {
     return <AuthScreen onAuthorize={handleAuthorize} initialSettings={settings} />;
   }
 
+  // overflow-clip, not overflow-hidden: a closed panel still sits outside the
+  // shell, and an overflow-hidden box can still be scrolled by the browser when
+  // something inside it takes focus. That scrolled the whole interface sideways
+  // and pushed the header off the screen.
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden relative">
+    <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-clip relative">
       {showSettings && <SettingsModal settings={settings} onSave={handleSaveSettings} onClose={() => setShowSettings(false)} />}
-      <header className="h-16 border-b border-slate-800 bg-slate-950 flex items-center justify-between px-6 z-20">
-        <div className="flex items-center space-x-3">
+      {/* The row of section icons is wider than a phone. It scrolls sideways
+          rather than spilling past the edge, and the title shrinks first. */}
+      <header className="h-16 shrink-0 border-b border-slate-800 bg-slate-950 flex items-center justify-between gap-2 px-3 md:px-6 z-20">
+        <div className="flex items-center space-x-3 min-w-0 shrink">
           <div className={`w-3 h-3 rounded-full ${isThinking ? 'bg-cyan-500 animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.8)]' : 'bg-slate-700'}`}></div>
-          <h1 className="text-lg md:text-xl font-bold font-display tracking-tight bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent">{t.title}</h1>
+          <h1 className="text-lg md:text-xl font-bold font-display tracking-tight truncate bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent">{t.title}</h1>
         </div>
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-1 md:space-x-4 min-w-0 overflow-x-auto">
           <div className="hidden lg:flex flex-col items-end mr-4">
             <span className="text-cyan-400 font-bold uppercase text-sm tracking-wider">{settings.agentName}</span>
             <span className="text-slate-500 text-xs font-mono truncate max-w-[200px]">{settings.agentRole}</span>
@@ -1113,7 +1119,7 @@ const App: React.FC = () => {
           <button onClick={handleLogout} className="p-2 rounded-md hover:bg-rose-900/20 text-slate-400 hover:text-rose-400 transition-colors" title="Logout"><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg></button>
         </div>
       </header >
-      <div className={`absolute top-16 left-0 bottom-0 w-72 bg-slate-900 border-r border-slate-800 transform transition-transform duration-300 ease-in-out z-30 flex flex-col ${showCyclePanel ? 'translate-x-0' : '-translate-x-full'}`}>
+      <div className={`absolute top-16 left-0 bottom-0 w-72 bg-slate-900 border-r border-slate-800 transform transition-transform duration-300 ease-in-out z-30 flex flex-col ${showCyclePanel ? 'translate-x-0' : '-translate-x-full invisible pointer-events-none'}`} aria-hidden={!showCyclePanel}>
         <div className="p-4 border-b border-slate-800 flex justify-between items-center"><span className="font-mono text-xs uppercase tracking-widest text-cyan-500 font-bold">{t.cognitiveCycle}</span><button onClick={() => setShowCyclePanel(false)} className="text-slate-500 hover:text-white"><svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button></div>
         <div className="p-6 space-y-6 flex-1 overflow-y-auto">
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
@@ -1127,7 +1133,7 @@ const App: React.FC = () => {
           </div>
         </div>
       </div>
-      <div className={`absolute top-16 right-0 bottom-0 w-80 bg-slate-900 border-l border-slate-800 transform transition-transform duration-300 ease-in-out z-30 flex flex-col ${showHistory ? 'translate-x-0' : 'translate-x-full'}`}>
+      <div className={`absolute top-16 right-0 bottom-0 w-80 bg-slate-900 border-l border-slate-800 transform transition-transform duration-300 ease-in-out z-30 flex flex-col ${showHistory ? 'translate-x-0' : 'translate-x-full invisible pointer-events-none'}`} aria-hidden={!showHistory}>
         <div className="p-4 border-b border-slate-800 font-mono text-sm uppercase tracking-wider text-slate-400">{t.savedProcesses}</div>
         <div ref={historyScrollRef} className="flex-1 overflow-y-auto p-2 space-y-2 scroll-smooth">
           {savedSessions.length === 0 ? <div className="text-center text-slate-600 p-8 text-sm">{t.noSavedSessions}</div> :
