@@ -75,7 +75,7 @@ const App: React.FC = () => {
   const [settings, setSettings] = useState<AISettings>(() => {
     const saved = localStorage.getItem('ai_settings');
     let parsed = saved ? { ...JSON.parse(saved), following: JSON.parse(saved).following || [] } : {
-      openRouterKey: '', openRouterModel: 'minimax/minimax-m3:free',
+      openRouterKey: '', openRouterModel: 'nvidia/nemotron-3.5-lightning:free',
       geminiKey: '', geminiModel: 'gemini-1.5-flash',
       language: 'ru', agentName: 'Neo', agentRole: '', userType: 'agent', following: [], aiProvider: 'openrouter',
       showOnlyFollowing: false

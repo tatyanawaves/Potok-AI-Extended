@@ -2,7 +2,7 @@ import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
 
 const VITE_OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || "";
-const VITE_MODEL_NAME = "minimax/minimax-m3:free";
+const VITE_MODEL_NAME = "nvidia/nemotron-3.5-lightning:free";
 
 const parseAIResponse = (text: string): { content: string, symbols: AISymbol[], type?: string, meta?: any } => {
   try {

@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { subscribeToReadState, markRead, isBoardUnread, isChannelUnread, EMPTY_READ_STATE } from '../services/reads';
+import { subscribeToSpend } from '../services/spend';
+import { spendOn, formatTokens, estimateDiscussionRequests } from '../services/usage';
+import { SpendState } from '../types';
 import { AISettings, Board, BoardChannel, BoardMember, BoardMessage, MessageAttachment } from '../types';
 import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
 import { AttachmentView, ImageLightbox } from './Attachments';
@@ -14,7 +17,7 @@ import {
 } from '../services/boards';
 import {
     triggerAgentReplies, runBotDiscussion,
-    MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, ToolPolicy
+    MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, MAX_REQUESTS_PER_TURN, ToolPolicy
 } from '../services/boardAgent';
 import {
     isPipedreamConfigured, listConnectedAccounts, toolServerUrlFor, ConnectedAccount
@@ -55,6 +58,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [showMembers, setShowMembers] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [reads, setReads] = useState(EMPTY_READ_STATE);
+    const [spend, setSpend] = useState<SpendState | null>(null);
 
     // In-app dialogs. window.prompt/confirm are blocked in some browser
     // contexts, so every input goes through this modal instead.
@@ -191,6 +195,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     useEffect(() => {
         if (!currentUid) return;
         return subscribeToReadState(currentUid, setReads);
+    }, [currentUid]);
+
+    useEffect(() => {
+        if (!currentUid) return;
+        return subscribeToSpend(currentUid, setSpend);
     }, [currentUid]);
 
     // While a channel is open its messages count as seen, including ones that
@@ -619,6 +628,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 <div className="text-[10px] text-slate-600 truncate">{activeBoard.name}</div>
                             </div>
 
+                            {/* Today's model usage, on this user's own key. */}
+                            {spendOn(spend).requests > 0 && (
+                                <div
+                                    className="hidden sm:block text-[10px] font-mono text-slate-500 shrink-0 px-2"
+                                    title={t.spendHint || 'Запросы к модели с вашего ключа за сегодня. Платит тот, кто упомянул бота.'}
+                                >
+                                    {t.today || 'сегодня'}: {spendOn(spend).requests} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}
+                                </div>
+                            )}
+
                             <div className="flex items-center space-x-2 shrink-0">
                                 {isPipedreamConfigured() && (
                                     <button
@@ -731,7 +750,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 </div>
                                             ) : null}
                                             {msg.modelName && (
-                                                <div className="text-[9px] font-mono text-slate-700 mt-1">{msg.modelName}</div>
+                                                <div className="text-[9px] font-mono text-slate-700 mt-1">
+                                                    {msg.modelName}
+                                                    {msg.tokensUsed ? ` · ${formatTokens(msg.tokensUsed)} ${t.tokensShort || 'ток.'}` : ''}
+                                                </div>
                                             )}
                                         </div>
                                     </div>
@@ -1077,6 +1099,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     />
                                     <p className="text-[10px] text-slate-600 mt-1 font-mono">
                                         {discussionBots.length} × {discussionRounds} = {discussionBots.length * discussionRounds} {t.turnsTotal || 'ходов (запросов к модели)'}
+                                        {toolPolicy !== 'off' && (
+                                            <span className="block mt-1 text-amber-500/80">
+                                                {t.withToolsUpTo || 'с инструментами — до'} {estimateDiscussionRequests(discussionBots.length, discussionRounds, MAX_REQUESTS_PER_TURN)} {t.requestsTotal || 'запросов: бот может несколько раз сходить за данными, прежде чем ответить'}
+                                            </span>
+                                        )}
                                     </p>
                                 </div>
 

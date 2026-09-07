@@ -12,7 +12,7 @@ interface SettingsModalProps {
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose }) => {
   const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
-  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || 'minimax/minimax-m3:free');
+  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || 'nvidia/nemotron-3.5-lightning:free');
   const [geminiKey, setGeminiKey] = useState(settings.geminiKey || '');
   const [geminiModel, setGeminiModel] = useState(settings.geminiModel || 'gemini-1.5-flash');
   const [groqKey, setGroqKey] = useState(settings.groqKey || '');

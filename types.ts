@@ -200,6 +200,26 @@ export interface BoardChannel {
   lastMessageAuthorId?: string;
 }
 
+/** Tokens one model request consumed, as the provider reported them. */
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface DailySpend {
+  requests: number;
+  tokens: number;
+}
+
+/**
+ * Private per-user tally of model usage, kept per calendar day at
+ * users/{uid}/private/spend. A record, never a limit.
+ */
+export interface SpendState {
+  days: Record<string, DailySpend>;
+}
+
 /**
  * Private per-user record of what has been seen, keyed by place id and holding
  * the moment it was last opened. Stored at users/{uid}/private/reads.
@@ -227,6 +247,11 @@ export interface BoardMessage {
   modelName?: string;
   /** Agent-only: MCP tools the bot called while composing this reply. */
   toolsUsed?: string[];
+  /**
+   * Agent-only: tokens this reply consumed, from the mentioner's key.
+   * Shown on the message so the cost sits where it was incurred.
+   */
+  tokensUsed?: number;
   /**
    * True for messages produced by an agent run (client or Cloud Function).
    * Loop guard: a bot reply must never wake another bot. Author type can't

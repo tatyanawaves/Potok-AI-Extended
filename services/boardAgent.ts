@@ -1,5 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
-import { AISettings, BoardMember, BoardMessage } from '../types';
+import { AISettings, BoardMember, BoardMessage, TokenUsage } from '../types';
+import { addUsage, EMPTY_USAGE, usageFrom } from './usage';
+import { recordSpend } from './spend';
 import { getRecentMessages, sendMessage, isBot } from './boards';
 import { connect, callTool, toOpenAITools, McpConnection } from './mcp';
 import { auth } from './firebase';
@@ -146,6 +148,8 @@ const buildChatMessages = (
 interface ChatCompletion {
     content: string | null;
     toolCalls: Array<{ id: string, name: string, args: string }>;
+    /** What the provider says this request cost; zeroes when it says nothing. */
+    usage: TokenUsage;
 }
 
 const callOpenAICompatible = async (
@@ -181,6 +185,7 @@ const callOpenAICompatible = async (
 
     return {
         content: message.content ?? null,
+        usage: usageFrom(data),
         toolCalls: (message.tool_calls || []).map((call: any) => ({
             id: call.id,
             name: call.function?.name,
@@ -193,7 +198,7 @@ const callGemini = async (
     apiKey: string,
     model: string,
     messages: { role: string, content: string }[]
-): Promise<string> => {
+): Promise<{ text: string, usage: TokenUsage }> => {
     const ai = new GoogleGenAI({ apiKey: apiKey || 'PLACEHOLDER_API_KEY' });
 
     // Gemini has no system role in generateContent — fold it into the first turn.
@@ -208,7 +213,7 @@ const callGemini = async (
         contents: [{ role: 'user', parts: [{ text: `${system}\n\nConversation so far:\n${transcript}\n\nYour reply:` }] }]
     });
 
-    return response.text;
+    return { text: response.text, usage: usageFrom({ usage: response.usageMetadata }) };
 };
 
 /**
@@ -220,7 +225,13 @@ const callGemini = async (
  * creator cannot be drained by other people using their bot.
  */
 /** Rounds of tool calls allowed before the bot must answer with prose. */
-const MAX_TOOL_ROUNDS = 4;
+export const MAX_TOOL_ROUNDS = 4;
+
+/**
+ * Most model requests one bot turn can make: a request per tool round plus the
+ * final one that has to produce prose. Used to show the ceiling of a run.
+ */
+export const MAX_REQUESTS_PER_TURN = MAX_TOOL_ROUNDS + 1;
 
 /**
  * How much freedom a bot has with its tools.
@@ -250,7 +261,7 @@ export const generateAgentReply = async (
     onToolCall?: (toolName: string) => void,
     toolPolicy: ToolPolicy = 'auto',
     approveTool?: ToolApprover
-): Promise<{ reply: string, modelName: string, toolsUsed: string[] }> => {
+): Promise<{ reply: string, modelName: string, toolsUsed: string[], usage: TokenUsage }> => {
     const willHaveTools = Boolean(agent.toolServerUrl) && toolPolicy !== 'off';
     const messages: any[] = buildChatMessages(agent, channelName, history, discussion, willHaveTools);
     const toolsUsed: string[] = [];
@@ -258,15 +269,17 @@ export const generateAgentReply = async (
     // Gemini's SDK has its own function-calling shape; tools stay OpenAI-only
     // for now, so a Gemini-backed bot simply answers without them.
     if (settings.aiProvider === 'gemini') {
-        const reply = await callGemini(
+        const { text, usage } = await callGemini(
             settings.geminiKey || '',
             settings.geminiModel || 'gemini-1.5-flash',
             messages
         );
+        await recordSpend(usage);
         return {
-            reply: reply.trim().substring(0, MAX_REPLY_LENGTH),
+            reply: text.trim().substring(0, MAX_REPLY_LENGTH),
             modelName: modelNameFor(settings),
-            toolsUsed
+            toolsUsed,
+            usage
         };
     }
 
@@ -275,7 +288,7 @@ export const generateAgentReply = async (
         || (useGroq ? 'https://api.groq.com/openai/v1' : 'https://openrouter.ai/api/v1');
     const apiKey = (useGroq ? settings.groqKey : settings.openRouterKey) || '';
     const model = (useGroq ? settings.groqModel : settings.openRouterModel)
-        || (useGroq ? 'llama-3.3-70b-versatile' : 'minimax/minimax-m3:free');
+        || (useGroq ? 'llama-3.3-70b-versatile' : 'nvidia/nemotron-3.5-lightning:free');
     const headers = useGroq
         ? {}
         : { 'HTTP-Referer': window.location.origin, 'X-Title': 'Potok' };
@@ -297,6 +310,10 @@ export const generateAgentReply = async (
         }
     }
 
+    // A bot with tools makes several requests for one visible answer; they are
+    // summed so the message shows what the whole turn cost, not its last round.
+    let usage = EMPTY_USAGE;
+
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         // On the final round drop the tools so the model has to produce prose.
         const offerTools = connection && round < MAX_TOOL_ROUNDS ? openAiTools : undefined;
@@ -305,11 +322,15 @@ export const generateAgentReply = async (
             baseUrl, apiKey, model, messages, headers, offerTools
         );
 
+        usage = addUsage(usage, completion.usage);
+        await recordSpend(completion.usage);
+
         if (completion.toolCalls.length === 0 || !connection) {
             return {
                 reply: (completion.content || '').trim().substring(0, MAX_REPLY_LENGTH),
                 modelName: model,
-                toolsUsed
+                toolsUsed,
+                usage
             };
         }
 
@@ -369,14 +390,15 @@ export const generateAgentReply = async (
     return {
         reply: '',
         modelName: model,
-        toolsUsed
+        toolsUsed,
+        usage
     };
 };
 
 const modelNameFor = (settings: AISettings): string => {
     if (settings.aiProvider === 'groq') return settings.groqModel || 'llama-3.3-70b-versatile';
     if (settings.aiProvider === 'gemini') return settings.geminiModel || 'gemini-1.5-flash';
-    return settings.openRouterModel || 'minimax/minimax-m3:free';
+    return settings.openRouterModel || 'nvidia/nemotron-3.5-lightning:free';
 };
 
 /**
@@ -408,7 +430,7 @@ export const triggerAgentReplies = async (
     for (const agent of mentioned) {
         try {
             const history = await getRecentMessages(boardId, channelId, CONTEXT_MESSAGE_COUNT);
-            const { reply, modelName, toolsUsed } = await generateAgentReply(
+            const { reply, modelName, toolsUsed, usage } = await generateAgentReply(
                 agent, channelName, history, settings
             );
 
@@ -421,7 +443,8 @@ export const triggerAgentReplies = async (
                 content: reply,
                 isAgentReply: true,
                 modelName,
-                toolsUsed: toolsUsed.length ? toolsUsed : undefined
+                toolsUsed: toolsUsed.length ? toolsUsed : undefined,
+                tokensUsed: usage.totalTokens || undefined
             });
         } catch (error) {
             console.error(`[BoardAgent] ${agent.name} failed to reply:`, error);
@@ -499,7 +522,7 @@ export const runBotDiscussion = async (options: DiscussionOptions): Promise<void
                 // Re-read every turn so each bot sees the previous one's reply.
                 const history = await getRecentMessages(boardId, channelId, CONTEXT_MESSAGE_COUNT);
 
-                const { reply, modelName, toolsUsed } = await generateAgentReply(
+                const { reply, modelName, toolsUsed, usage } = await generateAgentReply(
                     bot, channelName, history, settings,
                     { participants: names, task, turn, totalTurns },
                     undefined, toolPolicy, approveTool
@@ -514,7 +537,8 @@ export const runBotDiscussion = async (options: DiscussionOptions): Promise<void
                     content: reply,
                     isAgentReply: true,
                     modelName,
-                    toolsUsed: toolsUsed.length ? toolsUsed : undefined
+                    toolsUsed: toolsUsed.length ? toolsUsed : undefined,
+                    tokensUsed: usage.totalTokens || undefined
                 });
             } catch (error) {
                 console.error(`[BoardAgent] ${bot.name} failed during discussion:`, error);
