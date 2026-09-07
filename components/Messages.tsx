@@ -6,6 +6,7 @@ import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, 
 import { AttachmentView, ImageLightbox } from './Attachments';
 import { MessageAttachment } from '../types';
 import { translations } from '../translations';
+import { subscribeToReadState, markRead, isConversationUnread, EMPTY_READ_STATE } from '../services/reads';
 import { auth, searchProfiles } from '../services/firebase';
 import {
     subscribeToConversations, subscribeToMessages, openConversation,
@@ -32,6 +33,7 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
     useEffect(() => onAuthStateChanged(auth, user => setCurrentUid(user?.uid)), []);
 
     const [conversations, setConversations] = useState<Conversation[]>([]);
+    const [reads, setReads] = useState(EMPTY_READ_STATE);
     const [activeId, setActiveId] = useState<string | null>(null);
     const [messages, setMessages] = useState<DirectMessage[]>([]);
 
@@ -70,12 +72,24 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
     }, [currentUid]);
 
     useEffect(() => {
+        if (!currentUid) return;
+        return subscribeToReadState(currentUid, setReads);
+    }, [currentUid]);
+
+    useEffect(() => {
         if (!activeId) {
             setMessages([]);
             return;
         }
         return subscribeToMessages(activeId, setMessages);
     }, [activeId]);
+
+    // Marked read on every new message while the thread is open, not only when
+    // it is first opened: a reply arriving in front of you has been seen.
+    useEffect(() => {
+        if (!activeId || !currentUid) return;
+        markRead(currentUid, { conversationId: activeId }).catch(() => { });
+    }, [activeId, currentUid, messages.length]);
 
     useEffect(() => {
         endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -242,6 +256,7 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                     ) : conversations.map(conversation => {
                         const other = otherParticipant(conversation, currentUid);
                         const isActive = conversation.id === activeId;
+                        const unread = isConversationUnread(conversation, reads, currentUid);
 
                         return (
                             <div
@@ -255,7 +270,10 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                     onClick={() => setActiveId(conversation.id!)}
                                     className={`w-full text-left px-3 py-2 pr-8 ${isActive ? 'text-cyan-300' : 'text-slate-400 group-hover:text-slate-200'}`}
                                 >
-                                    <span className="text-sm font-medium truncate block">
+                                    <span className={`text-sm truncate block ${unread ? 'font-bold text-white' : 'font-medium'}`}>
+                                        {unread && (
+                                            <span className="inline-block h-1.5 w-1.5 rounded-full bg-cyan-400 mr-1.5 align-middle" />
+                                        )}
                                         {other?.name || '—'}
                                     </span>
                                     {conversation.lastMessage && (

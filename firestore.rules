@@ -19,6 +19,12 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if true;
       allow write: if isSignedIn() && request.auth.uid == userId;
+
+      // Private per-user state (read marks). The profile above is world
+      // readable; when someone last opened a thread is not.
+      match /private/{docId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
     }
 
     // GLOBAL STATS:
@@ -110,6 +116,12 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid in boardData(boardId).memberIds;
     }
 
+    /** An edit touching nothing but the denormalized last-message fields. */
+    function onlyStampsLastMessage() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['lastMessageAt', 'lastMessageAuthorId']);
+    }
+
     function isBoardOwner(boardId) {
       return isSignedIn() && boardData(boardId).ownerId == request.auth.uid;
     }
@@ -123,13 +135,23 @@ service cloud.firestore {
     match /boards/{boardId} {
       allow read: if isSignedIn() && request.auth.uid in resource.data.memberIds;
       allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
-      allow update: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      // The owner reconfigures the board. Any member may additionally stamp
+      // the last-message fields, which is how unread dots are drawn without a
+      // listener per channel — and nothing else, so a member cannot rename the
+      // board or edit its roster through this door.
+      allow update: if isSignedIn()
+                    && (resource.data.ownerId == request.auth.uid
+                        || (request.auth.uid in resource.data.memberIds && onlyStampsLastMessage()));
+
       allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
 
       // CHANNELS: readable by board members, managed by the board owner.
       match /channels/{channelId} {
         allow read: if isBoardMember(boardId);
-        allow create, update, delete: if isBoardOwner(boardId);
+        allow create, delete: if isBoardOwner(boardId);
+
+        allow update: if isBoardOwner(boardId)
+                      || (isBoardMember(boardId) && onlyStampsLastMessage());
 
         // MESSAGES: board members can read and post. A member may only post as
         // themselves or on behalf of an agent that belongs to the same board.

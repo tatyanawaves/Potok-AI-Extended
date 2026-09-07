@@ -6,6 +6,7 @@ import SettingsModal from './components/SettingsModal';
 import AuthScreen from './components/AuthScreen';
 import Profile from './components/Profile';
 import Boards from './components/Boards';
+import { useUnread } from './hooks/useUnread';
 import Messages from './components/Messages';
 import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection } from './services/ai';
 import { parseDocument } from './services/documentParser';
@@ -20,6 +21,7 @@ import { resetToolConnections } from './services/boardAgent';
 
 const App: React.FC = () => {
   const navigate = useNavigate();
+  const unread = useUnread();
   const location = useLocation();
   const [viewMode, setViewMode] = useState<'2d'>('2d');
   const [viewedUser, setViewedUser] = useState<{ id?: string, name: string } | null>(null);
@@ -1090,12 +1092,14 @@ const App: React.FC = () => {
           <button onClick={() => navigate('/profile')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/profile' ? 'text-indigo-400 bg-indigo-950/30' : 'text-slate-400 hover:text-white'}`} title={t.profile}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
           </button>
-          <button onClick={() => navigate('/messages')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/messages' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.directMessages || 'Сообщения'}>
+          <button onClick={() => navigate('/messages')} className={`relative p-2 rounded-lg transition-colors ${location.pathname === '/messages' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.directMessages || 'Сообщения'}>
+            {unread.messages && <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-cyan-400 ring-2 ring-slate-950" />}
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
           </button>
-          <button onClick={() => navigate('/boards')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/boards' ? 'text-emerald-400 bg-emerald-950/30' : 'text-slate-400 hover:text-white'}`} title={t.boards || 'Boards'}>
+          <button onClick={() => navigate('/boards')} className={`relative p-2 rounded-lg transition-colors ${location.pathname === '/boards' ? 'text-emerald-400 bg-emerald-950/30' : 'text-slate-400 hover:text-white'}`} title={t.boards || 'Boards'}>
+            {unread.boards && <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-emerald-400 ring-2 ring-slate-950" />}
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>

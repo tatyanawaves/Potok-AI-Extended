@@ -238,7 +238,19 @@ export const sendMessage = async (message: Omit<BoardMessage, 'id' | 'timestamp'
         if (payload[key] === undefined) delete payload[key];
     });
 
-    return addDoc(messagesRefFor(message.boardId, message.channelId), payload);
+    const created = await addDoc(messagesRefFor(message.boardId, message.channelId), payload);
+
+    // Stamped on the channel and the board so unread dots cost no extra reads.
+    // Best effort: a message that arrived must not disappear because the
+    // bookkeeping behind a dot failed.
+    const stamp = { lastMessageAt: payload.timestamp, lastMessageAuthorId: message.authorId };
+
+    await Promise.all([
+        updateDoc(doc(db, 'boards', message.boardId, 'channels', message.channelId), stamp),
+        updateDoc(doc(db, 'boards', message.boardId), stamp)
+    ]).catch(error => console.error('[Boards] Could not stamp last message:', error));
+
+    return created;
 };
 
 export const deleteMessage = async (boardId: string, channelId: string, messageId: string) => {

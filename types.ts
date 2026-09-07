@@ -179,6 +179,14 @@ export interface Board {
   /** Denormalized for cheap membership queries (Firestore array-contains). */
   memberIds: string[];
   createdAt: number;
+  /**
+   * When anything was last written anywhere in this board, and by whom.
+   *
+   * Denormalized so the board list can show an unread dot without opening a
+   * listener on every channel of every board.
+   */
+  lastMessageAt?: number;
+  lastMessageAuthorId?: string;
 }
 
 export interface BoardChannel {
@@ -187,6 +195,19 @@ export interface BoardChannel {
   name: string;
   topic?: string;
   createdAt: number;
+  /** Denormalized from the newest message, so unread is one field away. */
+  lastMessageAt?: number;
+  lastMessageAuthorId?: string;
+}
+
+/**
+ * Private per-user record of what has been seen, keyed by place id and holding
+ * the moment it was last opened. Stored at users/{uid}/private/reads.
+ */
+export interface ReadState {
+  channels: Record<string, number>;
+  conversations: Record<string, number>;
+  boards: Record<string, number>;
 }
 
 export interface BoardMessage {

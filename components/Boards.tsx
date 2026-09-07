@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { subscribeToReadState, markRead, isBoardUnread, isChannelUnread, EMPTY_READ_STATE } from '../services/reads';
 import { AISettings, Board, BoardChannel, BoardMember, BoardMessage, MessageAttachment } from '../types';
 import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
 import { AttachmentView, ImageLightbox } from './Attachments';
@@ -53,6 +54,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [isAgentThinking, setIsAgentThinking] = useState(false);
     const [showMembers, setShowMembers] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [reads, setReads] = useState(EMPTY_READ_STATE);
 
     // In-app dialogs. window.prompt/confirm are blocked in some browser
     // contexts, so every input goes through this modal instead.
@@ -185,6 +187,18 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     useEffect(() => {
         if (!activeBoardId && boards.length > 0) setActiveBoardId(boards[0].id!);
     }, [boards, activeBoardId]);
+
+    useEffect(() => {
+        if (!currentUid) return;
+        return subscribeToReadState(currentUid, setReads);
+    }, [currentUid]);
+
+    // While a channel is open its messages count as seen, including ones that
+    // arrive as you watch — a bot answering in front of you is not unread.
+    useEffect(() => {
+        if (!currentUid || !activeBoardId || !activeChannelId) return;
+        markRead(currentUid, { channelId: activeChannelId, boardId: activeBoardId }).catch(() => { });
+    }, [currentUid, activeBoardId, activeChannelId, messages.length]);
 
     useEffect(() => {
         if (channels.length === 0) {
@@ -509,7 +523,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 }`}
                         >
                             <div className="flex items-center justify-between">
-                                <span className="text-sm font-medium truncate">{board.name}</span>
+                                <span className={`text-sm truncate ${isBoardUnread(board, reads, currentUid || '') ? 'font-bold text-white' : 'font-medium'}`}>
+                                    {isBoardUnread(board, reads, currentUid || '') && (
+                                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 mr-1.5 align-middle" />
+                                    )}
+                                    {board.name}
+                                </span>
                                 {board.ownerId === currentUid && (
                                     <button
                                         onClick={(e) => { e.stopPropagation(); openModal({ kind: 'deleteBoard', boardId: board.id!, boardName: board.name }); }}
@@ -558,7 +577,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     : 'text-slate-500 hover:bg-slate-800/50 hover:text-slate-300'
                                     }`}
                             >
-                                <span className="text-sm truncate font-mono">#{channel.name}</span>
+                                <span className={`text-sm truncate font-mono ${isChannelUnread(channel, reads, currentUid || '') ? 'text-white font-bold' : ''}`}>
+                                    {isChannelUnread(channel, reads, currentUid || '') && (
+                                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 mr-1.5 align-middle" />
+                                    )}
+                                    #{channel.name}
+                                </span>
                                 {activeBoard.ownerId === currentUid && channels.length > 1 && (
                                     <button
                                         onClick={(e) => {
