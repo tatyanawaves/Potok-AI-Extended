@@ -1,7 +1,7 @@
 
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs, increment, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { getAnalytics } from "firebase/analytics";
 
 // TODO: Replace with your project's config object
@@ -53,16 +53,6 @@ export const loginWithEmail = async (email, password) => {
         return userCredential.user;
     } catch (error) {
         console.error("Error logging in with email", error);
-        throw error;
-    }
-};
-
-export const loginAnonymously = async () => {
-    try {
-        const userCredential = await signInAnonymously(auth);
-        return userCredential.user;
-    } catch (error) {
-        console.error("Error signing in anonymously", error);
         throw error;
     }
 };

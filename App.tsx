@@ -13,7 +13,7 @@ import { parseDocument } from './services/documentParser';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
 import { getAIClient } from './services/gemini';
-import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, loginAnonymously, deletePost, getUserProfileByName, toggleCommentLike } from './services/firebase';
+import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, deletePost, getUserProfileByName, toggleCommentLike } from './services/firebase';
 import { secureStorage } from './services/encryption';
 import { resolveFollowing, isFromFollowed, FollowedProfile } from './services/social';
 import { resetToolConnections } from './services/boardAgent';
@@ -142,14 +142,12 @@ const App: React.FC = () => {
     const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
       console.log("[Auth] State changed, user:", user?.uid || "null");
       if (!user) {
+        // Signed out. No anonymous fallback: anonymous sign-in is disabled for
+        // this project, so every visitor got a failed request and an error in
+        // the console before reaching the login form. An anonymous session
+        // would also be useless here — posts, boards and messages all belong
+        // to an account.
         setFirebaseReady(false);
-        // Fallback: Anonymous sign in so likes/comments still work
-        try {
-          console.log("[Auth] Attempting anonymous sign-in...");
-          await loginAnonymously();
-        } catch (err) {
-          console.error("[Auth] Anonymous sign-in failed", err);
-        }
       } else {
         console.log("[Auth] Firebase ready, setting up feed for:", user.uid);
         setFirebaseReady(true);
