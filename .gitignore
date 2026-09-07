@@ -35,3 +35,4 @@ hosting.ZGlzdA.cache
 # Cloudflare Worker local secrets and build state
 worker/.dev.vars
 worker/.wrangler/
+vite.config.preview.ts

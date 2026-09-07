@@ -63,9 +63,17 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         | { kind: 'createBot' }
         | { kind: 'cloneAgent' }
         | { kind: 'discussion' }
-        | { kind: 'deleteBoard', boardId: string, boardName: string };
+        | { kind: 'deleteBoard', boardId: string, boardName: string }
+        | { kind: 'deleteChannel', channelId: string, channelName: string };
 
     const [modal, setModal] = useState<ModalState | null>(null);
+
+    // Destructive dialogs share a look and skip the name input — grouped here
+    // so a new one cannot be added to the list of names without inheriting the
+    // red confirm button.
+    const isDestructiveModal = (state: ModalState | null): boolean =>
+        state?.kind === 'deleteBoard' || state?.kind === 'deleteChannel';
+
     const [modalInput, setModalInput] = useState('');
     const [botPrompt, setBotPrompt] = useState('');
     const [botToolUrl, setBotToolUrl] = useState('');
@@ -204,6 +212,15 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         if (activeBoardId === boardId) setActiveBoardId(null);
     };
 
+    const handleDeleteChannel = async (channelId: string) => {
+        if (!activeBoardId) return;
+
+        // Selection is not touched here: the effect watching `channels` moves
+        // off a channel that no longer exists, so it stays the single owner of
+        // which channel is open.
+        await deleteChannel(activeBoardId, channelId);
+    };
+
     const handleCreateChannel = async (name: string) => {
         if (!name.trim() || !activeBoardId) return;
         await createChannel(activeBoardId, name.trim(), '');
@@ -332,6 +349,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 return;
             } else if (modal.kind === 'deleteBoard') {
                 await handleDeleteBoard(modal.boardId);
+            } else if (modal.kind === 'deleteChannel') {
+                await handleDeleteChannel(modal.channelId);
             }
             closeModal();
         } catch (e) {
@@ -542,8 +561,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 <span className="text-sm truncate font-mono">#{channel.name}</span>
                                 {activeBoard.ownerId === currentUid && channels.length > 1 && (
                                     <button
-                                        onClick={(e) => { e.stopPropagation(); deleteChannel(activeBoard.id!, channel.id!); }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            openModal({ kind: 'deleteChannel', channelId: channel.id!, channelName: channel.name });
+                                        }}
                                         className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                                        title={t.delete || 'Удалить'}
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
                                             <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
@@ -948,6 +971,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {modal.kind === 'cloneAgent' && (t.cloneAgent || 'Бот из персоны')}
                             {modal.kind === 'discussion' && (t.discussion || 'Совещание ботов')}
                             {modal.kind === 'deleteBoard' && (t.deleteBoard || 'Удалить доску')}
+                            {modal.kind === 'deleteChannel' && (t.deleteChannel || 'Удалить канал')}
                         </h3>
 
                         <p className="text-slate-500 text-xs mb-4">
@@ -958,6 +982,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {modal.kind === 'cloneAgent' && (t.cloneHint || 'Копия чужой персоны в вашей доске. Автору это ничего не стоит — платит тот, кто упомянул бота.')}
                             {modal.kind === 'discussion' && (t.discussionHint || 'Боты выскажутся по очереди, по кругу. Каждый ход — один запрос к модели с вашего ключа.')}
                             {modal.kind === 'deleteBoard' && `«${modal.boardName}» — ${t.boardDeleteConfirm || 'доска, каналы и все сообщения будут удалены безвозвратно.'}`}
+                            {modal.kind === 'deleteChannel' && `#${modal.channelName} — ${t.channelDeleteConfirm || 'все сообщения и вложения канала будут удалены безвозвратно, у всех участников доски.'}`}
                         </p>
 
                         {modal.kind === 'cloneAgent' && (
@@ -1075,7 +1100,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             </>
                         )}
 
-                        {modal.kind !== 'deleteBoard' && modal.kind !== 'discussion' && (
+                        {!isDestructiveModal(modal) && modal.kind !== 'discussion' && (
                             <input
                                 ref={modalInputRef}
                                 autoFocus={modal.kind !== 'cloneAgent'}
@@ -1180,16 +1205,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     isSubmitting ||
                                     (modal.kind === 'discussion'
                                         ? !botPrompt.trim() || discussionBots.length === 0
-                                        : modal.kind !== 'deleteBoard' && !modalInput.trim())
+                                        : !isDestructiveModal(modal) && !modalInput.trim())
                                 }
-                                className={`flex-1 py-2.5 rounded-xl text-white font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg transition-colors disabled:opacity-40 ${modal.kind === 'deleteBoard'
+                                className={`flex-1 py-2.5 rounded-xl text-white font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg transition-colors disabled:opacity-40 ${isDestructiveModal(modal)
                                     ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-900/20'
                                     : 'bg-cyan-600 hover:bg-cyan-500 shadow-cyan-900/20'
                                     }`}
                             >
                                 {isSubmitting
                                     ? '...'
-                                    : modal.kind === 'deleteBoard'
+                                    : isDestructiveModal(modal)
                                         ? (t.delete || 'Удалить')
                                         : modal.kind === 'discussion'
                                             ? (t.start || 'Запустить')
