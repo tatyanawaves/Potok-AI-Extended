@@ -7,7 +7,7 @@ import { AISettings, Board, BoardChannel, BoardMember, BoardMessage, MessageAtta
 import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
 import { AttachmentView, ImageLightbox } from './Attachments';
 import { translations } from '../translations';
-import { auth, getUserProfileByName, getClonableAgentProfiles } from '../services/firebase';
+import { auth, getClonableAgentProfiles, searchProfiles } from '../services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import {
     createBoard, subscribeToMyBoards, deleteBoard,
@@ -59,6 +59,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [error, setError] = useState<string | null>(null);
     const [reads, setReads] = useState(EMPTY_READ_STATE);
     const [spend, setSpend] = useState<SpendState | null>(null);
+
+    // People picker for "add a human": a board member is chosen from a list,
+    // not typed. Typing an exact profile name meant a single misspelling read
+    // as "no such person".
+    const [peopleSearch, setPeopleSearch] = useState('');
+    const [people, setPeople] = useState<Array<Record<string, any>>>([]);
+    const [searchingPeople, setSearchingPeople] = useState(false);
+    const peopleTimer = useRef<number | null>(null);
 
     // In-app dialogs. window.prompt/confirm are blocked in some browser
     // contexts, so every input goes through this modal instead.
@@ -119,6 +127,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
     const openModal = (state: ModalState) => {
         setModalInput('');
+        setPeopleSearch('');
+        setPeople([]);
         setBotPrompt('');
         setBotToolUrl('');
         setSelectedClone(null);
@@ -202,6 +212,29 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         return subscribeToSpend(currentUid, setSpend);
     }, [currentUid]);
 
+    // Debounced so typing does not fire a query per keystroke. An empty term
+    // lists everyone, which is what makes the picker usable before you type.
+    useEffect(() => {
+        if (modal?.kind !== 'addHuman') return;
+
+        if (peopleTimer.current) window.clearTimeout(peopleTimer.current);
+        setSearchingPeople(true);
+
+        peopleTimer.current = window.setTimeout(async () => {
+            try {
+                setPeople(await searchProfiles(peopleSearch, currentUid));
+            } catch (e) {
+                setError(e instanceof Error ? e.message : String(e));
+            } finally {
+                setSearchingPeople(false);
+            }
+        }, 250);
+
+        return () => {
+            if (peopleTimer.current) window.clearTimeout(peopleTimer.current);
+        };
+    }, [modal, peopleSearch, currentUid]);
+
     // While a channel is open its messages count as seen, including ones that
     // arrive as you watch — a bot answering in front of you is not unread.
     useEffect(() => {
@@ -249,13 +282,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         await createChannel(activeBoardId, name.trim(), '');
     };
 
-    const handleAddHuman = async (name: string) => {
-        if (!name.trim() || !activeBoardId) return;
-
-        const profile = await getUserProfileByName(name.trim());
-        if (!profile) {
-            throw new Error(`${t.userNotFound || 'Профиль не найден'}: ${name}`);
-        }
+    /**
+     * Adds a chosen profile to the board.
+     *
+     * Identity comes from the picked uid, never from the typed text: two people
+     * may share a display name, and the one you clicked is the one who joins.
+     */
+    const handleAddPerson = async (profile: Record<string, any>) => {
+        if (!activeBoardId) return;
 
         if (activeBoard?.memberIds.includes(profile.uid)) {
             throw new Error(t.alreadyMember || 'Уже участник доски');
@@ -360,7 +394,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             } else if (modal.kind === 'createChannel') {
                 await handleCreateChannel(modalInput);
             } else if (modal.kind === 'addHuman') {
-                await handleAddHuman(modalInput);
+                throw new Error(t.pickPerson || 'Выберите человека из списка');
             } else if (modal.kind === 'createBot') {
                 await handleCreateBot(modalInput, botPrompt);
             } else if (modal.kind === 'cloneAgent') {
@@ -1023,7 +1057,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                         <p className="text-slate-500 text-xs mb-4">
                             {modal.kind === 'createBoard' && (t.boardNameHint || 'Название нового пространства')}
                             {modal.kind === 'createChannel' && (t.channelNameHint || 'Название канала внутри доски')}
-                            {modal.kind === 'addHuman' && (t.memberNameHint || 'Имя существующего профиля в Потоке')}
+                            {modal.kind === 'addHuman' && (t.memberPickHint || 'Найдите человека в Потоке и добавьте в доску')}
                             {modal.kind === 'createBot' && (t.botHint || 'Бот живёт только в этой доске и отвечает на @имя. Токены тратит тот, кто его упомянул.')}
                             {modal.kind === 'cloneAgent' && (t.cloneHint || 'Копия чужой персоны в вашей доске. Автору это ничего не стоит — платит тот, кто упомянул бота.')}
                             {modal.kind === 'discussion' && (t.discussionHint || 'Боты выскажутся по очереди, по кругу. Каждый ход — один запрос к модели с вашего ключа.')}
@@ -1151,7 +1185,61 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             </>
                         )}
 
-                        {!isDestructiveModal(modal) && modal.kind !== 'discussion' && (
+                        {modal.kind === 'addHuman' && (
+                            <>
+                                <input
+                                    autoFocus
+                                    type="text"
+                                    value={peopleSearch}
+                                    onChange={(e) => setPeopleSearch(e.target.value)}
+                                    placeholder={t.searchPeople || 'Поиск по имени…'}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-sm mb-3"
+                                />
+
+                                <div className="max-h-56 overflow-y-auto space-y-1 border border-slate-800 rounded-lg p-2 mb-4">
+                                    {people.length === 0 ? (
+                                        <p className="text-[11px] text-slate-600 p-3 text-center">
+                                            {searchingPeople ? (t.searching || 'поиск…') : (t.nobodyFound || 'Никого не нашлось')}
+                                        </p>
+                                    ) : people.map(profile => {
+                                        const already = Boolean(activeBoard?.memberIds.includes(profile.uid));
+
+                                        return (
+                                            <button
+                                                key={profile.uid}
+                                                type="button"
+                                                disabled={already || isSubmitting}
+                                                onClick={async () => {
+                                                    setIsSubmitting(true);
+                                                    setError(null);
+                                                    try {
+                                                        await handleAddPerson(profile);
+                                                        closeModal();
+                                                    } catch (e) {
+                                                        setError(e instanceof Error ? e.message : String(e));
+                                                    } finally {
+                                                        setIsSubmitting(false);
+                                                    }
+                                                }}
+                                                className="w-full flex items-center space-x-3 px-2 py-2 rounded-lg text-left transition-colors disabled:opacity-40 hover:bg-slate-800/60"
+                                            >
+                                                <span className="w-7 h-7 shrink-0 rounded-full bg-gradient-to-br from-cyan-500 to-indigo-600 flex items-center justify-center text-white text-[10px] font-bold uppercase">
+                                                    {String(profile.agentName).charAt(0)}
+                                                </span>
+                                                <span className="min-w-0 flex-1">
+                                                    <span className="text-sm text-slate-200 truncate block">{profile.agentName}</span>
+                                                    <span className="text-[10px] text-slate-600 truncate block">
+                                                        {already ? (t.alreadyMember || 'уже в доске') : (profile.agentRole || '')}
+                                                    </span>
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </>
+                        )}
+
+                        {!isDestructiveModal(modal) && modal.kind !== 'discussion' && modal.kind !== 'addHuman' && (
                             <input
                                 ref={modalInputRef}
                                 autoFocus={modal.kind !== 'cloneAgent'}
@@ -1250,6 +1338,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             >
                                 {t.cancel || 'Отмена'}
                             </button>
+                            {modal.kind !== 'addHuman' && (
                             <button
                                 type="submit"
                                 disabled={
@@ -1271,6 +1360,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                             ? (t.start || 'Запустить')
                                             : (t.create || 'Создать')}
                             </button>
+                            )}
                         </div>
                     </form>
                 </div>
