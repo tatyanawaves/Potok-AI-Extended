@@ -726,7 +726,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {/* Today's model usage, on this user's own key. */}
                             {spendOn(spend).requests > 0 && (
                                 <div
-                                    className="hidden sm:block text-[10px] font-mono text-slate-500 shrink-0 px-2"
+                                    className="text-[10px] font-mono text-slate-500 shrink-0 md:px-2"
                                     title={t.spendHint || 'Запросы к модели с вашего ключа за сегодня. Платит тот, кто упомянул бота.'}
                                 >
                                     {t.today || 'сегодня'}: {spendOn(spend).requests} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}
