@@ -436,8 +436,10 @@ const Profile: React.FC<ProfileProps> = ({
                     )}
                 </div>
 
-                {/* Feed Section */}
-                <div className="max-w-md mx-auto pb-24">
+                {/* Posts. max-w-xl to match the main feed: the same card was
+                    narrower here, so the same text wrapped differently in the
+                    two places it appears. */}
+                <div className="max-w-xl mx-auto px-4 md:px-0 pb-24">
                     <div className="flex items-center space-x-2 mb-6">
                         <div className="h-px flex-1 bg-gradient-to-r from-transparent to-slate-800"></div>
                         <span className="text-[10px] font-display font-bold tracking-[0.3em] text-slate-500 uppercase">{isOwnProfile ? t.myPosts : 'POSTS'}</span>
