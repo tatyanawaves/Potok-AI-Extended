@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
-import ThoughtSymbolMap2D from './components/ThoughtSymbolMap2D';
+// Loaded on demand: the force-graph library behind the map is a large
+// dependency, and most sessions never open the map at all.
+const ThoughtSymbolMap2D = React.lazy(() => import('./components/ThoughtSymbolMap2D'));
 import ThoughtLog from './components/ThoughtLog';
 import SettingsModal from './components/SettingsModal';
 import AuthScreen from './components/AuthScreen';
@@ -9,7 +11,6 @@ import Boards from './components/Boards';
 import { useUnread } from './hooks/useUnread';
 import Messages from './components/Messages';
 import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection } from './services/ai';
-import { parseDocument } from './services/documentParser';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
 import { getAIClient } from './services/gemini';
@@ -795,6 +796,10 @@ const App: React.FC = () => {
     try {
       setIsProcessingDoc(true); setIsThinking(true); isThinkingRef.current = true;
       
+      // PDF and Word parsing pull in pdfjs and mammoth, several megabytes
+      // between them. Imported here so they are fetched when a document is
+      // actually chosen, rather than by everyone who opens the site.
+      const { parseDocument } = await import('./services/documentParser');
       const doc = await parseDocument(file);
       await createPost({
         content: `[SYSTEM] Processing: ${file.name}`,
@@ -1252,12 +1257,18 @@ const App: React.FC = () => {
                     <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
                   </div>
                 </div>
-                <ThoughtSymbolMap2D
-                  thoughts={viewedUser && location.pathname.startsWith('/user') ? viewedUserPosts : mapThoughts}
-                  language={settings.language}
-                  cognitiveState={cognitiveState}
-                  symbolWeights={viewedUser && location.pathname.startsWith('/user') ? viewedSymbolWeights : symbolWeights}
-                />
+                <React.Suspense fallback={
+                  <div className="absolute inset-0 flex items-center justify-center text-slate-600 font-mono text-xs uppercase tracking-widest">
+                    {t.loading || 'Загрузка…'}
+                  </div>
+                }>
+                  <ThoughtSymbolMap2D
+                    thoughts={viewedUser && location.pathname.startsWith('/user') ? viewedUserPosts : mapThoughts}
+                    language={settings.language}
+                    cognitiveState={cognitiveState}
+                    symbolWeights={viewedUser && location.pathname.startsWith('/user') ? viewedSymbolWeights : symbolWeights}
+                  />
+                </React.Suspense>
               </div>
             ) : (
               <Navigate to="/feed" replace />

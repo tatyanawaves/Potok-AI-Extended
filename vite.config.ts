@@ -17,6 +17,21 @@ export default defineConfig(({ mode }) => {
       react(),
       basicSsl()
     ],
+    build: {
+      rollupOptions: {
+        output: {
+          // Libraries that change only when they are upgraded are kept apart
+          // from application code, so a deploy does not invalidate them in
+          // everyone's cache. They are needed at startup, so this does not
+          // shrink the first load — the map and document parsing are split
+          // out by dynamic import instead, which does.
+          manualChunks: {
+            firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+            react: ['react', 'react-dom', 'react-router-dom']
+          }
+        }
+      }
+    },
     define: {
       'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
