@@ -1,5 +1,7 @@
 import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
+import { recordSpend } from "./spend";
+import { usageFrom } from "./usage";
 
 const VITE_OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || "";
 const VITE_MODEL_NAME = "nvidia/nemotron-3.5-lightning:free";
@@ -263,6 +265,8 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
 
     if (!response.ok) throw new Error(`OpenRouter error: ${response.status}`);
     const data = await response.json();
+    // Counted like any other request on this key: a document is many of them.
+    await recordSpend(usageFrom(data));
     const parsed = parseAIResponse(data.choices[0].message.content);
 
     return {

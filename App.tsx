@@ -43,6 +43,26 @@ const App: React.FC = () => {
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [isProcessingDoc, setIsProcessingDoc] = useState(false);
+
+  /**
+   * A chosen document, parsed but not yet analysed.
+   *
+   * Analysis is a model request per fragment and a post per fragment, on the
+   * user's own key and in the public feed. The count is only known after
+   * parsing, so the file is read first and the confirmation states the real
+   * number rather than a guess.
+   */
+  const [pendingDoc, setPendingDoc] = useState<{ name: string, chunks: string[] } | null>(null);
+  const [docProgress, setDocProgress] = useState<{ done: number, total: number } | null>(null);
+
+  /**
+   * Stop was pressed, but a request is already in flight.
+   *
+   * There is no way to take it back — a free model can sit in a queue for a
+   * couple of minutes — so the button says what it will actually do instead of
+   * pretending the run ended.
+   */
+  const [stopRequested, setStopRequested] = useState(false);
   const [isCycleRunning, setIsCycleRunning] = useState(false);
   const [showCyclePanel, setShowCyclePanel] = useState(false);
   const [provider, setProvider] = useState<AIProvider>(() => {
@@ -790,19 +810,64 @@ const App: React.FC = () => {
     setError(null);
   };
 
+  /**
+   * Russian needs three forms for a count, and the number is shown to the user
+   * before they agree to spend on it — "1 фрагментов" reads like a bug.
+   */
+  const fragmentsWord = (count: number): string => {
+    if (settings.language !== 'ru') return t.fragments || 'fragments';
+
+    const tail = count % 100;
+    if (tail >= 11 && tail <= 14) return 'фрагментов';
+
+    switch (count % 10) {
+      case 1: return 'фрагмент';
+      case 2:
+      case 3:
+      case 4: return 'фрагмента';
+      default: return 'фрагментов';
+    }
+  };
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    setError(null);
+
     try {
-      setIsProcessingDoc(true); setIsThinking(true); isThinkingRef.current = true;
-      
       // PDF and Word parsing pull in pdfjs and mammoth, several megabytes
       // between them. Imported here so they are fetched when a document is
       // actually chosen, rather than by everyone who opens the site.
       const { parseDocument } = await import('./services/documentParser');
       const doc = await parseDocument(file);
+
+      if (doc.chunks.length === 0) {
+        throw new Error(t.emptyDocument || 'В документе не нашлось текста');
+      }
+
+      setPendingDoc({ name: file.name, chunks: doc.chunks });
+    } catch (err: any) {
+      setError(t.uploadError + ": " + err.message);
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  /** Analyses the fragments of the confirmed document, one post each. */
+  const runDocumentAnalysis = async () => {
+    if (!pendingDoc) return;
+
+    const { name, chunks } = pendingDoc;
+    setPendingDoc(null);
+
+    try {
+      setIsProcessingDoc(true); setIsThinking(true); isThinkingRef.current = true;
+      setDocProgress({ done: 0, total: chunks.length });
+      setStopRequested(false);
+
       await createPost({
-        content: `[SYSTEM] Processing: ${file.name}`,
+        content: `[SYSTEM] Processing: ${name}`,
         symbols: [],
         type: 'seed',
         authorType: 'agent',
@@ -810,8 +875,11 @@ const App: React.FC = () => {
         authorId: auth.currentUser?.uid
       });
 
-      for (const chunk of doc.chunks) {
+      for (const [index, chunk] of chunks.entries()) {
+        // Stopping is checked before each request, so "стоп" costs at most one
+        // more fragment rather than running the document to the end.
         if (!isThinkingRef.current) break;
+
         const analysis = await analyzeTextChunk(provider, chunk, settingsRef.current);
         await createPost({
           ...analysis,
@@ -819,10 +887,18 @@ const App: React.FC = () => {
           authorName: settings.agentName || 'Neo',
           authorId: auth.currentUser?.uid
         });
+
+        setDocProgress({ done: index + 1, total: chunks.length });
         await new Promise(r => setTimeout(r, 800));
       }
-    } catch (err: any) { setError(t.uploadError + ": " + err.message); }
-    finally { setIsProcessingDoc(false); setIsThinking(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
+    } catch (err: any) {
+      setError(t.uploadError + ": " + err.message);
+    } finally {
+      setIsProcessingDoc(false);
+      setIsThinking(false);
+      setDocProgress(null);
+      setStopRequested(false);
+    }
   };
 
   const runCognitiveStep = useCallback(async () => {
@@ -1150,6 +1226,78 @@ const App: React.FC = () => {
           }
         </div>
       </div>
+      {/* Progress belongs where it can be seen: the analysis keeps running
+          while the user reads the feed, and it can be stopped from here. */}
+      {docProgress && (
+        <div className="fixed bottom-4 right-4 z-[140] w-64 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-xl p-3 shadow-2xl space-y-2">
+          <div className="flex justify-between text-[10px] font-mono text-slate-400">
+            <span className="uppercase tracking-widest">{t.analysing || 'Разбор документа'}</span>
+            <span>{docProgress.done}/{docProgress.total}</span>
+          </div>
+          <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-indigo-500 transition-all duration-500"
+              style={{ width: `${Math.round((docProgress.done / Math.max(1, docProgress.total)) * 100)}%` }}
+            />
+          </div>
+          {stopRequested ? (
+            <p className="text-[10px] text-slate-500 leading-relaxed text-center">
+              {t.stoppingAfterFragment || 'Остановится после текущего фрагмента — запрос уже отправлен.'}
+            </p>
+          ) : (
+            <button
+              onClick={() => { isThinkingRef.current = false; setStopRequested(true); }}
+              className="w-full py-2 rounded-lg text-[10px] font-bold font-mono uppercase tracking-wider bg-rose-900/30 text-rose-300 border border-rose-500/30 hover:bg-rose-900/50 transition-colors"
+            >
+              {t.stop || 'Стоп'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* The chooser is mounted at the top level: the button that opens it
+          lives on the profile, and the progress readout in the cycle panel. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.docx,.txt,.md"
+        onChange={handleFileUpload}
+        className="hidden"
+      />
+
+      {/* A document is about to become many requests and many public posts.
+          The count is known now, so it is stated before anything runs. */}
+      {pendingDoc && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full">
+            <h3 className="text-lg font-bold font-display text-white mb-1">
+              {t.readDocument || 'Разобрать документ'}
+            </h3>
+            <p className="text-slate-400 text-xs mb-5 leading-relaxed">
+              «{pendingDoc.name}» — {pendingDoc.chunks.length} {fragmentsWord(pendingDoc.chunks.length)}.
+              {' '}
+              {t.documentCostHint || 'Столько же запросов к модели с вашего ключа, и столько же постов появится в ленте.'}
+              {' '}
+              {t.freeModelSlowHint || 'На бесплатной модели один фрагмент может занять минуту-две.'}
+            </p>
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setPendingDoc(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
+              >
+                {t.cancel || 'Отмена'}
+              </button>
+              <button
+                onClick={runDocumentAnalysis}
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg shadow-indigo-900/20 transition-colors"
+              >
+                {t.start || 'Запустить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Custom Confirmation Modal */}
       {postToDelete && (
         <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
@@ -1228,6 +1376,7 @@ const App: React.FC = () => {
               onStart={startThoughtGenerationStream}
               onStop={stopThoughtGenerationStream}
               onGeneratePost={handleGeneratePost}
+              onReadDocument={() => fileInputRef.current?.click()}
               posts={thoughts}
               onLike={handleLike}
               onFollow={handleFollow}

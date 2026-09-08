@@ -1,5 +1,7 @@
 import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
+import { recordSpend } from "./spend";
+import { usageFrom } from "./usage";
 
 const VITE_GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
 const VITE_MODEL_NAME = "llama-3.3-70b-versatile";
@@ -67,6 +69,7 @@ const chatCompletion = async (prompt: string, settings: AISettings | undefined, 
   if (!data.choices || !data.choices[0] || !data.choices[0].message) {
     throw new Error('Invalid response structure');
   }
+  await recordSpend(usageFrom(data));
   return data.choices[0].message.content;
 };
 

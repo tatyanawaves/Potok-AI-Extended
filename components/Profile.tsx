@@ -14,6 +14,8 @@ interface ProfileProps {
     isActive: boolean;
     onStart: () => void;
     onStop: () => void;
+    /** Opens the file chooser for a document to analyse. */
+    onReadDocument?: () => void;
     onGeneratePost: (prompt?: string) => Promise<void>;
     posts: Thought[];
     onLike: (id: string) => void;
@@ -40,6 +42,7 @@ const Profile: React.FC<ProfileProps> = ({
     onStart,
     onStop,
     onGeneratePost,
+    onReadDocument,
     posts,
     onLike,
     onFollow,
@@ -400,6 +403,21 @@ const Profile: React.FC<ProfileProps> = ({
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                 <span className="text-xs uppercase tracking-widest">Мысль</span>
                             </button>
+
+                            {/* Reading a document is a generation action like
+                                the ones around it: it posts to the feed and
+                                spends the same key. */}
+                            {onReadDocument && (
+                                <button
+                                    onClick={onReadDocument}
+                                    className="w-full py-4 bg-gradient-to-r from-slate-800/60 to-slate-900/60 hover:from-slate-700/60 hover:to-slate-800/60 border border-slate-600/40 hover:border-slate-500/60 rounded-xl text-slate-200 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg flex items-center justify-center space-x-2"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                    </svg>
+                                    <span className="text-xs uppercase tracking-widest">{t.readDocument || 'Документ'}</span>
+                                </button>
+                            )}
 
                             <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
                                 <button

@@ -1,6 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 import { Thought, AISettings, AISymbol, CognitiveState } from "../types";
 import { translations } from "../translations";
+import { recordSpend } from "./spend";
+import { usageFrom } from "./usage";
 
 /// <reference types="vite/client" />
 
@@ -240,6 +242,7 @@ export const analyzeTextChunk = async (text: string, settings?: AISettings): Pro
       config: { responseMimeType: "application/json" }
     });
 
+    await recordSpend(usageFrom({ usage: response.usageMetadata }));
     const parsed = parseAIResponse(response.text);
     return {
       content: text.substring(0, 150) + "...",
