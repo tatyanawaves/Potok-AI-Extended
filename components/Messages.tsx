@@ -120,8 +120,20 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
     const me = () => ({ id: currentUid!, name: settings.agentName || 'User' });
 
     // Debounced so typing doesn't fire a query per keystroke.
+    //
+    // An empty field searches for nobody, rather than for everybody. Without
+    // this the picker opened on a list of every account in Potok sitting under
+    // the heading "Подписки" — searchProfiles treats an empty term as "no
+    // filter". Messaging someone you follow is the common case; strangers are
+    // what the search is for.
     useEffect(() => {
         if (!showNew) return;
+
+        if (!search.trim()) {
+            setResults([]);
+            setSearching(false);
+            return;
+        }
 
         if (searchTimer.current) window.clearTimeout(searchTimer.current);
         searchTimer.current = window.setTimeout(async () => {
@@ -602,6 +614,14 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                         ))}
                                     </div>
                                 </div>
+                            )}
+
+                            {/* Nothing to offer yet: say what the field is for
+                                instead of showing an empty panel. */}
+                            {!search.trim() && followedProfiles.length === 0 && (
+                                <p className="text-[11px] text-slate-600 py-6 text-center leading-relaxed">
+                                    {t.noSubscriptionsYet || 'Подписок пока нет. Найдите человека по имени.'}
+                                </p>
                             )}
 
                             <div>
