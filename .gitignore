@@ -10,9 +10,6 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-.firebase
-.vite-temp
-.neon-runtime
 *.local
 .env
 .env.*
@@ -28,4 +25,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-.vercel
+
+.firebase/
+.firebase
+hosting.ZGlzdA.cache
+
+
+
+# Cloudflare Worker local secrets and build state
+worker/.dev.vars
+worker/.wrangler/
+vite.config.preview.ts

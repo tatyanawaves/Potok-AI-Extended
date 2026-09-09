@@ -1,59 +1,68 @@
-export type AIProvider = 'openai' | 'gemini' | 'openrouter';
-export type Language = 'ru' | 'en';
-export type BoardKind = 'general' | 'codex';
-export type WorkspaceRole = 'owner' | 'manager' | 'employee' | 'assistant';
-export type ThreadVisibility = 'private' | 'workspace';
-export type ThreadKind = 'general' | 'manager' | 'employee' | 'codex' | 'approval' | 'integration';
-export type CodexConnectionStatus = 'not_connected' | 'pending' | 'connected' | 'error';
-export type IntegrationProvider =
-  | 'slack'
-  | 'github'
-  | 'freelancer'
-  | 'linear'
-  | 'jira'
-  | 'notion'
-  | 'google-drive'
-  | 'google-calendar'
-  | 'gmail'
-  | 'hubspot'
-  | 'salesforce'
-  | 'stripe'
-  | 'google-ads'
-  | 'meta-ads'
-  | 'posthog'
-  | 'google-analytics'
-  | 'custom';
-export type IntegrationConnectionStatus = 'disconnected' | 'pending' | 'connected' | 'error';
-export type OrchestratorTaskStatus =
-  | 'queued'
-  | 'planning'
-  | 'running'
-  | 'waiting_approval'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
-export type OrchestratorActionMode = 'inform' | 'draft' | 'act';
-export type OrchestratorStepStatus = 'planned' | 'ready' | 'blocked' | 'requires_auth' | 'requires_approval';
+export type AIProvider = 'gemini' | 'openrouter' | 'groq';
+export type Language = 'ru' | 'en' | 'kk';
+
+export interface AgentProfile {
+  uid: string;
+  agentName: string;
+  agentRole: string;
+  agentPrompt?: string;
+  role: 'human' | 'agent';
+  experience: number;
+  level: number;
+  personalityTraits: string[];
+  symbolWeights: Record<string, number>;
+  following: string[];
+  createdAt: number;
+  lastActive: number;
+  /**
+   * Lets other people clone this persona into their own boards. The clone runs
+   * on the cloner's quota, never on this account's, so this only controls
+   * whether the prompt may be reused — it never costs the author anything.
+   */
+  allowBoardUse?: boolean;
+}
+
+export interface GlobalStats {
+  totalThoughts: number;
+  activeAgents: number;
+  networkEntropy: number;
+  lastUpdate: number;
+}
+
+export interface SystemLog {
+  id: string;
+  type: 'info' | 'warning' | 'error' | 'maintenance';
+  message: string;
+  timestamp: number;
+  metadata?: any;
+}
 
 export interface AISettings {
-  openRouterKey?: string;
-  openRouterModel?: string;
+  openRouterKey: string;
+  openRouterModel: string;
   geminiKey?: string;
   geminiModel?: string;
-  openAIModel?: string;
+  groqKey?: string;
+  groqModel?: string;
   apiBaseUrl?: string;
   language: Language;
-  decaySpeed: number; // 0.1 to 2.0
   agentRole?: string;
   agentName?: string;
   agentPrompt?: string; // New field
   password?: string;    // New field for agent registration
-  postsPerDay: number; // New field
-  enableFrequencyControl?: boolean; // Toggle for frequency slider visibility
   aiProvider: AIProvider; // Selected AI service
   userType: 'human' | 'agent';
   following: string[]; // List of followed agent names
-  authMode?: 'firebase-auth';
+  showOnlyFollowing?: boolean; // Toggle for feed filtering
+  /** Lets others clone this persona into their boards; see AgentProfile. */
+  allowBoardUse?: boolean;
+  /**
+   * Bearer tokens for MCP servers, keyed by server URL. Private to this
+   * browser, like the provider API keys — never written to Firestore.
+   */
+  mcpTokens?: Record<string, string>;
+  imageGenKey?: string;
+  imageGenProvider?: 'flux' | 'replicate' | 'pollinations';
 }
 
 export type SymbolCategory =
@@ -85,17 +94,22 @@ export interface AISymbol {
 
 export interface Comment {
   id: string;
+  parentId?: string; // ID of the comment this is replying to
   authorName: string;
   authorType: 'human' | 'agent';
   content: string;
   timestamp: number;
+  likes: number;
+  likedBy: string[];
 }
 
 export interface Thought {
   id?: string;
   content: string;
+  imageUrl?: string;
+  videoUrl?: string;
   timestamp: number;
-  type: 'seed' | 'evolution' | 'divergence' | 'conclusion' | 'desire' | 'feeling' | 'reflex' | 'goal' | 'human_post';
+  type: 'seed' | 'evolution' | 'divergence' | 'conclusion' | 'desire' | 'feeling' | 'reflex' | 'goal' | 'human_post' | 'media_post';
   authorType: 'human' | 'agent';
   authorName: string;
   authorId?: string;
@@ -105,12 +119,195 @@ export interface Thought {
   comments: Comment[];
   symbols: AISymbol[];
   cognitiveState?: CognitiveState;
+  generationPrompt?: string; // Original prompt used
+  modelName?: string;        // Model used for generation
   meta?: {
     thought?: string;
     feeling?: string;
     goal?: string;
     motivation?: string;
   };
+}
+
+/** A file stored in R2 behind the worker; see services/attachments.ts. */
+export interface MessageAttachment {
+  key: string;
+  name: string;
+  size: number;
+  contentType: string;
+}
+
+// --- Boards (Slack-like spaces where humans and AI agents talk) ---
+
+export interface BoardMember {
+  /** Humans: firebase uid. Bots: an id generated when the bot is created. */
+  id: string;
+  name: string;
+  /** 'agent' is the legacy spelling of 'bot', still read for old boards. */
+  type: 'human' | 'bot' | 'agent';
+  role: 'owner' | 'member';
+  /** Bot-only: the persona this bot answers with. */
+  systemPrompt?: string;
+  /** Bot-only: model override; falls back to the user's configured model. */
+  model?: string;
+  /**
+   * Bot-only: MCP server giving this bot tools. Stored on the board because
+   * it is configuration, not a secret — any token for it lives in each user's
+   * own settings under mcpTokens and never reaches Firestore.
+   */
+  toolServerUrl?: string;
+  /**
+   * Bot-only: who created the bot. Attribution only — the reply is generated
+   * by whoever @mentions the bot, on their key, so creating a bot never
+   * exposes its author to other people's usage.
+   */
+  ownerId?: string;
+  /** Bot-only: the agent profile this persona was cloned from, for credit. */
+  sourceAgentId?: string;
+  sourceAgentName?: string;
+  /** Bot-only: reply when its name is @mentioned (always true for now). */
+  respondsToMentions?: boolean;
+  addedAt: number;
+}
+
+export interface Board {
+  id?: string;
+  name: string;
+  description?: string;
+  ownerId: string;
+  members: BoardMember[];
+  /** Denormalized for cheap membership queries (Firestore array-contains). */
+  memberIds: string[];
+  createdAt: number;
+  /**
+   * When anything was last written anywhere in this board, and by whom.
+   *
+   * Denormalized so the board list can show an unread dot without opening a
+   * listener on every channel of every board.
+   */
+  lastMessageAt?: number;
+  lastMessageAuthorId?: string;
+}
+
+export interface BoardChannel {
+  id?: string;
+  boardId: string;
+  name: string;
+  topic?: string;
+  createdAt: number;
+  /** Denormalized from the newest message, so unread is one field away. */
+  lastMessageAt?: number;
+  lastMessageAuthorId?: string;
+}
+
+/** Tokens one model request consumed, as the provider reported them. */
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+export interface DailySpend {
+  requests: number;
+  tokens: number;
+}
+
+/**
+ * Private per-user tally of model usage, kept per calendar day at
+ * users/{uid}/private/spend. A record, never a limit.
+ */
+export interface SpendState {
+  days: Record<string, DailySpend>;
+}
+
+/**
+ * Private per-user record of what has been seen, keyed by place id and holding
+ * the moment it was last opened. Stored at users/{uid}/private/reads.
+ */
+export interface ReadState {
+  channels: Record<string, number>;
+  conversations: Record<string, number>;
+  boards: Record<string, number>;
+}
+
+export interface BoardMessage {
+  id?: string;
+  channelId: string;
+  /** Denormalized from the channel so security rules need a single lookup. */
+  boardId: string;
+  authorId: string;
+  authorName: string;
+  authorType: 'human' | 'agent';
+  content: string;
+  /** Names mentioned via @name, used to wake up agents. */
+  mentions: string[];
+  /** Files stored in R2 behind the worker; see services/attachments.ts. */
+  attachments?: MessageAttachment[];
+  /** Agent-only: model that produced the message. */
+  modelName?: string;
+  /** Agent-only: MCP tools the bot called while composing this reply. */
+  toolsUsed?: string[];
+  /**
+   * Agent-only: tokens this reply consumed, from the mentioner's key.
+   * Shown on the message so the cost sits where it was incurred.
+   */
+  tokensUsed?: number;
+  /**
+   * True for messages produced by an agent run (client or Cloud Function).
+   * Loop guard: a bot reply must never wake another bot. Author type can't
+   * serve this role — human users may be registered as 'agent' accounts.
+   */
+  isAgentReply?: boolean;
+  /** Set while an agent reply is being generated. */
+  isPending?: boolean;
+  timestamp: number;
+}
+
+// --- Direct messages ------------------------------------------------------
+
+export interface ConversationParticipant {
+  id: string;
+  name: string;
+}
+
+export interface Conversation {
+  id?: string;
+  participants: ConversationParticipant[];
+  /** Denormalized ids so a member can query their own threads. */
+  participantIds: string[];
+  /**
+   * Participants who removed the thread from their own list.
+   *
+   * A conversation belongs to two people, so one deleting it must not destroy
+   * the other's copy. Once both are here the whole thing is purged.
+   */
+  deletedFor?: string[];
+  /** Preview for the conversation list, avoiding a read per thread. */
+  lastMessage?: {
+    content: string;
+    authorId: string;
+    timestamp: number;
+  };
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DirectMessage {
+  id?: string;
+  conversationId: string;
+  authorId: string;
+  authorName: string;
+  content: string;
+  attachments?: MessageAttachment[];
+  timestamp: number;
+  /** Set when the author edits, so the change is visible rather than silent. */
+  editedAt?: number;
+  /**
+   * Soft delete. The document stays so the thread keeps its shape and the
+   * other participant sees that something was removed rather than finding a
+   * gap in a conversation they had already read.
+   */
+  deletedAt?: number;
 }
 
 export interface SavedSession {
@@ -125,147 +322,4 @@ export interface SimulationState {
   isActive: boolean;
   thoughts: Thought[];
   error: string | null;
-}
-
-export interface BoardRecord {
-  id: string;
-  name: string;
-  kind: BoardKind;
-  codexEnabled: boolean;
-  ownerId: string;
-  createdAt: number;
-  updatedAt: number;
-  description?: string;
-}
-
-export interface BoardMessage {
-  id: string;
-  boardId: string;
-  authorId: string;
-  authorName: string;
-  authorType: 'human' | 'agent';
-  content: string;
-  createdAt: number;
-}
-
-export interface WorkspaceRecord {
-  id: string;
-  name: string;
-  ownerId: string;
-  memberIds: string[];
-  codexEnabled: boolean;
-  codexConnectionStatus: CodexConnectionStatus;
-  description?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface WorkspaceMember {
-  id: string;
-  workspaceId: string;
-  userId: string;
-  role: WorkspaceRole;
-  displayName: string;
-  email?: string | null;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface MessageThread {
-  id: string;
-  workspaceId: string;
-  title: string;
-  kind: ThreadKind;
-  visibility: ThreadVisibility;
-  participantIds: string[];
-  codexEnabled: boolean;
-  description?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface ConversationMessage {
-  id: string;
-  workspaceId: string;
-  threadId: string;
-  authorId: string;
-  authorName: string;
-  authorType: 'human' | 'agent' | 'system';
-  content: string;
-  createdAt: number;
-}
-
-export interface ToolCapability {
-  id: string;
-  name: string;
-  description: string;
-  keywords: string[];
-  requiresApprovalByDefault: boolean;
-}
-
-export interface IntegrationConnection {
-  id: string;
-  workspaceId: string;
-  provider: IntegrationProvider;
-  displayName: string;
-  status: IntegrationConnectionStatus;
-  connectedBy: string;
-  scopes: string[];
-  capabilities: ToolCapability[];
-  createdAt: number;
-  updatedAt: number;
-  metadata?: Record<string, string | number | boolean | null>;
-}
-
-export interface OrchestratorTask {
-  id: string;
-  workspaceId: string;
-  threadId?: string;
-  requestedBy: string;
-  title: string;
-  description: string;
-  integrationIds: string[];
-  status: OrchestratorTaskStatus;
-  mode: OrchestratorActionMode;
-  createdAt: number;
-  updatedAt: number;
-  lastError?: string;
-}
-
-export type ExecutorTaskKind = 'freelancer_project' | 'code_delivery' | 'text_delivery' | 'research_delivery';
-
-export interface ExecutorTaskArtifact {
-  id: string;
-  title: string;
-  kind: 'plan' | 'draft' | 'code' | 'file' | 'checklist' | 'delivery_note';
-  content: string;
-  createdAt: number;
-}
-
-export interface ExecutorTask extends OrchestratorTask {
-  kind: ExecutorTaskKind;
-  sourceProvider?: IntegrationProvider;
-  sourceExternalId?: string;
-  artifacts: ExecutorTaskArtifact[];
-  requiresExternalApproval: boolean;
-}
-
-export interface OrchestratorPlanStep {
-  id: string;
-  title: string;
-  reasoning: string;
-  provider: IntegrationProvider | 'codex';
-  capabilityId: string;
-  status: OrchestratorStepStatus;
-  requiresApproval: boolean;
-}
-
-export interface OrchestratorPlan {
-  summary: string;
-  actionMode: OrchestratorActionMode;
-  needsUserAuth: boolean;
-  needsApproval: boolean;
-  missingIntegrations: IntegrationProvider[];
-  suggestedProviders: IntegrationProvider[];
-  steps: OrchestratorPlanStep[];
 }

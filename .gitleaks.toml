@@ -1,0 +1,22 @@
+# Secret scanning rules for this repository.
+#
+# The default gitleaks rules are kept in full; this file only records the one
+# match that is not a secret.
+
+[extend]
+useDefault = true
+
+# The Firebase Web API key in services/firebase.ts is not a credential.
+# Firebase ships it in every client bundle by design: it identifies the
+# project, and what a caller may read or write is decided by the Firestore
+# rules and by Auth, not by holding this string.
+#
+# Allowlisted by the value itself rather than under one rule id — the same key
+# is matched by both gcp-api-key and generic-api-key, and a rule-scoped
+# exception silently misses the other one. Any different credential, in this
+# file or elsewhere, still fails the build; the scan exists because this
+# project did once commit a live OpenRouter key.
+[allowlist]
+description = "Firebase Web API key — public by design"
+regexTarget = "match"
+regexes = ['''AIzaSyA7v4-9qGp-3rLSaATnLBqi46m_Wvliado''']

@@ -7,26 +7,7 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isBoardOwner(boardId) {
-      return isSignedIn()
-        && request.auth.uid == get(/databases/$(database)/documents/boards/$(boardId)).data.ownerId;
-    }
-
-    function isWorkspaceMember(workspaceId) {
-      return isSignedIn()
-        && request.auth.uid in get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.memberIds;
-    }
-
-    function isWorkspaceOwner(workspaceId) {
-      return isSignedIn()
-        && request.auth.uid == get(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId;
-    }
-
     // POSTS:
-    // - Read: Public
-    // - Create: Any signed in user
-    // - Update: Any signed in user (allows liking/commenting on others' posts)
-    // - Delete: Only the author can delete
     match /posts/{postId} {
       allow read: if true;
       allow create: if isSignedIn();
@@ -38,59 +19,155 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if true;
       allow write: if isSignedIn() && request.auth.uid == userId;
+
+      // Private per-user state (read marks). The profile above is world
+      // readable; when someone last opened a thread is not.
+      match /private/{docId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
     }
 
-    match /boards/{boardId} {
-      allow read: if isSignedIn() && request.auth.uid == resource.data.ownerId;
-      allow create: if isSignedIn() && request.auth.uid == request.resource.data.ownerId;
-      allow update, delete: if isSignedIn() && request.auth.uid == resource.data.ownerId;
+    // GLOBAL STATS:
+    match /global_stats/{docId} {
+      allow read: if true;
+      allow write: if isSignedIn(); // In a real app, restrict to server/admin
+    }
+
+    // SYSTEM LOGS:
+    match /system_logs/{logId} {
+      allow read: if isSignedIn(); // Only members can see system health
+      allow create: if isSignedIn();
+      allow update, delete: if false; // Logs are immutable
+    }
+
+    // --- DIRECT MESSAGES ---
+
+    function conversationData(conversationId) {
+      return get(/databases/$(database)/documents/conversations/$(conversationId)).data;
+    }
+
+    function isParticipant(conversationId) {
+      return isSignedIn() && request.auth.uid in conversationData(conversationId).participantIds;
+    }
+
+    /** Every participant has removed the thread from their own list. */
+    function bothHaveHidden(conversation) {
+      return conversation.get('deletedFor', []).hasAll(conversation.participantIds);
+    }
+
+    match /conversations/{conversationId} {
+      // get and list are split because a conversation is opened by reading a
+      // deterministic id that may not exist yet. On a missing document
+      // `resource` is null, so a rule touching resource.data denies the read
+      // and the thread can never be created.
+      allow get: if isSignedIn()
+                 && (resource == null || request.auth.uid in resource.data.participantIds);
+
+      allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
+
+      // Exactly two people, and the creator must be one of them — otherwise a
+      // user could open a thread between two other accounts.
+      allow create: if isSignedIn()
+                    && request.auth.uid in request.resource.data.participantIds
+                    && request.resource.data.participantIds.size() == 2;
+
+      // Participants update only the preview fields; the roster is fixed at
+      // creation so nobody can add themselves to someone else's thread.
+      allow update: if isSignedIn()
+                    && request.auth.uid in resource.data.participantIds
+                    && request.resource.data.participantIds == resource.data.participantIds
+                    && request.resource.data.participants == resource.data.participants;
+
+      // Removing the thread outright is only allowed once the other side has
+      // also hidden it — otherwise one participant could destroy the other's
+      // copy of a shared conversation.
+      allow delete: if isSignedIn()
+                    && request.auth.uid in resource.data.participantIds
+                    && bothHaveHidden(resource.data);
 
       match /messages/{messageId} {
-        allow read: if isBoardOwner(boardId);
-        allow create: if isBoardOwner(boardId);
-        allow update, delete: if false;
+        allow read: if isParticipant(conversationId);
+
+        allow create: if isParticipant(conversationId)
+                      && request.resource.data.authorId == request.auth.uid;
+
+        // Editing and soft-deleting are the author's alone, and the author
+        // cannot be reassigned by an edit.
+        allow update: if isSignedIn()
+                      && resource.data.authorId == request.auth.uid
+                      && request.resource.data.authorId == resource.data.authorId;
+
+        // Normally only the author may delete their own message. The exception
+        // is the final purge: once both participants have hidden the thread,
+        // either may clear out what is left.
+        allow delete: if isSignedIn()
+                      && (resource.data.authorId == request.auth.uid
+                          || bothHaveHidden(conversationData(conversationId)));
       }
     }
 
-    match /workspaces/{workspaceId} {
-      allow read: if isSignedIn()
-        && request.auth.uid in resource.data.memberIds;
-      allow create: if isSignedIn()
-        && request.auth.uid == request.resource.data.ownerId
-        && request.auth.uid in request.resource.data.memberIds;
-      allow update: if isWorkspaceOwner(workspaceId);
-      allow delete: if isWorkspaceOwner(workspaceId);
+    // --- BOARDS (Slack-like spaces for humans + AI agents) ---
 
-      match /members/{memberId} {
-        allow read: if isWorkspaceMember(workspaceId);
-        allow create, update, delete: if isWorkspaceOwner(workspaceId);
-      }
+    function boardData(boardId) {
+      return get(/databases/$(database)/documents/boards/$(boardId)).data;
+    }
 
-      match /threads/{threadId} {
-        allow read: if isWorkspaceMember(workspaceId);
-        allow create: if isWorkspaceMember(workspaceId)
-          && request.auth.uid == request.resource.data.createdBy;
-        allow update: if isWorkspaceMember(workspaceId);
-        allow delete: if isWorkspaceOwner(workspaceId);
+    function isBoardMember(boardId) {
+      return isSignedIn() && request.auth.uid in boardData(boardId).memberIds;
+    }
 
+    /** An edit touching nothing but the denormalized last-message fields. */
+    function onlyStampsLastMessage() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['lastMessageAt', 'lastMessageAuthorId']);
+    }
+
+    function isBoardOwner(boardId) {
+      return isSignedIn() && boardData(boardId).ownerId == request.auth.uid;
+    }
+
+    // BOARDS: only members can read; only the owner can reconfigure or delete.
+    //
+    // Channels and messages are nested subcollections so these rules can take
+    // the board id from the document PATH. A path-based get() is evaluated once
+    // per query; deriving it from document data instead would mean one lookup
+    // per matched document, which Firestore rejects on list operations.
+    match /boards/{boardId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.memberIds;
+      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      // The owner reconfigures the board. Any member may additionally stamp
+      // the last-message fields, which is how unread dots are drawn without a
+      // listener per channel — and nothing else, so a member cannot rename the
+      // board or edit its roster through this door.
+      allow update: if isSignedIn()
+                    && (resource.data.ownerId == request.auth.uid
+                        || (request.auth.uid in resource.data.memberIds && onlyStampsLastMessage()));
+
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      // CHANNELS: readable by board members, managed by the board owner.
+      match /channels/{channelId} {
+        allow read: if isBoardMember(boardId);
+        allow create, delete: if isBoardOwner(boardId);
+
+        allow update: if isBoardOwner(boardId)
+                      || (isBoardMember(boardId) && onlyStampsLastMessage());
+
+        // MESSAGES: board members can read and post. A member may only post as
+        // themselves or on behalf of an agent that belongs to the same board.
         match /messages/{messageId} {
-          allow read: if isWorkspaceMember(workspaceId);
-          allow create: if isWorkspaceMember(workspaceId)
-            && request.auth.uid == request.resource.data.authorId;
-          allow update, delete: if false;
+          allow read: if isBoardMember(boardId);
+
+          allow create: if isBoardMember(boardId)
+                        && request.resource.data.authorId in boardData(boardId).memberIds;
+
+          allow update: if false; // Messages are immutable
+
+          // Authors delete their own messages; the owner can moderate any of them.
+          allow delete: if isSignedIn()
+                        && (resource.data.authorId == request.auth.uid
+                            || isBoardOwner(boardId));
         }
-      }
-
-      match /integrations/{integrationId} {
-        allow read: if isWorkspaceMember(workspaceId);
-        allow create, update, delete: if isWorkspaceOwner(workspaceId);
-      }
-
-      match /tasks/{taskId} {
-        allow read: if isWorkspaceMember(workspaceId);
-        allow create: if isWorkspaceMember(workspaceId)
-          && request.auth.uid == request.resource.data.requestedBy;
-        allow update, delete: if isWorkspaceOwner(workspaceId);
       }
     }
   }

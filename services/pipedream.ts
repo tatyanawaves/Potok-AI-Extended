@@ -1,90 +1,112 @@
 import { auth } from './firebase';
 
-const ENV_PROXY_URL =
-  (import.meta as any).env.VITE_OPENAI_PROXY_URL ||
-  '/api/openai';
+/**
+ * Client for the Pipedream Connect bridge in worker/.
+ *
+ * Every call carries the user's Firebase ID token; the worker derives the
+ * Pipedream end-user identity from it, so nothing here can act for another
+ * account even if the request body says otherwise.
+ */
 
-const BACKEND_BASE_URL = (
-  (import.meta as any).env.VITE_CODEX_BACKEND_URL ||
-  ENV_PROXY_URL.replace(/\/(?:openaiProxy|api\/openai)$/i, '')
-).replace(/\/+$/, '');
+export const PIPEDREAM_WORKER_URL: string =
+    (import.meta.env.VITE_PIPEDREAM_WORKER_URL || '').replace(/\/$/, '');
 
-export type PipedreamConnectionStatus = 'disconnected' | 'pending' | 'connected' | 'error';
+export const isPipedreamConfigured = (): boolean => Boolean(PIPEDREAM_WORKER_URL);
 
-export interface PipedreamAccountSummary {
-  id: string;
-  name?: string | null;
-  external_id?: string | null;
-  healthy?: boolean;
-  dead?: boolean | null;
-  app?: {
-    id?: string;
+export interface ConnectedAccount {
+    id: string;
     name?: string;
-    name_slug?: string;
-  };
+    appSlug?: string;
+    appName?: string;
+    healthy: boolean;
 }
 
-export interface PipedreamConnectLink {
-  app: string;
-  external_user_id: string;
-  expires_at: string;
-  connect_link_url: string;
+const post = async (path: string, body: unknown = {}): Promise<any> => {
+    if (!PIPEDREAM_WORKER_URL) throw new Error('Pipedream bridge is not configured');
+
+    const user = auth.currentUser;
+    if (!user) throw new Error('Not signed in');
+
+    const response = await fetch(`${PIPEDREAM_WORKER_URL}${path}`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${await user.getIdToken()}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        throw new Error(data.error || `Bridge returned ${response.status}`);
+    }
+
+    return data;
+};
+
+export interface CatalogApp {
+    slug: string;
+    name: string;
+    description?: string;
+    imgSrc?: string;
+    categories: string[];
 }
 
-const endpoint = (path: string) => `${BACKEND_BASE_URL}${path}`;
-
-async function callPipedreamBackend<T>(path: string, body: Record<string, unknown> = {}): Promise<T> {
-  if (!auth.currentUser) {
-    throw new Error('Нужно войти в NEON перед подключением интеграций.');
-  }
-
-  const idToken = await auth.currentUser.getIdToken();
-  const response = await fetch(endpoint(path), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${idToken}`,
-    },
-    body: JSON.stringify(body),
-  });
-
-  const text = await response.text();
-  let data: any = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { error: text };
-  }
-
-  if (!response.ok) {
-    throw new Error(data.error || data.message || `Pipedream request failed: ${response.status}`);
-  }
-
-  return data as T;
+export interface AppPage {
+    apps: CatalogApp[];
+    /** Pass back as `after` for the next page; null when the list is exhausted. */
+    nextCursor: string | null;
+    total: number | null;
 }
 
-export const createPipedreamConnectLink = async (app = 'freelancer'): Promise<PipedreamConnectLink> => {
-  const data = await callPipedreamBackend<{ ok: boolean } & PipedreamConnectLink>(
-    '/api/pipedream/connect-token',
-    { app, origin: window.location.origin }
-  );
-
-  return data;
+/**
+ * One page of Pipedream's app catalogue. An empty query lists everything
+ * alphabetically — over three thousand entries — so callers must page.
+ */
+export const searchApps = async (query: string, after?: string): Promise<AppPage> => {
+    const data = await post('/pd/apps', { query, after });
+    return {
+        apps: (data.apps || []) as CatalogApp[],
+        nextCursor: data.nextCursor ?? null,
+        total: data.total ?? null
+    };
 };
 
-export const listPipedreamAccounts = async (app = 'freelancer'): Promise<PipedreamAccountSummary[]> => {
-  const data = await callPipedreamBackend<{ ok: boolean; accounts: PipedreamAccountSummary[] }>(
-    '/api/pipedream/accounts',
-    { app }
-  );
-
-  return data.accounts || [];
+export const listConnectedAccounts = async (): Promise<ConnectedAccount[]> => {
+    const data = await post('/pd/accounts');
+    return (data.accounts || []) as ConnectedAccount[];
 };
 
-export const getPipedreamConnectionStatus = async (app = 'freelancer'): Promise<PipedreamConnectionStatus> => {
-  const accounts = await listPipedreamAccounts(app);
-  // Pipedream can mark OAuth accounts as healthy=false even while Connect proxy
-  // requests work. Treat any non-dead account as usable and let API calls decide.
-  const activeAccount = accounts.find((account) => account.dead !== true);
-  return activeAccount ? 'connected' : 'disconnected';
+/**
+ * Revokes one connection. Bots pointed at that service keep their tool server
+ * URL but will find no credentials behind it, so the account can be replaced
+ * by connecting a different one under the same service.
+ */
+export const disconnectAccount = async (accountId: string): Promise<void> => {
+    await post('/pd/disconnect', { accountId });
 };
+
+/**
+ * Starts the account-connection flow.
+ *
+ * Opens Pipedream's hosted page in a new tab rather than embedding their
+ * frontend SDK: the SDK would add a dependency purely to render a flow that is
+ * already a full-page redirect, and the hosted page is the same one it opens.
+ */
+export const startAccountConnection = async (appSlug: string): Promise<void> => {
+    const data = await post('/pd/connect-token', { appSlug });
+
+    const link: string | undefined = data.connect_link_url;
+    if (!link) throw new Error('Pipedream did not return a connect link');
+
+    // app is appended so the hosted page opens straight at the chosen service.
+    const url = new URL(link);
+    if (appSlug) url.searchParams.set('app', appSlug);
+
+    window.open(url.toString(), '_blank', 'noopener');
+};
+
+/** The MCP endpoint a bot points at for one connected app. */
+export const toolServerUrlFor = (appSlug: string): string =>
+    `${PIPEDREAM_WORKER_URL}/pd/mcp?app=${encodeURIComponent(appSlug)}`;

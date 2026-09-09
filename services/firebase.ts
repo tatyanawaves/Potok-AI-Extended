@@ -1,20 +1,19 @@
 
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs, increment, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, TwitterAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { getAnalytics } from "firebase/analytics";
-import type { BoardKind } from '../types';
 
 // TODO: Replace with your project's config object
 // You can get this from the Firebase Console -> Project Settings -> General -> Your apps
 const firebaseConfig = {
-    apiKey: "AIzaSyCt9A6-2ON2mDcS14h6q_cWC2TyUUdhgyA",
-    authDomain: "potok-33.firebaseapp.com",
-    projectId: "potok-33",
-    storageBucket: "potok-33.firebasestorage.app",
-    messagingSenderId: "165805440425",
-    appId: "1:165805440425:web:7d035685411b65060118b8",
-    measurementId: "G-RW2MNFK64T"
+  apiKey: "AIzaSyA7v4-9qGp-3rLSaATnLBqi46m_Wvliado",
+  authDomain: "neon-extended.firebaseapp.com",
+  projectId: "neon-extended",
+  storageBucket: "neon-extended.firebasestorage.app",
+  messagingSenderId: "1055952798197",
+  appId: "1:1055952798197:web:8b48b234ff8c55652160bc",
+  measurementId: "G-ML9RYX1NPG"
 };
 
 // Initialize Firebase
@@ -23,114 +22,62 @@ export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const analytics = getAnalytics(app);
 export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({
-    prompt: 'select_account'
-});
 
-const ENV_PROXY_URL =
-    (import.meta as any).env.VITE_OPENAI_PROXY_URL ||
-    '/api/openai';
+// Ask which account to use rather than silently reusing the one the browser
+// happens to be signed into.
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-const BACKEND_BASE_URL =
-    (import.meta as any).env.VITE_CODEX_BACKEND_URL ||
-    ENV_PROXY_URL.replace(/\/(?:openaiProxy|api\/openai)$/i, '');
+export const twitterProvider = new TwitterAuthProvider();
 
-const WORKSPACE_BACKEND =
-    ((import.meta as any).env.VITE_WORKSPACE_BACKEND || 'firebase').toLowerCase();
+export type SocialProvider = 'google' | 'x';
 
-const useWorkspaceApi = () =>
-    WORKSPACE_BACKEND === 'supabase' ||
-    WORKSPACE_BACKEND === 'api' ||
-    WORKSPACE_BACKEND === 'backend';
+const providerFor = (name: SocialProvider) =>
+    name === 'google' ? googleProvider : twitterProvider;
 
-const workspaceEndpoint = (path: string) => `${BACKEND_BASE_URL}${path}`;
-
-async function callWorkspaceBackend<T>(path: string, body: Record<string, unknown> = {}): Promise<T> {
-    if (!auth.currentUser) {
-        throw new Error('Нужно войти в NEON, чтобы работать с тредами.');
-    }
-
-    const idToken = await auth.currentUser.getIdToken();
-    const response = await fetch(workspaceEndpoint(path), {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify(body),
-    });
-
-    const text = await response.text();
-    let data: any = {};
+/**
+ * Signs in with Google or X.
+ *
+ * Popups are tried first because they keep the page state, but they are
+ * blocked often enough — and are unavailable outright in some embedded
+ * browsers — that a redirect has to be the fallback rather than an error
+ * message. `completeSocialSignIn` picks the result up after the redirect.
+ */
+export const signInWithSocial = async (name: SocialProvider) => {
     try {
-        data = text ? JSON.parse(text) : {};
-    } catch {
-        data = { error: text };
-    }
-
-    if (!response.ok) {
-        throw new Error(data.error || data.message || `Workspace backend failed: ${response.status}`);
-    }
-
-    return data as T;
-}
-
-function subscribeByPolling<T>(
-    load: () => Promise<T[]>,
-    callback: (items: T[]) => void,
-    onError?: (error: Error) => void,
-    intervalMs = 2500
-) {
-    let active = true;
-    let busy = false;
-
-    const poll = async () => {
-        if (!active || busy) return;
-        busy = true;
-        try {
-            const items = await load();
-            if (active) callback(items);
-        } catch (error: any) {
-            if (active) onError?.(error instanceof Error ? error : new Error(String(error)));
-        } finally {
-            busy = false;
-        }
-    };
-
-    poll();
-    const timer = window.setInterval(poll, intervalMs);
-    return () => {
-        active = false;
-        window.clearInterval(timer);
-    };
-}
-
-export const signInWithGoogle = async () => {
-    try {
-        const result = await signInWithPopup(auth, googleProvider);
+        const result = await signInWithPopup(auth, providerFor(name));
         return result.user;
-    } catch (error) {
-        console.error("Google Sign In Error", error);
+    } catch (error: any) {
+        const popupUnusable = [
+            'auth/popup-blocked',
+            'auth/cancelled-popup-request',
+            'auth/operation-not-supported-in-this-environment'
+        ].includes(error?.code);
+
+        if (popupUnusable) {
+            await signInWithRedirect(auth, providerFor(name));
+            return null; // the page navigates away; nothing to return
+        }
+
+        console.error(`[Auth] ${name} sign-in failed`, error);
         throw error;
     }
 };
 
-export const signInWithGoogleRedirectFlow = async () => {
-    try {
-        await signInWithRedirect(auth, googleProvider);
-    } catch (error) {
-        console.error("Google Redirect Sign In Error", error);
-        throw error;
-    }
-};
+/** Kept for existing callers. */
+export const signInWithGoogle = () => signInWithSocial('google');
 
-export const getGoogleRedirectUser = async () => {
+/**
+ * The user coming back from a redirect sign-in.
+ *
+ * Returns null on an ordinary page load, so it is safe to call on every start.
+ */
+export const completeSocialSignIn = async () => {
     try {
         const result = await getRedirectResult(auth);
         return result?.user ?? null;
     } catch (error) {
-        console.error("Google Redirect Result Error", error);
-        throw error;
+        console.error('[Auth] Could not complete redirect sign-in', error);
+        return null;
     }
 };
 
@@ -158,31 +105,53 @@ export const loginWithEmail = async (email, password) => {
     }
 };
 
-export const loginAnonymously = async () => {
-    try {
-        const userCredential = await signInAnonymously(auth);
-        return userCredential.user;
-    } catch (error) {
-        console.error("Error signing in anonymously", error);
-        throw error;
-    }
-};
-
 // Collection References
 export const postsRef = collection(db, 'posts');
 export const usersRef = collection(db, 'users');
-export const boardsRef = collection(db, 'boards');
+export const statsRef = collection(db, 'global_stats');
+export const logsRef = collection(db, 'system_logs');
+
+// --- Global Stats ---
+
+export const updateGlobalStats = async (data: Partial<{ totalThoughts: number, activeAgents: number, networkEntropy: number }>) => {
+    const statsDoc = doc(db, 'global_stats', 'network_status');
+    const updateData: any = { ...data, lastUpdate: Date.now() };
+    
+    // Convert regular numbers to increments if needed, or just set
+    if (data.totalThoughts) updateData.totalThoughts = increment(data.totalThoughts);
+    
+    await setDoc(statsDoc, updateData, { merge: true });
+};
+
+export const getGlobalStats = async () => {
+    const statsDoc = doc(db, 'global_stats', 'network_status');
+    const snapshot = await getDoc(statsDoc);
+    return snapshot.exists() ? snapshot.data() : null;
+};
+
+// --- System Logs ---
+
+export const addSystemLog = async (message: string, type: 'info' | 'warning' | 'error' | 'maintenance' = 'info', metadata?: any) => {
+    await addDoc(logsRef, {
+        message,
+        type,
+        metadata,
+        timestamp: Date.now()
+    });
+};
 
 // Helpers for Social Features
 
-export const subscribeToFeed = (callback: (posts: any[]) => void) => {
-    // Simple query: get recent 50 posts
-    // In a real app, you'd filter by following or interests here
-    const q = query(postsRef, orderBy('timestamp', 'desc'), limit(50));
+export const subscribeToGlobalThoughtFeed = (callback: (posts: any[]) => void) => {
+    console.log("[Firebase] Subscribing to global feed (limit: 200)...");
+    const q = query(postsRef, orderBy('timestamp', 'desc'), limit(200));
 
     return onSnapshot(q, (snapshot) => {
+        console.log(`[Firebase] Feed updated: ${snapshot.size} posts received from server.`);
         const posts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         callback(posts);
+    }, (error) => {
+        console.error("[Firebase] Feed subscription error:", error);
     });
 };
 
@@ -196,18 +165,31 @@ export const createPost = async (postData: any) => {
         }
     }
 
-    return await addDoc(postsRef, {
+    const docRef = await addDoc(postsRef, {
         ...postData,
         timestamp: Date.now(),
         likes: 0,
         likedBy: [],
         comments: []
     });
+
+    // Increment global counter asynchronously
+    updateGlobalStats({ totalThoughts: 1 }).catch(err => console.error("Failed to update stats:", err));
+
+    return docRef;
 };
 
 export const updateUserProfile = async (userId: string, data: any) => {
     const userDoc = doc(db, 'users', userId);
-    await setDoc(userDoc, data, { merge: true });
+    // Remove undefined fields to prevent Firestore errors
+    const cleanData = Object.keys(data).reduce((acc: any, key) => {
+        if (data[key] !== undefined) {
+            acc[key] = data[key];
+        }
+        return acc;
+    }, {});
+    
+    await setDoc(userDoc, cleanData, { merge: true });
 };
 
 export const getUserProfile = async (userId: string) => {
@@ -216,18 +198,57 @@ export const getUserProfile = async (userId: string) => {
     return snapshot.exists() ? snapshot.data() : null;
 };
 
-export const getUserProfileByName = async (name: string) => {
+export const getUserProfileByName = async (name: string): Promise<Record<string, any> | null> => {
     const q = query(usersRef, where('agentName', '==', name), limit(1));
     const snapshot = await getDocs(q);
     if (!snapshot.empty) {
-        return snapshot.docs[0].data();
+        // The doc id is the auth uid; older profiles don't store it as a field.
+        return { ...snapshot.docs[0].data(), uid: snapshot.docs[0].id };
     }
     return null;
+};
+
+/**
+ * Finds profiles by name.
+ *
+ * Filtered in the client rather than with a Firestore range query: those are
+ * case-sensitive and would miss "neo" for "Neo". The network is small enough
+ * that fetching a page and filtering here is both correct and cheap; past a
+ * few thousand profiles this needs a lowercased field to query on instead.
+ */
+export const searchProfiles = async (
+    term: string,
+    excludeUid?: string
+): Promise<Array<Record<string, any>>> => {
+    const snapshot = await getDocs(query(usersRef, limit(200)));
+    const needle = term.trim().toLowerCase();
+
+    return snapshot.docs
+        .map(d => ({ ...d.data(), uid: d.id }) as Record<string, any>)
+        .filter(profile => profile.agentName && profile.uid !== excludeUid)
+        .filter(profile => !needle || String(profile.agentName).toLowerCase().includes(needle))
+        .sort((a, b) => String(a.agentName).localeCompare(String(b.agentName)))
+        .slice(0, 30);
+};
+
+/**
+ * Agent profiles whose owners allow their persona to be cloned into boards.
+ * The clone always runs on the cloner's quota, so this is about credit and
+ * consent for the prompt, not about spending the author's tokens.
+ */
+export const getClonableAgentProfiles = async (): Promise<Array<Record<string, any>>> => {
+    const q = query(usersRef, where('allowBoardUse', '==', true), limit(50));
+    const snapshot = await getDocs(q);
+
+    return snapshot.docs
+        .map(d => ({ ...d.data(), uid: d.id }) as Record<string, any>)
+        .filter(profile => Boolean(profile.agentName));
 };
 
 export const addComment = async (postId: string, commentData: any) => {
     console.log(`[Firebase] Attempting to add comment to post: ${postId}`, commentData);
     const postRef = doc(db, 'posts', postId);
+    // Use crypto.randomUUID if available, else simple fallback
     const generateUUID = () => {
         if (typeof crypto !== 'undefined' && crypto.randomUUID) {
             return crypto.randomUUID();
@@ -238,16 +259,82 @@ export const addComment = async (postId: string, commentData: any) => {
     const newComment = {
         id: generateUUID(),
         timestamp: Date.now(),
+        likes: 0,
+        likedBy: [],
         ...commentData
     };
 
+    // Remove undefined fields (like parentId for root comments)
+    const cleanComment = Object.keys(newComment).reduce((acc: any, key) => {
+        if (newComment[key] !== undefined) {
+            acc[key] = newComment[key];
+        }
+        return acc;
+    }, {});
+
     try {
         await updateDoc(postRef, {
-            comments: arrayUnion(newComment)
+            comments: arrayUnion(cleanComment)
         });
         console.log(`[Firebase] Comment added successfully to ${postId}`);
+        return cleanComment;
     } catch (error) {
         console.error(`[Firebase] Error adding comment to ${postId}:`, error);
+        throw error;
+    }
+};
+
+export const deleteComment = async (postId: string, commentId: string) => {
+    console.log(`[Firebase] Deleting comment ${commentId} from post ${postId}`);
+    const postRef = doc(db, 'posts', postId);
+
+    try {
+        const postSnap = await getDoc(postRef);
+        if (postSnap.exists()) {
+            const post = postSnap.data();
+            const comments = post.comments || [];
+            const updatedComments = comments.filter((c: any) => c.id !== commentId);
+
+            await updateDoc(postRef, {
+                comments: updatedComments
+            });
+            console.log(`[Firebase] Comment ${commentId} deleted successfully.`);
+        }
+    } catch (error) {
+        console.error(`[Firebase] Error deleting comment ${commentId}:`, error);
+        throw error;
+    }
+};
+
+export const toggleCommentLike = async (postId: string, commentId: string, userId: string) => {
+    console.log(`[Firebase] Toggling like for comment: ${commentId} in post: ${postId} by user: ${userId}`);
+    const postRef = doc(db, 'posts', postId);
+
+    try {
+        const postSnap = await getDoc(postRef);
+        if (postSnap.exists()) {
+            const post = postSnap.data();
+            const comments = post.comments || [];
+            const updatedComments = comments.map((c: any) => {
+                if (c.id === commentId) {
+                    const likedBy = c.likedBy || [];
+                    const isLiked = likedBy.includes(userId);
+                    return {
+                        ...c,
+                        likes: (c.likes || 0) + (isLiked ? -1 : 1),
+                        likedBy: isLiked ? likedBy.filter((id: string) => id !== userId) : [...likedBy, userId]
+                    };
+                }
+                return c;
+            });
+
+            await updateDoc(postRef, {
+                comments: updatedComments
+            });
+            console.log(`[Firebase] Comment like toggled successfully.`);
+        }
+    } catch (error) {
+        console.error(`[Firebase] Error toggling comment like:`, error);
         throw error;
     }
 };
@@ -337,160 +424,4 @@ export const getUserPosts = async (userId: string, agentName?: string) => {
         console.error("[Firebase] Critical error in getUserPosts:", error);
         return [];
     }
-};
-
-export const ensureDefaultBoards = async (userId: string, userName: string) => {
-    if (useWorkspaceApi()) {
-        await callWorkspaceBackend('/api/workspace/ensure-default', { userName });
-        return;
-    }
-
-    const existingBoards = await getDocs(query(boardsRef, where('ownerId', '==', userId), limit(50)));
-    const hasCodexBoard = existingBoards.docs.some((boardDoc) => {
-        const board = boardDoc.data();
-        return board.kind === 'codex' || board.codexEnabled === true;
-    });
-
-    if (hasCodexBoard) {
-        return;
-    }
-
-    await addDoc(boardsRef, {
-        ownerId: userId,
-        name: 'Codex',
-        kind: 'codex',
-        codexEnabled: true,
-        description: `Codex chat with workspace context for ${userName}`,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-    });
-};
-
-export const subscribeToBoards = (
-    userId: string,
-    callback: (boards: any[]) => void,
-    onError?: (error: Error) => void
-) => {
-    if (useWorkspaceApi()) {
-        return subscribeByPolling(
-            async () => {
-                const data = await callWorkspaceBackend<{ ok: boolean; threads: any[] }>('/api/threads/list');
-                return data.threads || [];
-            },
-            callback,
-            onError
-        );
-    }
-
-    const q = query(boardsRef, where('ownerId', '==', userId));
-    return onSnapshot(q, (snapshot) => {
-        const boards = snapshot.docs
-            .map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))
-            .sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0));
-        callback(boards);
-    }, (error) => {
-        console.error('[Firebase] subscribeToBoards failed:', error);
-        onError?.(error);
-    });
-};
-
-export const createBoard = async (
-    userId: string,
-    name: string,
-    kind: BoardKind = 'codex',
-    description?: string,
-    codexEnabled = true
-) => {
-    if (useWorkspaceApi()) {
-        const data = await callWorkspaceBackend<{ ok: boolean; thread: any }>('/api/threads/create', {
-            name,
-            kind,
-            description: description || '',
-            codexEnabled,
-        });
-        return { id: data.thread.id, ...data.thread };
-    }
-
-    return addDoc(boardsRef, {
-        ownerId: userId,
-        name,
-        kind,
-        codexEnabled,
-        description: description || '',
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-    });
-};
-
-export const setBoardCodexEnabled = async (boardId: string, enabled: boolean) => {
-    if (useWorkspaceApi()) {
-        await callWorkspaceBackend('/api/threads/update-codex', { threadId: boardId, enabled });
-        return;
-    }
-
-    const boardRef = doc(db, 'boards', boardId);
-    await updateDoc(boardRef, {
-        codexEnabled: enabled,
-        updatedAt: Date.now()
-    });
-};
-
-export const getBoardMessagesRef = (boardId: string) => collection(db, 'boards', boardId, 'messages');
-
-export const subscribeToBoardMessages = (
-    boardId: string,
-    callback: (messages: any[]) => void,
-    onError?: (error: Error) => void
-) => {
-    if (useWorkspaceApi()) {
-        return subscribeByPolling(
-            async () => {
-                const data = await callWorkspaceBackend<{ ok: boolean; messages: any[] }>('/api/messages/list', {
-                    threadId: boardId,
-                });
-                return data.messages || [];
-            },
-            callback,
-            onError,
-            2000
-        );
-    }
-
-    const q = query(getBoardMessagesRef(boardId), orderBy('createdAt', 'asc'), limit(200));
-    return onSnapshot(q, (snapshot) => {
-        const messages = snapshot.docs.map(docSnap => ({ id: docSnap.id, boardId, ...docSnap.data() }));
-        callback(messages);
-    }, (error) => {
-        console.error('[Firebase] subscribeToBoardMessages failed:', error);
-        onError?.(error);
-    });
-};
-
-export const createBoardMessage = async (
-    boardId: string,
-    message: {
-        authorId: string;
-        authorName: string;
-        authorType: 'human' | 'agent';
-        content: string;
-    }
-) => {
-    if (useWorkspaceApi()) {
-        await callWorkspaceBackend('/api/messages/create', {
-            threadId: boardId,
-            message,
-        });
-        return;
-    }
-
-    const boardRef = doc(db, 'boards', boardId);
-    await addDoc(getBoardMessagesRef(boardId), {
-        ...message,
-        boardId,
-        createdAt: Date.now()
-    });
-    await updateDoc(boardRef, {
-        updatedAt: Date.now(),
-        lastMessagePreview: message.content.slice(0, 120)
-    });
 };

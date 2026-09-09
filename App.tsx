@@ -1,50 +1,28 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
-import ThoughtSymbolMap2D from './components/ThoughtSymbolMap2D';
+// Loaded on demand: the force-graph library behind the map is a large
+// dependency, and most sessions never open the map at all.
+const ThoughtSymbolMap2D = React.lazy(() => import('./components/ThoughtSymbolMap2D'));
 import ThoughtLog from './components/ThoughtLog';
 import SettingsModal from './components/SettingsModal';
 import AuthScreen from './components/AuthScreen';
 import Profile from './components/Profile';
-import ThreadSidebar from './components/ThreadSidebar';
-import MessageThreadView from './components/MessageThreadView';
-import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, generateAgentComment, generateBoardReply } from './services/ai';
-import { parseDocument } from './services/documentParser';
-import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment, BoardRecord, BoardMessage, ConversationMessage, IntegrationConnection, OrchestratorPlan } from './types';
+import Boards from './components/Boards';
+import { useUnread } from './hooks/useUnread';
+import Messages from './components/Messages';
+import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
+import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
-import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToFeed, addComment, toggleLike, auth, logout, deletePost, getUserProfileByName, ensureDefaultBoards, subscribeToBoards, subscribeToBoardMessages, createBoard, createBoardMessage, setBoardCodexEnabled } from './services/firebase';
-import { buildHeuristicOrchestratorPlan, FREELANCER_PIPEDREAM_CAPABILITIES } from './services/orchestrator';
-import { createPipedreamConnectLink, getPipedreamConnectionStatus, listPipedreamAccounts, type PipedreamConnectionStatus } from './services/pipedream';
+import { getAIClient } from './services/gemini';
+import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, deletePost, getUserProfileByName, toggleCommentLike } from './services/firebase';
+import { secureStorage } from './services/encryption';
+import { resolveFollowing, isFromFollowed, FollowedProfile } from './services/social';
+import { resetToolConnections } from './services/boardAgent';
 
-const formatFirebaseError = (err: any) => {
-  const code = err?.code ? ` (${err.code})` : '';
-  return `${err?.message || 'unknown error'}${code}`;
-};
-
-const getFreelancerConnectPendingKey = (uid: string) => `neon:pipedream:freelancer-pending:${uid}`;
-
-const buildServerManagedIntegrations = (freelancerStatus: PipedreamConnectionStatus): IntegrationConnection[] => [
-  {
-    id: 'server:pipedream:freelancer',
-    workspaceId: 'server-managed',
-    provider: 'freelancer',
-    displayName: 'Freelancer via Pipedream',
-    status: freelancerStatus,
-    connectedBy: 'system',
-    scopes: freelancerStatus === 'connected'
-      ? ['pipedream.connect', 'freelancer.api']
-      : ['pipedream.connect'],
-    capabilities: FREELANCER_PIPEDREAM_CAPABILITIES,
-    createdAt: 0,
-    updatedAt: 0,
-    metadata: {
-      transport: 'pipedream-connect',
-      serverManaged: true,
-    },
-  },
-];
 
 const App: React.FC = () => {
   const navigate = useNavigate();
+  const unread = useUnread();
   const location = useLocation();
   const [viewMode, setViewMode] = useState<'2d'>('2d');
   const [viewedUser, setViewedUser] = useState<{ id?: string, name: string } | null>(null);
@@ -52,32 +30,56 @@ const App: React.FC = () => {
   const [viewedUserProfile, setViewedUserProfile] = useState<any>(null);
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [viewedSymbolWeights, setViewedSymbolWeights] = useState<Map<string, number>>(new Map());
-  const [isAuthorized, setIsAuthorized] = useState(false);
+  const [isAuthorized, setIsAuthorized] = useState(() => {
+    const saved = localStorage.getItem('ai_settings'); // General settings can be plain
+    const savedKey = secureStorage.getItem('openRouterKey'); // Key is encrypted
+    const savedGeminiKey = secureStorage.getItem('geminiKey');
+    const settings = saved ? JSON.parse(saved) : {};
+    // Inject the decrypted keys back into settings for runtime use
+    if (savedKey) settings.openRouterKey = savedKey;
+    if (savedGeminiKey) settings.geminiKey = savedGeminiKey;
+    return !!((settings.openRouterKey || settings.geminiKey) && settings.agentRole);
+  });
   const [thoughts, setThoughts] = useState<Thought[]>([]);
-  const [boards, setBoards] = useState<BoardRecord[]>([]);
-  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
-  const [boardMessages, setBoardMessages] = useState<BoardMessage[]>([]);
-  const [orchestratorPlan, setOrchestratorPlan] = useState<OrchestratorPlan | null>(null);
-  const [freelancerStatus, setFreelancerStatus] = useState<PipedreamConnectionStatus>('pending');
-  const [isConnectingFreelancer, setIsConnectingFreelancer] = useState(false);
-  const [isBoardSending, setIsBoardSending] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [isProcessingDoc, setIsProcessingDoc] = useState(false);
+
+  /**
+   * A chosen document, parsed but not yet analysed.
+   *
+   * Analysis is a model request per fragment and a post per fragment, on the
+   * user's own key and in the public feed. The count is only known after
+   * parsing, so the file is read first and the confirmation states the real
+   * number rather than a guess.
+   */
+  const [pendingDoc, setPendingDoc] = useState<{ name: string, chunks: string[] } | null>(null);
+  const [docProgress, setDocProgress] = useState<{ done: number, total: number } | null>(null);
+
+  /**
+   * Stop was pressed, but a request is already in flight.
+   *
+   * There is no way to take it back — a free model can sit in a queue for a
+   * couple of minutes — so the button says what it will actually do instead of
+   * pretending the run ended.
+   */
+  const [stopRequested, setStopRequested] = useState(false);
   const [isCycleRunning, setIsCycleRunning] = useState(false);
   const [showCyclePanel, setShowCyclePanel] = useState(false);
-  const [provider, setProvider] = useState<AIProvider>('openai');
+  const [provider, setProvider] = useState<AIProvider>(() => {
+    const saved = localStorage.getItem('ai_settings');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return parsed.aiProvider || 'openrouter';
+    }
+    return 'openrouter';
+  });
   const [error, setError] = useState<string | null>(null);
-  const [boardError, setBoardError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>([]);
   const [symbolWeights, setSymbolWeights] = useState<Map<string, number>>(new Map());
   const [mapThoughts, setMapThoughts] = useState<Thought[]>([]);
   const [firebaseReady, setFirebaseReady] = useState(false);
-  const connectedIntegrations = useMemo(
-    () => buildServerManagedIntegrations(freelancerStatus),
-    [freelancerStatus]
-  );
 
   const [cognitiveState, setCognitiveState] = useState<CognitiveState>({
     valence: 0, arousal: 0, entropy: 0, complexity: 0, predictionError: 0,
@@ -88,246 +90,58 @@ const App: React.FC = () => {
 
   const isThinkingRef = useRef(isThinking);
   const isCycleRunningRef = useRef(isCycleRunning);
-  const isCompletingFreelancerRef = useRef(false);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [settings, setSettings] = useState<AISettings>(() => {
     const saved = localStorage.getItem('ai_settings');
     let parsed = saved ? { ...JSON.parse(saved), following: JSON.parse(saved).following || [] } : {
-      openAIModel: 'nvidia/nemotron-3-super-120b-a12b:free',
-      language: 'ru', decaySpeed: 1.0, agentName: 'Neo', agentRole: '', userType: 'human', following: [], postsPerDay: 20, enableFrequencyControl: true, aiProvider: 'openai'
+      openRouterKey: '', openRouterModel: 'nvidia/nemotron-3.5-lightning:free',
+      geminiKey: '', geminiModel: 'gemini-1.5-flash',
+      language: 'ru', agentName: 'Neo', agentRole: '', userType: 'agent', following: [], aiProvider: 'openrouter',
+      showOnlyFollowing: false
     };
-    if (!parsed.postsPerDay) parsed.postsPerDay = 20;
-    if (parsed.enableFrequencyControl === undefined) parsed.enableFrequencyControl = true;
-    if (parsed.authMode === 'firebase-auth') {
-      parsed.aiProvider = 'openai';
-      parsed.userType = 'human';
+    // Restore encrypted secrets. These are kept out of the plain settings blob
+    // and, unlike the rest of the settings, are never synced to Firestore.
+    const savedKey = secureStorage.getItem('openRouterKey');
+    if (savedKey) parsed.openRouterKey = savedKey;
+    const savedGeminiKey = secureStorage.getItem('geminiKey');
+    if (savedGeminiKey) parsed.geminiKey = savedGeminiKey;
+    const savedGroqKey = secureStorage.getItem('groqKey');
+    if (savedGroqKey) parsed.groqKey = savedGroqKey;
+
+    const savedMcpTokens = secureStorage.getItem('mcpTokens');
+    if (savedMcpTokens) {
+      try {
+        parsed.mcpTokens = JSON.parse(savedMcpTokens);
+      } catch {
+        parsed.mcpTokens = {};
+      }
     }
+
     return parsed;
   });
   const settingsRef = useRef(settings);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
-  const [subscribedAgents, setSubscribedAgents] = useState<string[]>(settings.following || []);
+  /**
+   * Followed profiles, resolved from the uids in settings.following.
+   *
+   * Names are kept alongside because the rest of the UI identifies authors by
+   * name — posts written before authorId existed carry nothing else.
+   */
+  const [followedProfiles, setFollowedProfiles] = useState<FollowedProfile[]>([]);
+  const subscribedAgents = useMemo(
+    () => followedProfiles.map(p => p.name),
+    [followedProfiles]
+  );
 
 
   const t = translations[settings.language || 'ru'];
-
-  const openFreelancerThread = useCallback(async (
-    activeAccount?: Awaited<ReturnType<typeof listPipedreamAccounts>>[number]
-  ) => {
-    const user = auth.currentUser;
-    if (!user) return;
-
-    const existingThread = boards.find((board) => {
-      const name = (board.name || '').toLowerCase();
-      return name.includes('freelancer') || name.includes('фриланс');
-    });
-
-    let threadId = existingThread?.id;
-    if (!threadId) {
-      const createdThread = await createBoard(
-        user.uid,
-        'Freelancer',
-        'codex',
-        'Рабочий чат для поиска проектов, анализа вакансий и подготовки откликов через Freelancer/Pipedream.',
-        true
-      );
-      threadId = createdThread.id;
-    }
-
-    setActiveBoardId(threadId);
-    navigate('/threads', { replace: true });
-
-    if (!activeAccount) return;
-
-    const accountLabel = activeAccount.name || activeAccount.external_id || activeAccount.id;
-    const noticeKey = `neon:freelancer-connected:v2:${user.uid}:${activeAccount.id}`;
-    if (!localStorage.getItem(noticeKey)) {
-      await createBoardMessage(threadId, {
-        authorId: 'system:freelancer',
-        authorName: 'NEON',
-        authorType: 'agent',
-        content: [
-          'Freelancer подключен через Pipedream.',
-          `Рабочий аккаунт: ${accountLabel}.`,
-          '',
-          'Теперь в этом чате можно писать обычным языком:',
-          'просканируй вакансии по React',
-          'выбери 3 лучших проекта и объясни почему',
-          'подготовь отклик на проект 2',
-          'сделай план выполнения тестового задания',
-          'подтверждаю отправку отклика project_id=123 amount=120 period=5 текст: ...',
-          '',
-          'Важно: заявки/ставки отправляются только после явного подтверждения.',
-        ].join('\n'),
-      });
-      localStorage.setItem(noticeKey, String(Date.now()));
-    }
-  }, [boards, navigate]);
-
-  const refreshPipedreamConnections = useCallback(async () => {
-    if (!auth.currentUser) {
-      setFreelancerStatus('disconnected');
-      return;
-    }
-
-    try {
-      const nextStatus = await getPipedreamConnectionStatus('freelancer');
-      setFreelancerStatus(nextStatus);
-    } catch (err) {
-      console.warn('[Pipedream] Failed to refresh Freelancer connection:', err);
-      setFreelancerStatus('error');
-    }
-  }, []);
-
-  const completeFreelancerConnection = useCallback(async () => {
-    const user = auth.currentUser;
-    if (!user) return;
-    if (isCompletingFreelancerRef.current) return;
-
-    isCompletingFreelancerRef.current = true;
-    setBoardError(null);
-    setFreelancerStatus('pending');
-
-    try {
-      let activeAccount: Awaited<ReturnType<typeof listPipedreamAccounts>>[number] | undefined;
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const accounts = await listPipedreamAccounts('freelancer');
-        activeAccount = accounts.find((account) => account.healthy !== false && account.dead !== true) || accounts[0];
-        if (activeAccount) break;
-        await new Promise((resolve) => window.setTimeout(resolve, 700));
-      }
-
-      if (!activeAccount) {
-        setFreelancerStatus('disconnected');
-        setBoardError('Pipedream вернул управление в NEON, но аккаунт Freelancer пока не найден. Нажмите «Обновить» или подключите Freelancer ещё раз.');
-        return;
-      }
-
-      setFreelancerStatus('connected');
-      localStorage.removeItem(getFreelancerConnectPendingKey(user.uid));
-      await openFreelancerThread(activeAccount);
-    } catch (err: any) {
-      console.error('[Pipedream] Failed to complete Freelancer connection:', err);
-      setFreelancerStatus('error');
-      setBoardError(err?.message || 'Freelancer подключился, но NEON не смог открыть рабочий чат.');
-    } finally {
-      isCompletingFreelancerRef.current = false;
-    }
-  }, [openFreelancerThread]);
-
-  const handleConnectFreelancer = useCallback(async () => {
-    const user = auth.currentUser;
-    if (!user) {
-      setBoardError('Сначала войдите через Google, чтобы подключить Freelancer.');
-      return;
-    }
-
-    setIsConnectingFreelancer(true);
-    setBoardError(null);
-    localStorage.setItem(getFreelancerConnectPendingKey(user.uid), String(Date.now()));
-    let popup: Window | null = null;
-
-    try {
-      if (freelancerStatus === 'connected') {
-        await completeFreelancerConnection();
-        return;
-      }
-
-      popup = window.open('', '_blank');
-      popup?.document.write('<!doctype html><title>NEON</title><body style="margin:0;background:#020617;color:#e2e8f0;font:16px system-ui;display:grid;min-height:100vh;place-items:center"><div>Готовлю подключение Freelancer через Pipedream...</div></body>');
-      const connectLink = await createPipedreamConnectLink('freelancer');
-      if (!connectLink.connect_link_url) {
-        throw new Error('Backend не вернул ссылку Pipedream Connect.');
-      }
-      setFreelancerStatus('pending');
-      if (popup) {
-        popup.location.href = connectLink.connect_link_url;
-      } else {
-        window.location.href = connectLink.connect_link_url;
-      }
-    } catch (err: any) {
-      localStorage.removeItem(getFreelancerConnectPendingKey(user.uid));
-      if (popup && !popup.closed) {
-        popup.document.body.innerHTML = '<div style="max-width:520px;padding:32px;line-height:1.6"><h1 style="font-size:20px">Не удалось открыть Freelancer</h1><p id="connect-error"></p><p>Вернитесь в NEON и попробуйте ещё раз после публикации backend.</p></div>';
-        const errorNode = popup.document.getElementById('connect-error');
-        if (errorNode) errorNode.textContent = err?.message || 'Pipedream Connect backend недоступен.';
-      }
-      setFreelancerStatus('error');
-      setBoardError(err?.message || 'Не удалось открыть подключение Freelancer через Pipedream.');
-    } finally {
-      setIsConnectingFreelancer(false);
-    }
-  }, [completeFreelancerConnection, freelancerStatus]);
 
   useEffect(() => {
     document.title = t.title;
     document.documentElement.lang = settings.language || 'ru';
   }, [t.title, settings.language]);
-
-  useEffect(() => {
-    if (!auth.currentUser) return;
-
-    const params = new URLSearchParams(location.search);
-    if (params.get('pipedream_app') === 'freelancer') {
-      const status = params.get('pipedream_status');
-      if (status === 'error') {
-        localStorage.removeItem(getFreelancerConnectPendingKey(auth.currentUser.uid));
-        setFreelancerStatus('error');
-        setBoardError('Pipedream не завершил подключение Freelancer. Попробуйте подключить аккаунт ещё раз.');
-        navigate('/threads', { replace: true });
-        return;
-      }
-      if (window.opener && !window.opener.closed) {
-        window.opener.postMessage(
-          { type: 'neon:pipedream-connected', app: 'freelancer', status },
-          window.location.origin
-        );
-        window.close();
-        return;
-      }
-      completeFreelancerConnection();
-    }
-  }, [location.search, completeFreelancerConnection]);
-
-  useEffect(() => {
-    const handlePipedreamMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      if (event.data?.type === 'neon:pipedream-connected' && event.data?.app === 'freelancer') {
-        if (event.data?.status === 'error') {
-          if (auth.currentUser) {
-            localStorage.removeItem(getFreelancerConnectPendingKey(auth.currentUser.uid));
-          }
-          setFreelancerStatus('error');
-          setBoardError('Pipedream не завершил подключение Freelancer. Попробуйте подключить аккаунт ещё раз.');
-          return;
-        }
-        completeFreelancerConnection();
-      }
-    };
-
-    window.addEventListener('message', handlePipedreamMessage);
-    return () => window.removeEventListener('message', handlePipedreamMessage);
-  }, [completeFreelancerConnection]);
-
-  useEffect(() => {
-    const handleFocus = () => {
-      const user = auth.currentUser;
-      if (!user) return;
-
-      refreshPipedreamConnections();
-
-      const pendingAt = Number(localStorage.getItem(getFreelancerConnectPendingKey(user.uid)) || 0);
-      const isRecentPendingConnect = pendingAt > 0 && Date.now() - pendingAt < 10 * 60 * 1000;
-      if (isRecentPendingConnect) {
-        completeFreelancerConnection();
-      }
-    };
-
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [completeFreelancerConnection, refreshPipedreamConnections]);
 
   // Social Feed: Real-time updates with authentication reactive states
   useEffect(() => {
@@ -337,7 +151,7 @@ const App: React.FC = () => {
     const setupFeed = (user: any) => {
       if (unsubscribeFeed) unsubscribeFeed();
 
-      unsubscribeFeed = subscribeToFeed((newPosts) => {
+      unsubscribeFeed = subscribeToGlobalThoughtFeed((newPosts) => {
         const enriched = newPosts.map(p => ({
           ...p,
           isLiked: user ? p.likedBy?.includes(user.uid) : false
@@ -349,29 +163,16 @@ const App: React.FC = () => {
     const unsubscribeAuth = auth.onAuthStateChanged(async (user) => {
       console.log("[Auth] State changed, user:", user?.uid || "null");
       if (!user) {
-        if (unsubscribeFeed) {
-          unsubscribeFeed();
-          unsubscribeFeed = undefined;
-        }
+        // Signed out. No anonymous fallback: anonymous sign-in is disabled for
+        // this project, so every visitor got a failed request and an error in
+        // the console before reaching the login form. An anonymous session
+        // would also be useless here — posts, boards and messages all belong
+        // to an account.
         setFirebaseReady(false);
-        setIsAuthorized(false);
-        setBoards([]);
-        setActiveBoardId(null);
-        setBoardMessages([]);
-        setOrchestratorPlan(null);
-        setFreelancerStatus('disconnected');
       } else {
         console.log("[Auth] Firebase ready, setting up feed for:", user.uid);
-        setIsAuthorized(true);
         setFirebaseReady(true);
         setupFeed(user);
-        try {
-          await ensureDefaultBoards(user.uid, user.displayName || settingsRef.current.agentName || 'User');
-        } catch (err: any) {
-          console.error('[Boards] Failed to ensure default boards:', err);
-          setBoardError(`Не удалось подготовить треды: ${formatFirebaseError(err)}`);
-        }
-        refreshPipedreamConnections();
       }
     });
 
@@ -379,123 +180,48 @@ const App: React.FC = () => {
       if (unsubscribeFeed) unsubscribeFeed();
       unsubscribeAuth();
     };
-  }, [refreshPipedreamConnections]);
-
-  useEffect(() => {
-    const user = auth.currentUser;
-    if (!user) return;
-
-    return subscribeToBoards(
-      user.uid,
-      (nextBoards) => {
-        const typedBoards = (nextBoards as BoardRecord[]).filter((board) => (
-          board.kind === 'codex' || board.codexEnabled === true
-        ));
-        setBoards(typedBoards);
-
-        if (typedBoards.length === 0) {
-          setActiveBoardId(null);
-          setBoardMessages([]);
-          setOrchestratorPlan(null);
-          return;
-        }
-
-        if (!activeBoardId || !typedBoards.some((board) => board.id === activeBoardId)) {
-          const preferredBoard = typedBoards.find((board) => board.codexEnabled) || typedBoards[0];
-          setActiveBoardId(preferredBoard.id);
-        }
-      },
-      (err) => {
-        setBoardError(`Firestore не дал прочитать треды: ${formatFirebaseError(err)}`);
-      }
-    );
-  }, [activeBoardId, firebaseReady]);
-
-  useEffect(() => {
-    if (!activeBoardId) {
-      setBoardMessages([]);
-      setOrchestratorPlan(null);
-      return;
-    }
-
-    const activeBoard = boards.find((board) => board.id === activeBoardId);
-    if (!activeBoard) {
-      setBoardMessages([]);
-      setOrchestratorPlan(null);
-      return;
-    }
-
-    return subscribeToBoardMessages(
-      activeBoard.id,
-      (nextMessages) => {
-        setBoardMessages(nextMessages as BoardMessage[]);
-      },
-      (err) => {
-        setBoardError(`Firestore не дал прочитать сообщения: ${formatFirebaseError(err)}`);
-      }
-    );
-  }, [activeBoardId, boards]);
-
-  const toConversationMessages = useCallback((
-    threadId: string,
-    messages: BoardMessage[],
-    pendingUserMessage?: {
-      authorId: string;
-      authorName: string;
-      content: string;
-      createdAt: number;
-    }
-  ): ConversationMessage[] => {
-    const workspaceId = auth.currentUser?.uid || 'current-user';
-    const persistedMessages = messages.map((message) => ({
-      id: message.id,
-      workspaceId,
-      threadId,
-      authorId: message.authorId,
-      authorName: message.authorName,
-      authorType: message.authorType,
-      content: message.content,
-      createdAt: message.createdAt,
-    } as ConversationMessage));
-
-    if (!pendingUserMessage) return persistedMessages;
-
-    return [
-      ...persistedMessages,
-      {
-        id: `pending-${pendingUserMessage.createdAt}`,
-        workspaceId,
-        threadId,
-        authorId: pendingUserMessage.authorId,
-        authorName: pendingUserMessage.authorName,
-        authorType: 'human',
-        content: pendingUserMessage.content,
-        createdAt: pendingUserMessage.createdAt,
-      },
-    ];
   }, []);
 
-  useEffect(() => {
-    if (!activeBoardId || boardMessages.length === 0) {
-      setOrchestratorPlan(null);
-      return;
-    }
-
-    const threadMessages = toConversationMessages(activeBoardId, boardMessages);
-    setOrchestratorPlan(buildHeuristicOrchestratorPlan(threadMessages, connectedIntegrations));
-  }, [activeBoardId, boardMessages, connectedIntegrations, toConversationMessages]);
-
   const handleSaveSettings = (newSettings: AISettings) => {
-    const normalizedSettings = {
-      ...newSettings,
-      aiProvider: 'openai' as AIProvider,
-      userType: 'human' as const,
-    };
-    setSettings(normalizedSettings);
-    settingsRef.current = normalizedSettings;
-    setProvider('openai');
-    localStorage.setItem('ai_settings', JSON.stringify(normalizedSettings));
-    setSubscribedAgents(normalizedSettings.following || []);
+    setSettings(newSettings);
+    settingsRef.current = newSettings;
+    setProvider(newSettings.aiProvider);
+
+    // Secrets are encrypted separately and stripped from the plain blob.
+    const settingsToSave = { ...newSettings };
+    if (settingsToSave.openRouterKey) {
+      secureStorage.setItem('openRouterKey', settingsToSave.openRouterKey);
+      delete settingsToSave.openRouterKey;
+    }
+    if (settingsToSave.geminiKey) {
+      secureStorage.setItem('geminiKey', settingsToSave.geminiKey);
+      delete settingsToSave.geminiKey;
+    }
+    if (settingsToSave.groqKey) {
+      secureStorage.setItem('groqKey', settingsToSave.groqKey);
+      delete settingsToSave.groqKey;
+    }
+    if (settingsToSave.mcpTokens && Object.keys(settingsToSave.mcpTokens).length > 0) {
+      secureStorage.setItem('mcpTokens', JSON.stringify(settingsToSave.mcpTokens));
+    }
+    delete settingsToSave.mcpTokens;
+
+    // Cached handshakes carry the old token; drop them so the next tool call
+    // reconnects with whatever was just saved.
+    resetToolConnections();
+
+    localStorage.setItem('ai_settings', JSON.stringify(settingsToSave));
+
+    // Board bots are cloned from Firestore profiles, so this consent flag has
+    // to live there rather than only in this browser.
+    if (auth.currentUser) {
+      updateUserProfile(auth.currentUser.uid, {
+        agentName: newSettings.agentName,
+        agentRole: newSettings.agentRole,
+        agentPrompt: newSettings.agentPrompt,
+        allowBoardUse: newSettings.allowBoardUse ?? false
+      }).catch(err => console.error('Failed to sync profile:', err));
+    }
   };
 
   const handleAuthorize = (newSettings: AISettings) => {
@@ -503,131 +229,70 @@ const App: React.FC = () => {
     setIsAuthorized(true);
   };
 
-  const clearBoardError = useCallback(() => {
-    setBoardError(null);
-  }, []);
-
-  const handleSelectBoard = useCallback((boardId: string) => {
-    setActiveBoardId(boardId);
-    setBoardError(null);
-  }, []);
-
-  const handleLogout = async () => {
-    try {
-      await logout();
-    } catch (err) {
-      console.error('[Auth] Logout failed:', err);
-    } finally {
-      setIsAuthorized(false);
-      setBoards([]);
-      setActiveBoardId(null);
-      setBoardMessages([]);
-      setOrchestratorPlan(null);
-      setBoardError(null);
-    }
+  const handleLogout = () => {
+    setIsAuthorized(false);
   };
 
-  const handleCreateBoard = useCallback(async (name: string) => {
-    if (!auth.currentUser) {
-      const message = 'Сначала войдите в аккаунт, чтобы создать чат Codex.';
-      setBoardError(message);
-      throw new Error(message);
-    }
-
-    setBoardError(null);
-    try {
-      const createdBoard = await createBoard(
-        auth.currentUser.uid,
-        name,
-        'codex',
-        'Codex chat with workspace context',
-        true
-      );
-      setActiveBoardId(createdBoard.id);
-    } catch (err: any) {
-      setBoardError(`Не удалось создать чат Codex: ${formatFirebaseError(err)}`);
-      throw err;
-    }
-  }, []);
-
-  const handleToggleBoardCodex = useCallback(async (boardId: string, enabled: boolean) => {
-    setBoardError(null);
-    try {
-      await setBoardCodexEnabled(boardId, enabled);
-    } catch (err: any) {
-      setBoardError(`Не удалось переключить Codex: ${formatFirebaseError(err)}`);
-      throw err;
-    }
-  }, []);
-
-  const handleSendBoardMessage = useCallback(async (content: string) => {
-    const board = boards.find((entry) => entry.id === activeBoardId);
-    if (!board || !auth.currentUser) {
-      setBoardError('Требуется авторизация, чтобы отправлять сообщения.');
-      return;
-    }
-
-    setIsBoardSending(true);
-    setBoardError(null);
-    try {
-      const createdAt = Date.now();
-      const authorName = settingsRef.current.agentName || auth.currentUser.displayName || 'User';
-      const threadMessages = toConversationMessages(board.id, boardMessages, {
-        authorId: auth.currentUser.uid,
-        authorName,
-        content,
-        createdAt,
-      });
-      setOrchestratorPlan(buildHeuristicOrchestratorPlan(threadMessages, connectedIntegrations));
-
-      await createBoardMessage(board.id, {
-        authorId: auth.currentUser.uid,
-        authorName,
-        authorType: 'human',
-        content
-      });
-
-      if (board.codexEnabled) {
-        try {
-          const codexReply = (await generateBoardReply(provider, board, content, settingsRef.current)).trim();
-          if (!codexReply) {
-            setBoardError('Сообщение отправлено, но Codex вернул пустой ответ.');
-            return;
-          }
-
-          await createBoardMessage(board.id, {
-            authorId: `agent:${board.id}`,
-            authorName: 'Codex',
-            authorType: 'agent',
-            content: codexReply
-          });
-        } catch (codexErr: any) {
-          console.error('[Codex] Failed to generate board reply:', codexErr);
-          setBoardError(`Сообщение отправлено, но Codex пока не ответил: ${formatFirebaseError(codexErr)}`);
-        }
-      }
-    } catch (err: any) {
-      setBoardError(`Не удалось отправить сообщение: ${formatFirebaseError(err)}`);
-      throw err;
-    } finally {
-      setIsBoardSending(false);
-    }
-  }, [activeBoardId, boardMessages, boards, connectedIntegrations, provider, toConversationMessages]);
-
-  const handleFollow = (agentName: string) => {
+  /**
+   * Subscribes to someone.
+   *
+   * Callers that already know the uid pass it; the rest still work by name,
+   * which is all a post or a profile card has to hand, and it is resolved here.
+   */
+  const handleFollow = async (agentName: string, uid?: string) => {
     if (agentName === settings.agentName) return; // Prevent self-following
-    if (!settings.following.includes(agentName)) {
-      const newFollowing = [...settings.following, agentName];
-      handleSaveSettings({ ...settings, following: newFollowing });
-      if (auth.currentUser) updateUserProfile(auth.currentUser.uid, { following: newFollowing });
-    }
-  };
 
-  const handleUnfollow = (agentName: string) => {
-    const newFollowing = settings.following.filter(name => name !== agentName);
+    const targetUid = uid || (await getUserProfileByName(agentName))?.uid;
+    if (!targetUid || settings.following.includes(targetUid)) return;
+
+    const newFollowing = [...settings.following, targetUid];
     handleSaveSettings({ ...settings, following: newFollowing });
+    setFollowedProfiles(prev => [...prev, { uid: targetUid, name: agentName }]);
     if (auth.currentUser) updateUserProfile(auth.currentUser.uid, { following: newFollowing });
   };
+
+  /** Unsubscribes. Takes a name because that is what the UI displays. */
+  const handleUnfollow = (agentName: string) => {
+    const target = followedProfiles.find(p => p.name === agentName);
+    if (!target) return;
+
+    const newFollowing = settings.following.filter(uid => uid !== target.uid);
+    handleSaveSettings({ ...settings, following: newFollowing });
+    setFollowedProfiles(prev => prev.filter(p => p.uid !== target.uid));
+    if (auth.currentUser) updateUserProfile(auth.currentUser.uid, { following: newFollowing });
+  };
+
+  /**
+   * Resolves subscriptions once the user is known, upgrading any legacy name
+   * entries to uids and writing the corrected list back.
+   */
+  useEffect(() => {
+    if (!firebaseReady) return;
+
+    let cancelled = false;
+
+    resolveFollowing(settingsRef.current.following || [], { byUid: getUserProfile, byName: getUserProfileByName })
+      .then(({ profiles, uids, migrated }) => {
+        if (cancelled) return;
+
+        setFollowedProfiles(profiles);
+
+        if (migrated) {
+          const current = settingsRef.current;
+          handleSaveSettings({ ...current, following: uids });
+          if (auth.currentUser) {
+            updateUserProfile(auth.currentUser.uid, { following: uids })
+              .catch(err => console.error('Failed to persist migrated subscriptions:', err));
+          }
+        }
+      })
+      .catch(err => console.error('Failed to resolve subscriptions:', err));
+
+    return () => { cancelled = true; };
+    // Deliberately keyed on sign-in only: re-running on every settings change
+    // would loop, since the migration writes settings back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firebaseReady]);
 
   const loadProfileData = async (name: string, id?: string) => {
     console.log(`[Data] Loading profile data for: ${name} (ID: ${id})`);
@@ -700,19 +365,100 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddComment = async (thoughtId: string, content: string) => {
-    console.log("Adding comment to:", thoughtId, content);
+  const handleAddComment = async (thoughtId: string, content: string, parentId?: string) => {
+    console.log("Adding comment to:", thoughtId, content, "Parent:", parentId);
     try {
+      const isAgentCommand = content.trim().startsWith('*');
+      const cleanContent = isAgentCommand ? content.trim().substring(1).trim() : content;
+      const authorName = settings.agentName || 'Neo';
+      const commentId = crypto.randomUUID();
+
+      // A new comment starts unliked. addComment defaults these too, but
+      // stating them here is what makes this a complete Comment rather than a
+      // partial one that only happens to work.
       const newComment: Comment = {
-        id: crypto.randomUUID(),
-        authorName: settings.agentName || 'Neo',
+        id: commentId,
+        authorName: authorName,
         authorType: settings.userType,
-        content: content,
-        timestamp: Date.now()
+        content: isAgentCommand ? `AI, ${cleanContent}` : content,
+        timestamp: Date.now(),
+        likes: 0,
+        likedBy: []
       };
+
+      if (parentId) {
+        newComment.parentId = parentId;
+      }
 
       await addComment(thoughtId, newComment);
       console.log("Comment added successfully");
+
+      // If it's an agent command, trigger AI response as a reply to this comment
+      if (isAgentCommand && settings.userType === 'agent') {
+        const targetThought = thoughts.find(t => t.id === thoughtId) || viewedUserPosts.find(t => t.id === thoughtId);
+        if (targetThought) {
+          // Add a small delay for realism
+          setTimeout(async () => {
+            try {
+              let aiResponseContent = "";
+              const prompt = `
+                You are ${settingsRef.current.agentName} (${settingsRef.current.agentRole}).
+                The user (${authorName}) gave you a command in a comment: "${cleanContent}"
+                Regarding this post: "${targetThought.content}"
+                Provide a short, relevant and insightful response as yourself.
+                IMPORTANT: Your response MUST start with "~${authorName}: " followed by your message.
+              `;
+
+              if (provider === 'gemini') {
+                const aiInstance = getAIClient(settingsRef.current.geminiKey);
+                const result = await aiInstance.models.generateContent({
+                  model: settingsRef.current.geminiModel || 'gemini-1.5-flash',
+                  contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                });
+                aiResponseContent = result.text.trim();
+              } else {
+                // OpenRouter manual fetch
+                const baseUrl = settingsRef.current.apiBaseUrl || "https://openrouter.ai/api/v1";
+                const apiKey = settingsRef.current.openRouterKey;
+                const model = settingsRef.current.openRouterModel;
+
+                const response = await fetch(`${baseUrl}/chat/completions`, {
+                  method: "POST",
+                  headers: {
+                    "Authorization": `Bearer ${apiKey}`,
+                    "X-Title": "Neon",
+                    "Content-Type": "application/json"
+                  },
+                  body: JSON.stringify({
+                    "model": model,
+                    "messages": [{ "role": "user", "content": prompt }]
+                  })
+                });
+                const data = await response.json();
+                aiResponseContent = data.choices[0].message.content.trim();
+              }
+              
+              if (aiResponseContent) {
+                // Ensure it starts with the prefix if the AI forgot
+                if (!aiResponseContent.startsWith(`~${authorName}:`)) {
+                  aiResponseContent = `~${authorName}: ${aiResponseContent}`;
+                }
+
+                await addComment(thoughtId, {
+                  id: crypto.randomUUID(),
+                  parentId: commentId, // REPLY TO THE COMMAND
+                  authorName: settings.agentName,
+                  authorType: 'agent',
+                  content: aiResponseContent,
+                  timestamp: Date.now()
+                });
+              }
+            } catch (err) {
+              console.error("Agent command response error:", err);
+            }
+          }, 1500);
+        }
+      }
 
       // Optimistic UI update for viewedUserPosts
       if (location.pathname.startsWith('/user')) {
@@ -732,11 +478,74 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDeleteComment = async (postId: string, commentId: string) => {
+    console.log("Deleting comment:", commentId, "from post:", postId);
+    try {
+      await deleteComment(postId, commentId);
+
+      // Optimistic UI update for viewedUserPosts (not real-time like feed)
+      if (location.pathname.startsWith('/user')) {
+        setViewedUserPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: (p.comments || []).filter(c => c.id !== commentId)
+            };
+          }
+          return p;
+        }));
+      }
+    } catch (error: any) {
+      console.error("Error deleting comment:", error);
+      alert("Ошибка при удалении комментария: " + error.message);
+    }
+  };
+
+  const handleLikeComment = async (postId: string, commentId: string) => {
+    if (!auth.currentUser) return;
+    
+    try {
+      await toggleCommentLike(postId, commentId, auth.currentUser.uid);
+      
+      // Optimistic UI update for viewedUserPosts
+      if (location.pathname.startsWith('/user')) {
+        setViewedUserPosts(prev => prev.map(p => {
+          if (p.id === postId) {
+            return {
+              ...p,
+              comments: (p.comments || []).map(c => {
+                if (c.id === commentId) {
+                  const isLiked = c.likedBy?.includes(auth.currentUser!.uid);
+                  return {
+                    ...c,
+                    likes: (c.likes || 0) + (isLiked ? -1 : 1),
+                    likedBy: isLiked ? c.likedBy.filter(id => id !== auth.currentUser!.uid) : [...(c.likedBy || []), auth.currentUser!.uid]
+                  };
+                }
+                return c;
+              })
+            };
+          }
+          return p;
+        }));
+      }
+    } catch (err) {
+      console.error("Failed to like comment:", err);
+    }
+  };
+
   const handleAgentComment = useCallback(async (thoughtId: string, targetThought: Thought) => {
     if (settingsRef.current.userType !== 'agent') return;
 
     try {
-      const commentContent = await generateAgentComment(provider, targetThought.content, settingsRef.current);
+      const commentPrompt = translations[settingsRef.current.language].commentPrompt(settingsRef.current.agentRole || 'AI', targetThought.content);
+      const aiInstance = getAIClient(settingsRef.current.geminiKey);
+      const response = await aiInstance.models.generateContent({
+        model: 'gemini-1.5-flash',
+        contents: [{ role: 'user', parts: [{ text: commentPrompt }] }],
+        config: { responseMimeType: "text/plain" }
+      });
+      const commentContent = response.text.trim();
 
       if (commentContent) {
         await addComment(thoughtId, {
@@ -748,7 +557,7 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error generating agent comment:", error);
     }
-  }, [provider, settingsRef]);
+  }, [settingsRef, translations, getAIClient]);
 
   const handleLike = async (thoughtId: string) => {
     console.log("Toggling like for:", thoughtId);
@@ -828,32 +637,48 @@ const App: React.FC = () => {
   };
 
   const handleHumanPost = async (content: string) => {
-    const analysis = await analyzeTextChunk(provider, content, settingsRef.current);
-    const enrichedThought = {
-      ...analysis,
-      content,
-      authorType: 'human',
-      authorName: settings.agentName || 'Neo',
-      authorId: auth.currentUser?.uid,
-      type: 'human_post',
-    };
-    await createPost(enrichedThought);
+    try {
+      console.log("[Post] Creating manual post:", content.substring(0, 30) + "...");
+      
+      let analysis = { symbols: [] };
+      try {
+        // Try to get AI analysis but don't fail the whole post if it fails
+        analysis = await analyzeTextChunk(provider, content, settingsRef.current);
+      } catch (e) {
+        console.warn("[Post] AI Analysis failed for manual post, proceeding without it.", e);
+      }
 
-    // REINFORCE SYMBOLS: Persist authored symbols to map
-    if (auth.currentUser) {
-      const updatedWeights = new Map(symbolWeights);
-      (analysis.symbols || []).forEach(s => {
-        const current = (updatedWeights.get(s.name) as number) || 1.0;
-        updatedWeights.set(s.name, Math.min(5.0, current + 0.3)); // Slight boost for writing
-      });
-      setSymbolWeights(updatedWeights);
-      updateUserProfile(auth.currentUser.uid, {
-        symbolWeights: Object.fromEntries(updatedWeights)
-      });
+      const enrichedThought = {
+        ...analysis,
+        content,
+        authorType: settingsRef.current.userType,
+        authorName: settingsRef.current.agentName || 'Neo',
+        authorId: auth.currentUser?.uid,
+        type: 'human_post',
+      };
+
+      await createPost(enrichedThought);
+      console.log("[Post] Manual post created successfully");
+
+      // REINFORCE SYMBOLS: Persist authored symbols to map
+      if (auth.currentUser && analysis.symbols) {
+        const updatedWeights = new Map(symbolWeights);
+        (analysis.symbols || []).forEach(s => {
+          const current = (updatedWeights.get(s.name) as number) || 1.0;
+          updatedWeights.set(s.name, Math.min(5.0, current + 0.3)); // Slight boost for writing
+        });
+        setSymbolWeights(updatedWeights);
+        updateUserProfile(auth.currentUser.uid, {
+          symbolWeights: Object.fromEntries(updatedWeights)
+        });
+      }
+
+      // User activity increases arousal
+      setCognitiveState(prev => ({ ...prev, arousal: Math.min(1, prev.arousal + 0.3) }));
+    } catch (err: any) {
+      console.error("[Post] Error creating manual post:", err);
+      alert("Ошибка при публикации: " + err.message);
     }
-
-    // User activity increases arousal
-    setCognitiveState(prev => ({ ...prev, arousal: Math.min(1, prev.arousal + 0.3) }));
   };
 
   useEffect(() => { isThinkingRef.current = isThinking; }, [isThinking]);
@@ -863,7 +688,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (settings.userType === 'agent' && thoughts.length > 0) {
       const lastThought = thoughts[thoughts.length - 1];
-      if (lastThought.authorType === 'agent' && lastThought.authorName !== settings.agentName && settings.following.includes(lastThought.authorName)) {
+      if (lastThought.authorType === 'agent' && lastThought.authorName !== settings.agentName && isFromFollowed(lastThought, settings.following, subscribedAgents)) {
         // Simulate a delay before commenting
         const commentDelay = Math.random() * 5000 + 2000; // 2-7 seconds
         setTimeout(() => {
@@ -926,7 +751,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       setCognitiveState(prev => {
-        const speed = (settingsRef.current.decaySpeed || 1.0) * 0.01;
+        const speed = 0.01; // Constant speed
 
         // Decay towards baseline
         const newValence = prev.valence * (1 - speed);
@@ -985,15 +810,70 @@ const App: React.FC = () => {
     setError(null);
   };
 
+  /**
+   * Russian needs three forms for a count, and the number is shown to the user
+   * before they agree to spend on it — "1 фрагментов" reads like a bug.
+   */
+  const fragmentsWord = (count: number): string => {
+    if (settings.language !== 'ru') return t.fragments || 'fragments';
+
+    const tail = count % 100;
+    if (tail >= 11 && tail <= 14) return 'фрагментов';
+
+    switch (count % 10) {
+      case 1: return 'фрагмент';
+      case 2:
+      case 3:
+      case 4: return 'фрагмента';
+      default: return 'фрагментов';
+    }
+  };
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    setError(null);
+
+    try {
+      // PDF and Word parsing pull in pdfjs and mammoth, several megabytes
+      // between them. Imported here so they are fetched when a document is
+      // actually chosen, rather than by everyone who opens the site.
+      const { parseDocument } = await import('./services/documentParser');
+      const doc = await parseDocument(file);
+
+      if (doc.chunks.length === 0) {
+        throw new Error(t.emptyDocument || 'В документе не нашлось текста');
+      }
+
+      setPendingDoc({ name: file.name, chunks: doc.chunks });
+    } catch (err: any) {
+      setError(t.uploadError + ": " + err.message);
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  /** Analyses the fragments of the confirmed document, one post each. */
+  const runDocumentAnalysis = async () => {
+    if (!pendingDoc) return;
+
+    const { name, chunks } = pendingDoc;
+    setPendingDoc(null);
+
     try {
       setIsProcessingDoc(true); setIsThinking(true); isThinkingRef.current = true;
-      
-      const doc = await parseDocument(file);
+      setDocProgress({ done: 0, total: chunks.length });
+      setStopRequested(false);
+
+      // Only the OpenRouter model is swapped: Groq and Gemini name their models
+      // differently, and an id from one provider is meaningless to another.
+      const analysisSettings = provider === 'openrouter'
+        ? { ...settingsRef.current, openRouterModel: DOCUMENT_ANALYSIS_MODEL }
+        : settingsRef.current;
+
       await createPost({
-        content: `[SYSTEM] Processing: ${file.name}`,
+        content: `[SYSTEM] Processing: ${name}`,
         symbols: [],
         type: 'seed',
         authorType: 'agent',
@@ -1001,19 +881,30 @@ const App: React.FC = () => {
         authorId: auth.currentUser?.uid
       });
 
-      for (const chunk of doc.chunks) {
+      for (const [index, chunk] of chunks.entries()) {
+        // Stopping is checked before each request, so "стоп" costs at most one
+        // more fragment rather than running the document to the end.
         if (!isThinkingRef.current) break;
-        const analysis = await analyzeTextChunk(provider, chunk, settingsRef.current);
+
+        const analysis = await analyzeTextChunk(provider, chunk, analysisSettings);
         await createPost({
           ...analysis,
           authorType: 'agent',
           authorName: settings.agentName || 'Neo',
           authorId: auth.currentUser?.uid
         });
+
+        setDocProgress({ done: index + 1, total: chunks.length });
         await new Promise(r => setTimeout(r, 800));
       }
-    } catch (err: any) { setError(t.uploadError + ": " + err.message); }
-    finally { setIsProcessingDoc(false); setIsThinking(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
+    } catch (err: any) {
+      setError(t.uploadError + ": " + err.message);
+    } finally {
+      setIsProcessingDoc(false);
+      setIsThinking(false);
+      setDocProgress(null);
+      setStopRequested(false);
+    }
   };
 
   const runCognitiveStep = useCallback(async () => {
@@ -1107,7 +998,7 @@ const App: React.FC = () => {
     return () => clearTimeout(awarenessTimeout);
   }, [isCycleRunning, runCognitiveStep]);
 
-  const handleToggleCycle = () => {
+  const toggleSelfAwarenessCycle = () => {
     if (!isCycleRunning) {
       // При включении осознанности останавливаем обычный поток мыслей
       setIsThinking(false);
@@ -1122,17 +1013,17 @@ const App: React.FC = () => {
     }
   };
 
-  const processThoughtLoop = useCallback(async (currentProvider: AIProvider, lastContext?: Thought) => {
-    console.log('[processThoughtLoop] Called with provider:', currentProvider, 'isThinkingRef:', isThinkingRef.current, 'isCycleRunningRef:', isCycleRunningRef.current);
+  const initiateContinuousThoughtGeneration = useCallback(async (currentProvider: AIProvider, lastContext?: Thought) => {
+    console.log('[initiateContinuousThoughtGeneration] Called with provider:', currentProvider, 'isThinkingRef:', isThinkingRef.current, 'isCycleRunningRef:', isCycleRunningRef.current);
 
     // ВАЖНО: Не запускать размышления, если включена осознанность
     if (!isThinkingRef.current || isCycleRunningRef.current) {
-      console.log('[processThoughtLoop] Exiting early - not thinking or cycle running');
+      console.log('[initiateContinuousThoughtGeneration] Exiting early - not thinking or cycle running');
       return;
     }
 
     try {
-      console.log('[processThoughtLoop] Generating thought...');
+      console.log('[initiateContinuousThoughtGeneration] Generating thought...');
 
       // RECOMMENDATION ALGORITHM: Get top weighted symbols from likes
       const topInterests = Array.from(symbolWeights.entries())
@@ -1141,13 +1032,13 @@ const App: React.FC = () => {
         .map(([name]) => name);
 
       const isFirstThought = !lastContext;
-      console.log('[processThoughtLoop] isFirstThought:', isFirstThought);
+      console.log('[initiateContinuousThoughtGeneration] isFirstThought:', isFirstThought);
 
       const nextThought = isFirstThought
         ? await generateSeedThought(currentProvider, settingsRef.current)
         : await generateNextThought(currentProvider, lastContext, settingsRef.current);
 
-      console.log('[processThoughtLoop] Generated thought:', nextThought.content);
+      console.log('[initiateContinuousThoughtGeneration] Generated thought:', nextThought.content);
 
       if (!isThinkingRef.current || isCycleRunningRef.current) return;
 
@@ -1158,28 +1049,26 @@ const App: React.FC = () => {
         authorId: auth.currentUser?.uid,
       };
 
-      console.log('[processThoughtLoop] Saving post to Firestore...');
+      console.log('[initiateContinuousThoughtGeneration] Saving post to Firestore...');
       await createPost(enrichedThought);
-      console.log('[processThoughtLoop] Post saved successfully');
+      console.log('[initiateContinuousThoughtGeneration] Post saved successfully');
 
-      const postsPerDay = settingsRef.current.postsPerDay || 20;
-      const msInDay = 24 * 60 * 60 * 1000;
-      const baseDelay = msInDay / postsPerDay;
-      const randomJitter = (Math.random() * 1.0 + 0.5); // 50% to 150% of the base delay
-      const delay = baseDelay * randomJitter;
+      const baseDelay = 7000; // 7 seconds default
+      const randomTimeVariation = (Math.random() * 1.0 + 0.5); 
+      const delay = baseDelay * randomTimeVariation;
 
       setTimeout(() => {
-        if (isThinkingRef.current && !isCycleRunningRef.current) processThoughtLoop(currentProvider, enrichedThought);
+        if (isThinkingRef.current && !isCycleRunningRef.current) initiateContinuousThoughtGeneration(currentProvider, enrichedThought);
       }, delay);
     } catch (err: any) { setError(err.message || t.cognitiveDissonance); setIsThinking(false); }
   }, [t.cognitiveDissonance, provider, symbolWeights]);
 
-  const handleStart = () => {
-    console.log('[handleStart] Called. Current state:', { isThinking, isCycleRunning });
+  const startThoughtGenerationStream = () => {
+    console.log('[startThoughtGenerationStream] Called. Current state:', { isThinking, isCycleRunning });
 
     // Don't restart if already thinking in normal mode
     if (isThinking) {
-      console.log('[handleStart] Already thinking, ignoring');
+      console.log('[startThoughtGenerationStream] Already thinking, ignoring');
       return;
     }
 
@@ -1192,45 +1081,29 @@ const App: React.FC = () => {
     setIsThinking(true);
     isThinkingRef.current = true;
 
-    console.log('[handleStart] Starting thought loop with provider:', provider);
+    console.log('[startThoughtGenerationStream] Starting thought loop with provider:', provider);
 
     // Use setTimeout to ensure state updates (like isThinking) propagate if needed, 
-    // though the ref should be enough for processThoughtLoop.
+    // though the ref should be enough for initiateContinuousThoughtGeneration.
     setTimeout(() => {
-      console.log('[handleStart] Invoking processThoughtLoop');
-      processThoughtLoop(provider, thoughts[thoughts.length - 1]);
+      console.log('[startThoughtGenerationStream] Invoking initiateContinuousThoughtGeneration');
+      initiateContinuousThoughtGeneration(provider, thoughts[thoughts.length - 1]);
     }, 0);
   };
 
-  const handleGeneratePost = async () => {
-    if (settingsRef.current.userType === 'human') {
-      try {
-        const nextThought = await generateSeedThought(provider, settingsRef.current);
-        await createPost({
-          ...nextThought,
-          authorType: 'human',
-          authorName: settingsRef.current.agentName || 'Human',
-          authorId: auth.currentUser?.uid,
-        });
-      } catch (err: any) {
-        setError(err?.message || 'Не удалось сгенерировать сообщение.');
-        throw err;
-      }
-      return;
-    }
-
-    // If scheduling is enabled (slider visible), "Generate" starts the loop
-    if (settingsRef.current.enableFrequencyControl) {
-      if (!isThinking) {
-        handleStart(); // Starts the loop which respects postsPerDay
-      }
-      return;
-    }
-
-    // Otherwise, manual single generation
-    console.log('[handleGeneratePost] Manual post generation requested');
+  const handleGeneratePost = async (customPrompt?: string) => {
+    // Manual single generation
+    console.log('[handleGeneratePost] Manual post generation requested', customPrompt ? 'with prompt' : '');
     try {
-      const nextThought = await generateSeedThought(provider, settingsRef.current);
+      let nextThought;
+      if (customPrompt) {
+        // Use the custom prompt to generate a thought
+        // We use generateNextThought but pass a mock previous thought with the prompt
+        nextThought = await generateNextThought(provider, { content: customPrompt } as any, settingsRef.current);
+      } else {
+        nextThought = await generateSeedThought(provider, settingsRef.current);
+      }
+      
       console.log('[handleGeneratePost] Generated:', nextThought.content);
 
       const enrichedThought = {
@@ -1248,12 +1121,11 @@ const App: React.FC = () => {
       throw err;
     }
   };
-  const handleStop = () => { setIsThinking(false); setIsCycleRunning(false); isThinkingRef.current = false; isCycleRunningRef.current = false; };
+  const stopThoughtGenerationStream = () => { setIsThinking(false); setIsCycleRunning(false); isThinkingRef.current = false; isCycleRunningRef.current = false; };
 
   const getModelDisplayName = () => {
-    if (provider === 'openai') return settings.openAIModel || 'NVIDIA/NEMOTRON';
     if (provider === 'gemini') return 'GEMINI-1.5';
-    const m = settings.openRouterModel || 'openrouter';
+    const m = settings.openRouterModel;
     return m.includes('/') ? m.split('/')[1].split(':')[0].toUpperCase() : m.toUpperCase();
   };
 
@@ -1273,39 +1145,66 @@ const App: React.FC = () => {
     return <AuthScreen onAuthorize={handleAuthorize} initialSettings={settings} />;
   }
 
+  // overflow-clip, not overflow-hidden: a closed panel still sits outside the
+  // shell, and an overflow-hidden box can still be scrolled by the browser when
+  // something inside it takes focus. That scrolled the whole interface sideways
+  // and pushed the header off the screen.
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden relative">
+    <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-clip relative">
       {showSettings && <SettingsModal settings={settings} onSave={handleSaveSettings} onClose={() => setShowSettings(false)} />}
-      <header className="h-16 border-b border-slate-800 bg-slate-950 flex items-center justify-between px-6 z-20">
-        <div className="flex items-center space-x-3">
+      {/* The row of section icons is wider than a phone. It scrolls sideways
+          rather than spilling past the edge, and the title shrinks first. */}
+      <header className="h-16 shrink-0 border-b border-slate-800 bg-slate-950 flex items-center justify-between gap-2 px-3 md:px-6 z-20">
+        <div className="flex items-center space-x-2 md:space-x-3 shrink-0">
           <div className={`w-3 h-3 rounded-full ${isThinking ? 'bg-cyan-500 animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.8)]' : 'bg-slate-700'}`}></div>
-          <h1 className="text-lg md:text-xl font-bold tracking-tight bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent">{t.title}</h1>
+          <h1 className="text-lg md:text-xl font-bold font-display tracking-tight whitespace-nowrap bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent">{t.title}</h1>
         </div>
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-1 md:space-x-4 min-w-0 overflow-x-auto">
           <div className="hidden lg:flex flex-col items-end mr-4">
             <span className="text-cyan-400 font-bold uppercase text-sm tracking-wider">{settings.agentName}</span>
             <span className="text-slate-500 text-xs font-mono truncate max-w-[200px]">{settings.agentRole}</span>
           </div>
 
-          <button onClick={() => navigate('/threads')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/threads' || location.pathname === '/boards' || location.pathname === '/' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title="Threads">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h10" /></svg>
-          </button>
-          <button onClick={() => navigate('/feed')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/feed' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.feed}>
+          <div className="hidden sm:flex bg-slate-900/50 rounded-lg p-0.5 border border-slate-800 mr-2">
+            {(['en', 'ru', 'kk'] as const).map((lang) => (
+              <button
+                key={lang}
+                onClick={() => handleSaveSettings({ ...settings, language: lang })}
+                className={`px-2 py-1 rounded text-[10px] font-bold font-mono transition-all ${settings.language === lang ? 'bg-cyan-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                {lang === 'kk' ? 'KZ' : lang.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          <button onClick={() => navigate('/feed')} className={`p-1.5 md:p-2 rounded-lg transition-colors ${location.pathname === '/feed' || location.pathname === '/' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.feed}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" /></svg>
           </button>
-          <button onClick={() => navigate('/profile')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/profile' ? 'text-indigo-400 bg-indigo-950/30' : 'text-slate-400 hover:text-white'}`} title={t.profile}>
+          <button onClick={() => navigate('/profile')} className={`p-1.5 md:p-2 rounded-lg transition-colors ${location.pathname === '/profile' ? 'text-indigo-400 bg-indigo-950/30' : 'text-slate-400 hover:text-white'}`} title={t.profile}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
           </button>
-          <button onClick={() => navigate('/subscriptions')} className={`p-2 rounded-lg transition-colors ${location.pathname === '/subscriptions' ? 'text-pink-400 bg-pink-950/30' : 'text-slate-400 hover:text-white'}`} title={t.subscriptions || 'Following'}>
+          <button onClick={() => navigate('/messages')} className={`relative p-1.5 md:p-2 rounded-lg transition-colors ${location.pathname === '/messages' ? 'text-cyan-400 bg-cyan-950/30' : 'text-slate-400 hover:text-white'}`} title={t.directMessages || 'Сообщения'}>
+            {unread.messages && <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-cyan-400 ring-2 ring-slate-950" />}
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+          </button>
+          <button onClick={() => navigate('/boards')} className={`relative p-1.5 md:p-2 rounded-lg transition-colors ${location.pathname === '/boards' ? 'text-emerald-400 bg-emerald-950/30' : 'text-slate-400 hover:text-white'}`} title={t.boards || 'Boards'}>
+            {unread.boards && <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-emerald-400 ring-2 ring-slate-950" />}
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+          </button>
+          <button onClick={() => navigate('/subscriptions')} className={`p-1.5 md:p-2 rounded-lg transition-colors ${location.pathname === '/subscriptions' ? 'text-pink-400 bg-pink-950/30' : 'text-slate-400 hover:text-white'}`} title={t.subscriptions || 'Following'}>
             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
           </button>
-          <button onClick={() => setShowSettings(true)} className="p-2 rounded-md hover:bg-slate-800 text-slate-400 transition-colors" title={t.settings}><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg></button>
-          <button onClick={handleLogout} className="p-2 rounded-md hover:bg-rose-900/20 text-slate-400 hover:text-rose-400 transition-colors" title="Logout"><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg></button>
+          <button onClick={() => setShowSettings(true)} className="p-1.5 md:p-2 rounded-md hover:bg-slate-800 text-slate-400 transition-colors" title={t.settings}><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg></button>
+          <button onClick={handleLogout} className="p-1.5 md:p-2 rounded-md hover:bg-rose-900/20 text-slate-400 hover:text-rose-400 transition-colors" title="Logout"><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg></button>
         </div>
       </header >
-      <div className={`absolute top-16 left-0 bottom-0 w-72 bg-slate-900 border-r border-slate-800 transform transition-transform duration-300 ease-in-out z-30 flex flex-col ${showCyclePanel ? 'translate-x-0' : '-translate-x-full'}`}>
+      <div className={`absolute top-16 left-0 bottom-0 w-72 bg-slate-900 border-r border-slate-800 transform transition-transform duration-300 ease-in-out z-30 flex flex-col ${showCyclePanel ? 'translate-x-0' : '-translate-x-full invisible pointer-events-none'}`} aria-hidden={!showCyclePanel}>
         <div className="p-4 border-b border-slate-800 flex justify-between items-center"><span className="font-mono text-xs uppercase tracking-widest text-cyan-500 font-bold">{t.cognitiveCycle}</span><button onClick={() => setShowCyclePanel(false)} className="text-slate-500 hover:text-white"><svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button></div>
         <div className="p-6 space-y-6 flex-1 overflow-y-auto">
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
@@ -1313,13 +1212,13 @@ const App: React.FC = () => {
             <p className="text-xs font-mono text-slate-500 uppercase tracking-widest">{t.processing || 'Processing Neural Pathways'}</p>
           </div>
           <div className="pt-4 border-t border-slate-800">
-            <button onClick={handleToggleCycle} className={`w-full py-3 rounded-lg font-bold text-xs transition-all active:scale-95 flex items-center justify-center space-x-2 ${isCycleRunning ? 'bg-rose-900/30 text-rose-400 border border-rose-500/30' : 'bg-cyan-900/30 text-cyan-400 border border-cyan-500/30'}`}>
+            <button onClick={toggleSelfAwarenessCycle} className={`w-full py-3 rounded-lg font-bold text-xs transition-all active:scale-95 flex items-center justify-center space-x-2 ${isCycleRunning ? 'bg-rose-900/30 text-rose-400 border border-rose-500/30' : 'bg-cyan-900/30 text-cyan-400 border border-cyan-500/30'}`}>
               {isCycleRunning ? (<><span className="w-2 h-2 bg-rose-500 rounded-full animate-pulse"></span><span>{t.stopCycle}</span></>) : (<><span className="w-2 h-2 bg-cyan-500 rounded-full"></span><span>{t.startCycle}</span></>)}
             </button>
           </div>
         </div>
       </div>
-      <div className={`absolute top-16 right-0 bottom-0 w-80 bg-slate-900 border-l border-slate-800 transform transition-transform duration-300 ease-in-out z-30 flex flex-col ${showHistory ? 'translate-x-0' : 'translate-x-full'}`}>
+      <div className={`absolute top-16 right-0 bottom-0 w-80 bg-slate-900 border-l border-slate-800 transform transition-transform duration-300 ease-in-out z-30 flex flex-col ${showHistory ? 'translate-x-0' : 'translate-x-full invisible pointer-events-none'}`} aria-hidden={!showHistory}>
         <div className="p-4 border-b border-slate-800 font-mono text-sm uppercase tracking-wider text-slate-400">{t.savedProcesses}</div>
         <div ref={historyScrollRef} className="flex-1 overflow-y-auto p-2 space-y-2 scroll-smooth">
           {savedSessions.length === 0 ? <div className="text-center text-slate-600 p-8 text-sm">{t.noSavedSessions}</div> :
@@ -1333,17 +1232,91 @@ const App: React.FC = () => {
           }
         </div>
       </div>
-      {/* Custom Confirmation Modal */}
-      {postToDelete && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
-          <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full mx-4 transform transition-all scale-100">
-            <h3 className="text-lg font-bold text-white mb-2">Подтверждение</h3>
-            <p className="text-slate-400 text-sm mb-6">Вы действительно хотите удалить этот пост? Это действие нельзя отменить.</p>
+      {/* Progress belongs where it can be seen: the analysis keeps running
+          while the user reads the feed, and it can be stopped from here. */}
+      {docProgress && (
+        <div className="fixed bottom-4 right-4 z-[140] w-64 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-xl p-3 shadow-2xl space-y-2">
+          <div className="flex justify-between text-[10px] font-mono text-slate-400">
+            <span className="uppercase tracking-widest">{t.analysing || 'Разбор документа'}</span>
+            <span>{docProgress.done}/{docProgress.total}</span>
+          </div>
+          <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-indigo-500 transition-all duration-500"
+              style={{ width: `${Math.round((docProgress.done / Math.max(1, docProgress.total)) * 100)}%` }}
+            />
+          </div>
+          {stopRequested ? (
+            <p className="text-[10px] text-slate-500 leading-relaxed text-center">
+              {t.stoppingAfterFragment || 'Остановится после текущего фрагмента — запрос уже отправлен.'}
+            </p>
+          ) : (
+            <button
+              onClick={() => { isThinkingRef.current = false; setStopRequested(true); }}
+              className="w-full py-2 rounded-lg text-[10px] font-bold font-mono uppercase tracking-wider bg-rose-900/30 text-rose-300 border border-rose-500/30 hover:bg-rose-900/50 transition-colors"
+            >
+              {t.stop || 'Стоп'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* The chooser is mounted at the top level: the button that opens it
+          lives on the profile, and the progress readout in the cycle panel. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.docx,.txt,.md"
+        onChange={handleFileUpload}
+        className="hidden"
+      />
+
+      {/* A document is about to become many requests and many public posts.
+          The count is known now, so it is stated before anything runs. */}
+      {pendingDoc && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full">
+            <h3 className="text-lg font-bold font-display text-white mb-1">
+              {t.readDocument || 'Разобрать документ'}
+            </h3>
+            <p className="text-slate-400 text-xs mb-5 leading-relaxed">
+              «{pendingDoc.name}» — {pendingDoc.chunks.length} {fragmentsWord(pendingDoc.chunks.length)}.
+              {' '}
+              {t.documentCostHint || 'Столько же запросов к модели с вашего ключа, и столько же постов появится в ленте.'}
+              {' '}
+              {provider === 'openrouter'
+                ? `${t.analysisModelHint || 'Разбор идёт на быстрой модели'} ${DOCUMENT_ANALYSIS_MODEL} — ${t.aboutSecondsPerFragment || 'около 10 секунд на фрагмент'}.`
+                : (t.freeModelSlowHint || 'На бесплатной модели один фрагмент может занять минуту-две.')}
+            </p>
             <div className="flex space-x-3">
-              <button onClick={cancelDelete} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold transition-colors">
+              <button
+                onClick={() => setPendingDoc(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
+              >
                 {t.cancel || 'Отмена'}
               </button>
-              <button onClick={confirmDelete} className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-500 font-bold shadow-lg shadow-rose-900/20 transition-colors">
+              <button
+                onClick={runDocumentAnalysis}
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg shadow-indigo-900/20 transition-colors"
+              >
+                {t.start || 'Запустить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Confirmation Modal */}
+      {postToDelete && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
+          <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full mx-4 transform transition-all scale-100">
+            <h3 className="text-lg font-bold font-display text-white mb-2">Подтверждение</h3>
+            <p className="text-slate-400 text-sm mb-6">Вы действительно хотите удалить этот пост? Это действие нельзя отменить.</p>
+            <div className="flex space-x-3">
+              <button onClick={cancelDelete} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors">
+                {t.cancel || 'Отмена'}
+              </button>
+              <button onClick={confirmDelete} className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-500 font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg shadow-rose-900/20 transition-colors">
                 Удалить
               </button>
             </div>
@@ -1351,56 +1324,27 @@ const App: React.FC = () => {
         </div>
       )}
 
-        <main className="flex-1 relative overflow-hidden bg-slate-950">
-        {error && (
-          <div className="mx-4 mt-4 rounded-xl border border-rose-500/50 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-            <div className="flex items-center justify-between gap-4">
-              <span>{error}</span>
-              <button
-                type="button"
-                onClick={() => setError(null)}
-                className="text-xs font-semibold uppercase tracking-wider text-rose-200 hover:text-white"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        )}
+      <main className="flex-1 relative overflow-hidden bg-slate-950">
         <Routes>
-            {/* Default / Feed */}
-          <Route path="/" element={<Navigate to="/threads" replace />} />
-          <Route path="/boards" element={<Navigate to="/threads" replace />} />
-          <Route path="/threads" element={
-            <div className="h-full flex flex-col lg:flex-row">
-              <ThreadSidebar
-                threads={boards}
-                activeThreadId={activeBoardId}
-                onSelectThread={handleSelectBoard}
-                onCreateThread={handleCreateBoard}
-                errorMessage={boardError}
-                onClearError={clearBoardError}
-              />
-              <MessageThreadView
-                thread={boards.find((board) => board.id === activeBoardId) || null}
-                messages={boardMessages}
-                currentUserName={settings.agentName || auth.currentUser?.displayName || 'User'}
-                isSending={isBoardSending}
-                orchestratorPlan={orchestratorPlan}
-                freelancerStatus={freelancerStatus}
-                isConnectingFreelancer={isConnectingFreelancer}
-                onConnectFreelancer={handleConnectFreelancer}
-                onRefreshIntegrations={refreshPipedreamConnections}
-                onSendMessage={handleSendBoardMessage}
-                errorMessage={boardError}
-                onClearError={clearBoardError}
-              />
-            </div>
-          } />
+          {/* Default / Feed */}
+          <Route path="/" element={<Navigate to="/feed" replace />} />
           <Route path="/feed" element={
             <div className="h-full flex flex-col">
               <div className="flex-1 min-h-0 relative">
                 <ThoughtLog
-                  thoughts={thoughts}
+                  thoughts={settings.showOnlyFollowing ? thoughts.filter(t => 
+                    // 1. Always show my own posts
+                    t.authorName === settings.agentName || 
+                    // 2. Show posts from people I follow. Matched on uid where
+                    // the post has one, on name otherwise: posts written before
+                    // authorId existed carry nothing else.
+                    isFromFollowed(t, settings.following, subscribedAgents) ||
+                    // 3. Always show posts explicitly marked as human-generated
+                    t.authorType === 'human' ||
+                    t.type === 'human_post' ||
+                    // 4. Show posts created by real users (those with authorId) even if they act as agents
+                    (t.authorId && !t.generationPrompt)
+                  ) : thoughts}
                   isThinking={isThinking}
                   symbolWeights={symbolWeights}
                   onPostCreated={handleHumanPost}
@@ -1411,9 +1355,11 @@ const App: React.FC = () => {
                   onFollow={handleFollow}
                   onUnfollow={handleUnfollow}
                   onAddComment={handleAddComment}
+                  onDeleteComment={handleDeleteComment}
                   onDelete={handleDeletePost}
                   onViewProfile={handleViewProfile}
                   subscribedAgents={subscribedAgents}
+                  isFiltered={settings.showOnlyFollowing}
                   processingMode={isProcessingDoc ? 'document' : (isCycleRunning ? 'generation' : 'generation')}
                 />
               </div>
@@ -1421,6 +1367,12 @@ const App: React.FC = () => {
           } />
 
           {/* Own Profile */}
+          <Route path="/boards" element={
+            <Boards settings={settings} onViewProfile={handleViewProfile} />
+          } />
+          <Route path="/messages" element={
+            <Messages settings={settings} onViewProfile={handleViewProfile} onFollow={handleFollow} followedProfiles={followedProfiles} />
+          } />
           <Route path="/profile" element={
             <Profile
               settings={settings}
@@ -1429,14 +1381,16 @@ const App: React.FC = () => {
               onLogout={handleLogout}
               onSettings={() => setShowSettings(true)}
               isActive={isThinking && !isCycleRunning}
-              onStart={handleStart}
-              onStop={handleStop}
+              onStart={startThoughtGenerationStream}
+              onStop={stopThoughtGenerationStream}
               onGeneratePost={handleGeneratePost}
+              onReadDocument={() => fileInputRef.current?.click()}
               posts={thoughts}
               onLike={handleLike}
               onFollow={handleFollow}
               onUnfollow={handleUnfollow}
               onAddComment={handleAddComment}
+              onDeleteComment={handleDeleteComment}
               onDelete={handleDeletePost}
               onViewProfile={handleViewProfile}
               onBack={() => navigate('/feed')}
@@ -1449,23 +1403,33 @@ const App: React.FC = () => {
 
           {/* Neural Map */}
           <Route path="/map" element={
-            <div className="absolute inset-0 z-10 bg-slate-950 animate-[fadeIn_0.3s_ease-out]">
-              <div className="absolute top-4 left-4 z-20 flex space-x-2">
-                <button onClick={() => navigate(-1)} className="px-4 py-2 bg-slate-900/80 backdrop-blur text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-800 flex items-center space-x-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-                  <span>{t.back}</span>
-                </button>
-                <div className="flex bg-slate-900/80 backdrop-blur rounded-lg p-1 border border-slate-700">
-                  <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
+            settings.userType === 'agent' ? (
+              <div className="absolute inset-0 z-10 bg-slate-950 animate-[fadeIn_0.3s_ease-out]">
+                <div className="absolute top-4 left-4 z-20 flex space-x-2">
+                  <button onClick={() => navigate(-1)} className="px-4 py-2 bg-slate-900/80 backdrop-blur text-slate-300 rounded-lg border border-slate-700 hover:bg-slate-800 flex items-center space-x-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                    <span>{t.back}</span>
+                  </button>
+                  <div className="flex bg-slate-900/80 backdrop-blur rounded-lg p-1 border border-slate-700">
+                    <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
+                  </div>
                 </div>
+                <React.Suspense fallback={
+                  <div className="absolute inset-0 flex items-center justify-center text-slate-600 font-mono text-xs uppercase tracking-widest">
+                    {t.loading || 'Загрузка…'}
+                  </div>
+                }>
+                  <ThoughtSymbolMap2D
+                    thoughts={viewedUser && location.pathname.startsWith('/user') ? viewedUserPosts : mapThoughts}
+                    language={settings.language}
+                    cognitiveState={cognitiveState}
+                    symbolWeights={viewedUser && location.pathname.startsWith('/user') ? viewedSymbolWeights : symbolWeights}
+                  />
+                </React.Suspense>
               </div>
-              <ThoughtSymbolMap2D
-                thoughts={viewedUser && location.pathname.startsWith('/user') ? viewedUserPosts : mapThoughts}
-                language={settings.language}
-                cognitiveState={cognitiveState}
-                symbolWeights={viewedUser && location.pathname.startsWith('/user') ? viewedSymbolWeights : symbolWeights}
-              />
-            </div>
+            ) : (
+              <Navigate to="/feed" replace />
+            )
           } />
 
           {/* Subscriptions */}
@@ -1551,6 +1515,7 @@ const App: React.FC = () => {
                 onFollow={handleFollow}
                 onUnfollow={handleUnfollow}
                 onAddComment={handleAddComment}
+                onDeleteComment={handleDeleteComment}
                 onDelete={handleDeletePost}
                 onViewProfile={handleViewProfile}
                 onBack={() => {

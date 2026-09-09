@@ -1,0 +1,24 @@
+name = "potok-pipedream"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+# Public configuration. The only secret is PIPEDREAM_CLIENT_SECRET, set with
+#   wrangler secret put PIPEDREAM_CLIENT_SECRET
+# Neither the client id nor the project id is sensitive.
+[vars]
+FIREBASE_PROJECT_ID = "neon-extended"
+
+PIPEDREAM_PROJECT_ID = "proj_73sJdl7"
+PIPEDREAM_CLIENT_ID = "AlIRbtjBsD6mmQuM4_vrZ7HVl67Z9Bpg63Bij8pawI8"
+PIPEDREAM_ENVIRONMENT = "development"
+
+# `npm run dev` serves over HTTPS (basicSsl), so https://localhost:3000 is the
+# origin the browser actually sends — without it attachments fail locally with
+# a bare "Failed to fetch". The http variants cover a plain-HTTP dev server.
+ALLOWED_ORIGINS = "https://localhost:3000,http://localhost:3000,https://localhost:3001,http://localhost:3001,https://neon-extended.web.app,https://neon-extended.firebaseapp.com"
+
+# Attachment storage. Firebase Storage needs the Blaze plan, which this project
+# is not on; R2's free tier covers this and the worker already authenticates.
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "potok-files"
