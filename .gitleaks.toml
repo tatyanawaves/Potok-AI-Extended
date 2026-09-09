@@ -1,0 +1,25 @@
+# Secret scanning rules for this repository.
+#
+# The default gitleaks rules are kept in full; this file only records the one
+# match that is not a secret.
+
+[extend]
+useDefault = true
+
+[[rules]]
+# The default gcp-api-key rule flags the Firebase Web API key in
+# services/firebase.ts. That key is not a credential: Firebase ships it in
+# every client bundle by design, and it identifies the project rather than
+# granting access — what a caller may read or write is decided by the
+# Firestore rules and by Auth, not by holding this string.
+#
+# Narrowed to that one file so a real Google credential appearing anywhere
+# else still fails the build.
+id = "gcp-api-key"
+description = "GCP API key"
+regex = '''(?i)\b(AIza[0-9A-Za-z\-_]{35})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+keywords = ["AIza"]
+
+  [rules.allowlist]
+  paths = ['''services/firebase\.ts''']
+  regexes = ['''AIzaSyA7v4-9qGp-3rLSaATnLBqi46m_Wvliado''']
