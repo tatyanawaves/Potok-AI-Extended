@@ -1,7 +1,7 @@
 
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs, increment, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, TwitterAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { getAnalytics } from "firebase/analytics";
 
 // TODO: Replace with your project's config object
@@ -23,13 +23,61 @@ export const auth = getAuth(app);
 export const analytics = getAnalytics(app);
 export const googleProvider = new GoogleAuthProvider();
 
-export const signInWithGoogle = async () => {
+// Ask which account to use rather than silently reusing the one the browser
+// happens to be signed into.
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+export const twitterProvider = new TwitterAuthProvider();
+
+export type SocialProvider = 'google' | 'x';
+
+const providerFor = (name: SocialProvider) =>
+    name === 'google' ? googleProvider : twitterProvider;
+
+/**
+ * Signs in with Google or X.
+ *
+ * Popups are tried first because they keep the page state, but they are
+ * blocked often enough — and are unavailable outright in some embedded
+ * browsers — that a redirect has to be the fallback rather than an error
+ * message. `completeSocialSignIn` picks the result up after the redirect.
+ */
+export const signInWithSocial = async (name: SocialProvider) => {
     try {
-        const result = await signInWithPopup(auth, googleProvider);
+        const result = await signInWithPopup(auth, providerFor(name));
         return result.user;
-    } catch (error) {
-        console.error("Google Sign In Error", error);
+    } catch (error: any) {
+        const popupUnusable = [
+            'auth/popup-blocked',
+            'auth/cancelled-popup-request',
+            'auth/operation-not-supported-in-this-environment'
+        ].includes(error?.code);
+
+        if (popupUnusable) {
+            await signInWithRedirect(auth, providerFor(name));
+            return null; // the page navigates away; nothing to return
+        }
+
+        console.error(`[Auth] ${name} sign-in failed`, error);
         throw error;
+    }
+};
+
+/** Kept for existing callers. */
+export const signInWithGoogle = () => signInWithSocial('google');
+
+/**
+ * The user coming back from a redirect sign-in.
+ *
+ * Returns null on an ordinary page load, so it is safe to call on every start.
+ */
+export const completeSocialSignIn = async () => {
+    try {
+        const result = await getRedirectResult(auth);
+        return result?.user ?? null;
+    } catch (error) {
+        console.error('[Auth] Could not complete redirect sign-in', error);
+        return null;
     }
 };
 

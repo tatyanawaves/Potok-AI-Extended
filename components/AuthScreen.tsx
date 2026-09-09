@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AISettings, Language } from '../types';
 import { translations } from '../translations';
-import { signInWithGoogle, loginWithEmail, registerWithEmail, updateUserProfile, getUserProfile } from '../services/firebase';
+import { signInWithSocial, completeSocialSignIn, loginWithEmail, registerWithEmail, updateUserProfile, getUserProfile, SocialProvider } from '../services/firebase';
 import { secureStorage } from '../services/encryption';
 
 interface AuthScreenProps {
@@ -18,36 +18,69 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleGoogleLogin = async () => {
+  /**
+   * Signs in with Google or X, for either kind of account.
+   *
+   * The account type comes from the switcher above, not from the provider:
+   * an AI user has the same right to a Google account as anyone else, and
+   * previously the social buttons were only rendered for human users.
+   *
+   * No API key is invented here. A human never needed one, and an AI user
+   * signing in this way adds theirs in Settings — the placeholder that used
+   * to be written instead meant the app believed a key existed when it did
+   * not.
+   */
+  const handleSocialLogin = async (provider: SocialProvider) => {
+    setError(null);
+    setIsLoading(true);
+
     try {
-      const user = await signInWithGoogle();
-      // Sync basic profile
-      if (user) {
-        await updateUserProfile(user.uid, {
-          displayName: user.displayName,
-          email: user.email,
-          role: 'human'
-        });
+      const user = await signInWithSocial(provider);
+      if (!user) return; // redirecting; the page is on its way out
 
-        const newSettings = {
-          ...settings,
-          userType: 'human',
-          agentName: user.displayName || 'Human',
-          showOnlyFollowing: false,
-          // Default settings for new user
-          openRouterKey: 'google-auth', // Placeholder to bypass check
-          agentRole: 'Explorer'
-        };
-
-        // Securely store the auth token if needed, or just marks as authorized
-        secureStorage.setItem('openRouterKey', 'google-auth-token');
-
-        onAuthorize(newSettings);
-      }
+      await finishSocialSignIn(user);
     } catch (err: any) {
-      setError(err.message);
+      if (err?.code === 'auth/unauthorized-domain') {
+        setError(`Домен ${window.location.hostname} не добавлен в Firebase → Authentication → Settings → Authorized domains.`);
+      } else if (err?.code === 'auth/operation-not-allowed') {
+        setError(provider === 'x'
+          ? 'Вход через X не включён в Firebase → Authentication → Sign-in method.'
+          : 'Вход через Google не включён в Firebase → Authentication → Sign-in method.');
+      } else if (err?.code !== 'auth/popup-closed-by-user') {
+        setError(err?.message || 'Не удалось войти');
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
+
+  const finishSocialSignIn = async (user: any) => {
+    const profile = await getUserProfile(user.uid);
+    const name = profile?.agentName || user.displayName || user.email?.split('@')[0] || 'User';
+
+    await updateUserProfile(user.uid, {
+      displayName: user.displayName,
+      email: user.email,
+      role: profile?.role || settings.userType,
+      agentName: name
+    });
+
+    onAuthorize({
+      ...settings,
+      userType: (profile?.role as 'human' | 'agent') || settings.userType,
+      agentName: name,
+      agentRole: profile?.agentRole || settings.agentRole || 'Explorer',
+      showOnlyFollowing: false
+    });
+  };
+
+  // A redirect sign-in lands back here, so the result has to be collected on
+  // load rather than in the click handler that started it.
+  useEffect(() => {
+    completeSocialSignIn()
+      .then(user => { if (user) return finishSocialSignIn(user); })
+      .catch(err => setError(err?.message || 'Не удалось завершить вход'));
+  }, []);
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -165,23 +198,40 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
 
         {error && <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/50 rounded-lg text-rose-400 text-xs text-center">{error}</div>}
 
+        {/* Social sign-in, offered to both account types. */}
+        <div className="space-y-3 mb-4">
+          <button
+            type="button"
+            onClick={() => handleSocialLogin('google')}
+            disabled={isLoading}
+            className="w-full py-3 bg-white text-slate-900 font-bold rounded-xl hover:bg-slate-100 transition-colors flex items-center justify-center space-x-2 disabled:opacity-50"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="currentColor" d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.8-3.5 5.44-6.5 3.02-2.31-1.85-2.76-5.2-1.04-7.55 1.05-1.44 3.2-2.18 4.75-1.09l2.1-2.1C16.33 4.54 14.16 4 12.18 4 6.94 4 3.03 9.4 5.3 13.9c1.55 3.96 6.56 5.35 9.77 2.7 2.77-2.3 2.94-7.24 2.87-9.56-.03-.98-.24-1.94-.59-2.94z" /></svg>
+            <span>{t.googleSignIn}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSocialLogin('x')}
+            disabled={isLoading}
+            className="w-full py-3 bg-black text-white font-bold rounded-xl border border-slate-700 hover:bg-slate-900 transition-colors flex items-center justify-center space-x-2 disabled:opacity-50"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
+            <span>{t.xSignIn || 'Войти через X'}</span>
+          </button>
+        </div>
+
+        <div className="relative flex py-1 items-center mb-4">
+          <div className="flex-grow border-t border-slate-700"></div>
+          <span className="flex-shrink-0 mx-4 text-slate-500 text-xs">{t.or}</span>
+          <div className="flex-grow border-t border-slate-700"></div>
+        </div>
+
+
         {settings.userType === 'human' ? (
           <div className="space-y-4">
-            <button
-              onClick={handleGoogleLogin}
-              disabled={isLoading}
-              className="w-full py-3 bg-white text-slate-900 font-bold rounded-xl hover:bg-slate-100 transition-colors flex items-center justify-center space-x-2 disabled:opacity-50"
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="currentColor" d="M21.35 11.1h-9.17v2.73h6.51c-.33 3.8-3.5 5.44-6.5 3.02-2.31-1.85-2.76-5.2-1.04-7.55 1.05-1.44 3.2-2.18 4.75-1.09l2.1-2.1C16.33 4.54 14.16 4 12.18 4 6.94 4 3.03 9.4 5.3 13.9c1.55 3.96 6.56 5.35 9.77 2.7 2.77-2.3 2.94-7.24 2.87-9.56-.03-.98-.24-1.94-.59-2.94z" /></svg>
-              <span>{t.googleSignIn}</span>
-            </button>
-
-            <div className="relative flex py-2 items-center">
-              <div className="flex-grow border-t border-slate-700"></div>
-              <span className="flex-shrink-0 mx-4 text-slate-500 text-xs">{t.or}</span>
-              <div className="flex-grow border-t border-slate-700"></div>
-            </div>
-
             <form onSubmit={handleEmailAuth} className="space-y-4">
               <input
                 type="email"
