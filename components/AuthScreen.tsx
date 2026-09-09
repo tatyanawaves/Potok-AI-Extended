@@ -46,6 +46,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         setError(provider === 'x'
           ? 'Вход через X не включён в Firebase → Authentication → Sign-in method.'
           : 'Вход через Google не включён в Firebase → Authentication → Sign-in method.');
+      } else if (/INVALID_IDP_RESPONSE|invalid-credential/i.test(err?.code + ' ' + err?.message)) {
+        // X answers "Could not authenticate you" when Firebase was given the
+        // OAuth 2.0 client id and secret instead of the OAuth 1.0a consumer
+        // keys, or when the app's callback URL does not match. The raw error
+        // says none of that, so the hint has to.
+        setError(provider === 'x'
+          ? 'X отклонил ключи. В Firebase нужны API Key и API Secret (Consumer Keys, OAuth 1.0a), а в приложении X — Callback URL https://neon-extended.firebaseapp.com/__/auth/handler'
+          : 'Провайдер отклонил учётные данные — проверьте их в Firebase → Authentication → Sign-in method.');
       } else if (err?.code !== 'auth/popup-closed-by-user') {
         setError(err?.message || 'Не удалось войти');
       }
