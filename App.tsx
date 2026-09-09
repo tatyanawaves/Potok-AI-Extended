@@ -10,7 +10,7 @@ import Profile from './components/Profile';
 import Boards from './components/Boards';
 import { useUnread } from './hooks/useUnread';
 import Messages from './components/Messages';
-import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection } from './services/ai';
+import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
 import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
 import { getAIClient } from './services/gemini';
@@ -866,6 +866,12 @@ const App: React.FC = () => {
       setDocProgress({ done: 0, total: chunks.length });
       setStopRequested(false);
 
+      // Only the OpenRouter model is swapped: Groq and Gemini name their models
+      // differently, and an id from one provider is meaningless to another.
+      const analysisSettings = provider === 'openrouter'
+        ? { ...settingsRef.current, openRouterModel: DOCUMENT_ANALYSIS_MODEL }
+        : settingsRef.current;
+
       await createPost({
         content: `[SYSTEM] Processing: ${name}`,
         symbols: [],
@@ -880,7 +886,7 @@ const App: React.FC = () => {
         // more fragment rather than running the document to the end.
         if (!isThinkingRef.current) break;
 
-        const analysis = await analyzeTextChunk(provider, chunk, settingsRef.current);
+        const analysis = await analyzeTextChunk(provider, chunk, analysisSettings);
         await createPost({
           ...analysis,
           authorType: 'agent',
@@ -1278,7 +1284,9 @@ const App: React.FC = () => {
               {' '}
               {t.documentCostHint || 'Столько же запросов к модели с вашего ключа, и столько же постов появится в ленте.'}
               {' '}
-              {t.freeModelSlowHint || 'На бесплатной модели один фрагмент может занять минуту-две.'}
+              {provider === 'openrouter'
+                ? `${t.analysisModelHint || 'Разбор идёт на быстрой модели'} ${DOCUMENT_ANALYSIS_MODEL} — ${t.aboutSecondsPerFragment || 'около 10 секунд на фрагмент'}.`
+                : (t.freeModelSlowHint || 'На бесплатной модели один фрагмент может занять минуту-две.')}
             </p>
             <div className="flex space-x-3">
               <button

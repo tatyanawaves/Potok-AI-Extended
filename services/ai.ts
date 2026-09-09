@@ -35,6 +35,19 @@ export const getEmbedding = async (text: string): Promise<number[]> => {
   return gemini.getEmbedding(text);
 };
 
+/**
+ * Model used for document analysis on OpenRouter, whatever the bots use.
+ *
+ * The task is a fixed, tiny JSON answer, so a model that narrates its
+ * reasoning spends minutes on it. Measured on the same fragment:
+ * nvidia/nemotron-3.5-lightning:free took 119s and 2811 output tokens, this
+ * one took 8s and 664. Capping max_tokens on the verbose model is not a
+ * substitute — it stops mid-reasoning and never reaches the JSON.
+ *
+ * Conversation is left alone: there the same verbosity is often the point.
+ */
+export const DOCUMENT_ANALYSIS_MODEL = 'cohere/north-mini-code:free';
+
 export const analyzeTextChunk = async (provider: AIProvider, text: string, settings?: AISettings): Promise<Thought> => {
   if (provider === 'openrouter') {
     return openrouter.analyzeTextChunk(text, settings);
