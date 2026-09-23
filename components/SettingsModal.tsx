@@ -4,6 +4,9 @@ import { DEFAULT_MODEL, DEFAULT_BASE_URL, embed } from '../services/llm';
 import { translations } from '../translations';
 import { isPipedreamConfigured, listConnectedAccounts, ConnectedAccount } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
+import {
+  saveSandboxKey, sandboxKeyStatus, deleteSandboxKey, SandboxProvider, SANDBOX_NAMES
+} from '../services/connectors';
 
 interface SettingsModalProps {
   settings: AISettings;
@@ -17,6 +20,24 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [memoryModel, setMemoryModel] = useState(settings.memoryModel || '');
   const [embeddingModel, setEmbeddingModel] = useState(settings.embeddingModel || '');
   const [githubToken, setGithubToken] = useState(settings.githubToken || '');
+
+  // Sandbox keys go straight to the server; the page only learns whether one is set.
+  const [sandboxKeys, setSandboxKeys] = useState<Record<SandboxProvider, boolean>>({ e2b: false, daytona: false });
+  const [sandboxDraft, setSandboxDraft] = useState<Record<SandboxProvider, string>>({ e2b: '', daytona: '' });
+  const [sandboxMessage, setSandboxMessage] = useState<string | null>(null);
+  useEffect(() => { if (isPipedreamConfigured()) sandboxKeyStatus().then(setSandboxKeys).catch(() => { }); }, []);
+
+  const storeSandboxKey = async (provider: SandboxProvider) => {
+    setSandboxMessage('…');
+    try {
+      await saveSandboxKey(provider, sandboxDraft[provider].trim());
+      setSandboxKeys(prev => ({ ...prev, [provider]: true }));
+      setSandboxDraft(prev => ({ ...prev, [provider]: '' }));
+      setSandboxMessage(`${SANDBOX_NAMES[provider]}: ключ проверен и сохранён`);
+    } catch (e) {
+      setSandboxMessage(e instanceof Error ? e.message : String(e));
+    }
+  };
   const [embeddingCheck, setEmbeddingCheck] = useState<{ ok: boolean, text: string } | null>(null);
 
   /** One tiny request, so a wrong model name shows up here and not as silent keyword search. */
@@ -231,6 +252,41 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                       {t.memoryModelHint || 'Сжатие памяти, план и проверки совещаний. Дешёвая быстрая модель здесь экономит токены, не трогая ответы ботов.'}
                     </p>
                   </div>
+
+                  {isPipedreamConfigured() && (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                        {(t as any).sandboxKeysLabel || 'Песочницы кода (ваш ключ)'}
+                      </label>
+                      {(['e2b', 'daytona'] as SandboxProvider[]).map(provider => (
+                        <div key={provider} className="flex gap-2 items-center">
+                          <span className="w-16 text-[11px] font-mono text-slate-400 shrink-0">{SANDBOX_NAMES[provider]}</span>
+                          {sandboxKeys[provider] ? (
+                            <>
+                              <span className="flex-1 text-[11px] text-emerald-400">✓ {(t as any).keySaved || 'ключ сохранён'}</span>
+                              <button type="button" onClick={() => deleteSandboxKey(provider).then(() => setSandboxKeys(prev => ({ ...prev, [provider]: false })))}
+                                className="text-[10px] font-mono text-slate-500 hover:text-rose-300">{(t as any).remove || 'удалить'}</button>
+                            </>
+                          ) : (
+                            <>
+                              <input type="password" value={sandboxDraft[provider]}
+                                onChange={(e) => setSandboxDraft(prev => ({ ...prev, [provider]: e.target.value }))}
+                                placeholder={provider === 'e2b' ? 'e2b_…' : 'dtn_…'}
+                                className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 font-mono text-xs" />
+                              <button type="button" disabled={!sandboxDraft[provider].trim()} onClick={() => storeSandboxKey(provider)}
+                                className="px-2 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-300 text-[10px] font-mono uppercase disabled:opacity-40">
+                                {(t as any).saveShort || 'Сохранить'}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                      {sandboxMessage && <p className="text-[10px] text-slate-400">{sandboxMessage}</p>}
+                      <p className="text-[10px] text-slate-600 leading-relaxed">
+                        {(t as any).sandboxKeysHint || 'Боты запускают код, команды и работают с файлами в вашей облачной песочнице — вы платите провайдеру напрямую. Ключ проверяется и хранится зашифрованным на сервере Potok, в браузере не остаётся. Ключ: e2b.dev/dashboard или app.daytona.io → API Keys.'}
+                      </p>
+                    </div>
+                  )}
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">

@@ -38,9 +38,29 @@ export const disconnectOAuth = (server: string): Promise<void> => post('/oauth/d
 
 export const cloudBrowserUrl = (): string => `${workerUrl}/tools/browser`;
 
+// --- Code sandboxes on each user's own key ---------------------------------------
+
+export type SandboxProvider = 'e2b' | 'daytona';
+export const SANDBOX_NAMES: Record<SandboxProvider, string> = { e2b: 'E2B', daytona: 'Daytona' };
+
+export const sandboxUrl = (provider: SandboxProvider): string => `${workerUrl}/tools/sandbox?provider=${provider}`;
+
+/**
+ * Stores the user's sandbox key on the server — checked against the provider
+ * first, then kept sealed per account. It is not kept in the browser: the
+ * worker is the only place that uses it, for tabs and server tasks alike.
+ */
+export const saveSandboxKey = (provider: SandboxProvider, key: string): Promise<void> =>
+    post('/keys/set', { provider, key });
+
+export const sandboxKeyStatus = async (): Promise<Record<SandboxProvider, boolean>> =>
+    ({ e2b: false, daytona: false, ...(await post('/keys/status', {}).catch(() => ({}))) });
+
+export const deleteSandboxKey = (provider: SandboxProvider): Promise<void> => post('/keys/delete', { provider });
+
 export interface ToolCandidate {
     id: string;
-    kind: 'cloud' | 'oauth' | 'pipedream' | 'public';
+    kind: 'cloud' | 'oauth' | 'pipedream' | 'public' | 'sandbox';
     name: string;
     description: string;
     /** Tool server URL to give a bot. */
@@ -71,6 +91,14 @@ export const collectCandidates = async (task: string): Promise<ToolCandidate[]> 
             description: 'Open pages with JavaScript, extract elements, search the web (Cloudflare Browser Rendering).',
             url: cloudBrowserUrl(), needsConnection: false
         });
+        const keys = await sandboxKeyStatus().catch(() => ({ e2b: false, daytona: false }));
+        for (const provider of ['e2b', 'daytona'] as SandboxProvider[]) {
+            list.push({
+                id: `sandbox:${provider}`, kind: 'sandbox', name: `Песочница ${SANDBOX_NAMES[provider]}`,
+                description: 'Run Python/JavaScript and shell commands, install packages, read and write files in a private cloud sandbox.',
+                url: sandboxUrl(provider), needsConnection: !keys[provider], target: provider
+            });
+        }
         for (const preset of OAUTH_PRESETS) {
             list.push({
                 id: `oauth:${preset.server}`, kind: 'oauth', name: preset.name, description: preset.description,

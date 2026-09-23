@@ -20,6 +20,7 @@
  *   POST /tasks/cancel      → ask a running one to stop
  *   POST /tools/browser     → cloud browser for bots, as MCP (./cloudBrowser)
  *   POST /oauth/*, /connect/mcp → OAuth MCP servers such as Higgsfield (./oauthConnect)
+ *   POST /keys/*, /tools/sandbox → E2B / Daytona sandboxes on each user's key (./sandbox)
  *   GET  /health
  */
 
@@ -30,6 +31,7 @@ import {
 import { handleTaskStart, handleTaskCancel, type TaskEnv } from './agentTasks';
 import { handleMcpRequest } from './mcpServer';
 import { browserTools } from './cloudBrowser';
+import { sandboxTools, isProvider, handleKeySet, handleKeyStatus, handleKeyDelete } from './sandbox';
 import {
     handleOAuthStart, handleOAuthCallback, handleOAuthStatus, handleOAuthDisconnect,
     handleConnectedMcp, type OAuthEnv
@@ -714,6 +716,14 @@ export default {
             if (url.pathname === '/oauth/status') return await handleOAuthStatus(request, env, uid, reply);
             if (url.pathname === '/oauth/disconnect') return await handleOAuthDisconnect(request, env, uid, reply);
             if (url.pathname === '/connect/mcp') return await handleConnectedMcp(request, env, uid, cors);
+            if (url.pathname === '/keys/set') return await handleKeySet(request, env, uid, reply);
+            if (url.pathname === '/keys/status') return await handleKeyStatus(request, env, uid, reply);
+            if (url.pathname === '/keys/delete') return await handleKeyDelete(request, env, uid, reply);
+            if (url.pathname === '/tools/sandbox') {
+                const provider = url.searchParams.get('provider');
+                if (!isProvider(provider)) return json({ error: 'provider must be e2b or daytona' }, 400, cors);
+                return await handleMcpRequest(request, `potok-sandbox-${provider}`, sandboxTools(env, uid, provider), cors);
+            }
             if (url.pathname === '/tasks/start') {
                 return await handleTaskStart(request, env, uid, idToken, (body, status) => json(body, status, cors));
             }
