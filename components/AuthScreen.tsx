@@ -4,6 +4,7 @@ import { translations } from '../translations';
 import { signInWithSocial, completeSocialSignIn, loginWithEmail, registerWithEmail, updateUserProfile, getUserProfile, SocialProvider, usingEmulators, resetPassword } from '../services/firebase';
 import { Hint } from './Learning';
 import { secureStorage } from '../services/encryption';
+import { DEFAULT_MODEL } from '../services/llm';
 
 interface AuthScreenProps {
   onAuthorize: (settings: AISettings) => void;
@@ -127,8 +128,13 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
           agentName: profile?.agentName || settings.agentName || user.email?.split('@')[0] || 'Human',
           agentRole: profile?.agentRole || settings.agentRole || 'Explorer',
           agentPrompt: profile?.agentPrompt || settings.agentPrompt,
-          openRouterModel: profile?.modelName || settings.openRouterModel,
-          apiBaseUrl: profile?.apiBaseUrl || settings.apiBaseUrl,
+          // What this browser already has wins: the profile copy used to be
+          // written only at registration, so an old, since-removed model
+          // came back on every sign-in.
+          openRouterModel: (settings.openRouterModel && settings.openRouterModel !== DEFAULT_MODEL)
+            ? settings.openRouterModel
+            : (profile?.modelName || settings.openRouterModel),
+          apiBaseUrl: settings.apiBaseUrl || profile?.apiBaseUrl,
           openRouterKey: settings.openRouterKey || (settings.userType === 'human' ? 'google-auth' : '')
         };
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AISettings, Language } from '../types';
-import { DEFAULT_MODEL, DEFAULT_BASE_URL, embed } from '../services/llm';
+import { DEFAULT_MODEL, DEFAULT_BASE_URL, embed, openRouterFreeModels, openRouterQuota } from '../services/llm';
 import { translations } from '../translations';
 import { isPipedreamConfigured, listConnectedAccounts, ConnectedAccount } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
@@ -38,6 +38,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [gcpRegion, setGcpRegion] = useState('europe-west1');
   const [gcpMessage, setGcpMessage] = useState<string | null>(null);
   useEffect(() => { if (isPipedreamConfigured()) gcpConnected().then(setGcpSet).catch(() => { }); }, []);
+  // Free models change every few weeks; offer the ones OpenRouter lists today.
+  const [freeModelIds, setFreeModelIds] = useState<string[]>([]);
+  useEffect(() => { openRouterFreeModels().then(list => setFreeModelIds(list.filter(m => m.tools).map(m => m.id))); }, []);
+  const [quota, setQuota] = useState<{ used: number, limit: number, remaining: number } | null>(null);
+  useEffect(() => { openRouterQuota(settings).then(setQuota); }, [settings]);
 
   const storeGcpKey = async () => {
     setGcpMessage('…');
@@ -290,8 +295,26 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                       value={openRouterModel}
                       onChange={(e) => setOpenRouterModel(e.target.value)}
                       placeholder="author/model:free"
+                      list="potok-free-models"
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
                     />
+                    <datalist id="potok-free-models">
+                      {freeModelIds.map(id => <option key={id} value={id} />)}
+                    </datalist>
+                    {freeModelIds.length > 0 && (!apiBaseUrl.trim() || apiBaseUrl.includes('openrouter.ai'))
+                      && openRouterModel.endsWith(':free') && !freeModelIds.includes(openRouterModel.trim()) && (
+                      <p className="text-[10px] text-amber-300/90">
+                        {(t as any).modelGone || 'Такой бесплатной модели сейчас нет в OpenRouter — выберите из списка (кликните по полю).'}
+                      </p>
+                    )}
+                    {quota && (
+                      <p className={`text-[10px] font-mono ${quota.remaining > 10 ? 'text-emerald-400/90' : 'text-amber-300/90'}`}>
+                        {(t as any).freeQuotaLeft || 'Бесплатных запросов сегодня осталось'}: {quota.remaining} / {quota.limit}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-slate-500 leading-relaxed">
+                      {(t as any).freeLimitsNote || 'Бесплатные модели OpenRouter: до 20 запросов в минуту и 50 в сутки на аккаунт (1000 в сутки после пополнения на $10). Одно задание с совещанием тратит 10–30 запросов. Если модель занята, Potok сам переключится на другую бесплатную.'}
+                    </p>
                   </div>
 
                   <div className="space-y-2">

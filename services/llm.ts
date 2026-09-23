@@ -74,43 +74,135 @@ export const baseUrlOf = (settings?: AISettings): string =>
 export const modelOf = (settings?: AISettings): string =>
     settings?.openRouterModel?.trim() || DEFAULT_MODEL;
 
-/**
- * Turns a failed completion into something a person can act on.
- *
- * A bare "HTTP 429" said nothing about whether the key was wrong, the free
- * model was busy or the credit had run out — and the provider says which in
- * the body.
- */
-export const describeHttpError = async (response: Response): Promise<string> => {
+/** What a provider said when a request failed. */
+export interface ProviderError {
+    status: number;
+    detail: string;
+    /** How long the provider asked to wait, when it said. */
+    retryAfterMs?: number;
+}
+
+const readError = async (response: Response): Promise<ProviderError> => {
     let detail = '';
     try {
         const body: any = await response.json();
-        detail = body?.error?.message || body?.message || '';
+        const raw = body?.error?.metadata?.raw;
+        detail = [body?.error?.message || body?.message || '', typeof raw === 'string' ? raw : '']
+            .filter(Boolean).join(' — ');
     } catch {
         // Not JSON; the status alone has to do.
     }
-
-    const hint = ({
-        401: 'ключ API не подошёл — проверьте его в настройках',
-        402: 'на ключе закончился баланс',
-        403: 'у ключа нет доступа к этой модели',
-        404: 'модель не найдена — проверьте её имя в настройках',
-        429: 'лимит запросов исчерпан, попробуйте через минуту или смените модель'
-    } as Record<number, string>)[response.status];
-
-    return [`HTTP ${response.status}`, hint, detail].filter(Boolean).join(': ');
+    let retryAfterMs: number | undefined;
+    const retryAfter = Number(response.headers.get('retry-after'));
+    const reset = Number(response.headers.get('x-ratelimit-reset'));
+    if (retryAfter > 0) retryAfterMs = retryAfter * 1000;
+    else if (reset > Date.now()) retryAfterMs = reset - Date.now();
+    return { status: response.status, detail, retryAfterMs };
 };
 
-/** Errors no retry can fix: the key, the balance, the model. */
+/** OpenRouter's account-wide daily cap on free models: waiting a minute or switching models does not help. */
+const isDailyLimit = (e: ProviderError) => /free-models-per-day|per.day/i.test(e.detail);
+/** Free models are closed until the account allows them in its privacy settings. */
+const isDataPolicy = (e: ProviderError) => /data policy|privacy/i.test(e.detail);
+const isToolsUnsupported = (e: ProviderError) => /tool use|support tool|tools? (are|is) not supported/i.test(e.detail);
+const isModelMissing = (e: ProviderError) =>
+    e.status === 404 || /not a valid model|model.{0,40}(not found|does not exist|not exist)|no endpoints found|no allowed providers/i.test(e.detail);
+const isTransient = (e: ProviderError) => e.status === 429 || e.status >= 500;
+
+/**
+ * Turns a failed completion into something a person can act on.
+ *
+ * A bare "HTTP 429" or "HTTP 404" said nothing about whether the key was
+ * wrong, the free model was busy, the daily free quota ran out or the account
+ * blocks free models — and the provider says which in the body.
+ */
+export const describeProviderError = (e: ProviderError, model?: string): string => {
+    let hint: string | undefined;
+    if (isDailyLimit(e)) {
+        hint = 'дневной лимит бесплатных моделей OpenRouter исчерпан (50 запросов в сутки; после пополнения баланса на $10 — 1000). Пополните баланс на openrouter.ai/settings/credits или выберите в настройках платную модель';
+    } else if (isDataPolicy(e)) {
+        hint = 'OpenRouter не пускает к бесплатным моделям из-за настроек приватности аккаунта — разрешите их на openrouter.ai/settings/privacy';
+    } else if (isToolsUnsupported(e)) {
+        hint = `модель ${model || ''} не умеет вызывать инструменты — выберите в настройках другую`;
+    } else if (isModelMissing(e)) {
+        hint = `модели «${model || ''}» нет у провайдера — проверьте её имя в настройках (или у бота)`;
+    } else {
+        hint = ({
+            400: 'провайдер отклонил запрос',
+            401: 'ключ API не подошёл — проверьте его в настройках',
+            402: 'на ключе закончился баланс',
+            403: 'у ключа нет доступа к этой модели',
+            429: 'модель перегружена или исчерпан поминутный лимит — повторите позже или смените модель'
+        } as Record<number, string>)[e.status];
+    }
+    return [`HTTP ${e.status}`, hint, e.detail].filter(Boolean).join(': ');
+};
+
+export const describeHttpError = async (response: Response): Promise<string> =>
+    describeProviderError(await readError(response));
+
+/** Errors no retry can fix: the key, the balance, the model, the daily quota. */
 export const isFatalProviderError = (error: unknown): boolean =>
-    /^HTTP 40[1234]\b/.test(error instanceof Error ? error.message : String(error));
+    /^HTTP 40[1234]\b|дневной лимит|настроек приватности/.test(error instanceof Error ? error.message : String(error));
+
+// --- Fallback models ---------------------------------------------------------
+
+let freeModels: Promise<Array<{ id: string, tools: boolean }>> | null = null;
+
+/**
+ * OpenRouter's current free models, read once from its public list.
+ *
+ * Free models come and go every few weeks, so a hard-coded list is what made
+ * "no such model" errors in the first place.
+ */
+export const openRouterFreeModels = (): Promise<Array<{ id: string, tools: boolean }>> => {
+    freeModels ??= fetch(`${DEFAULT_BASE_URL}/models`)
+        .then(r => r.ok ? r.json() : { data: [] })
+        .then((body: any) => (body?.data || [])
+            .filter((m: any) => String(m.id).endsWith(':free')
+                && !/safety|guard/i.test(m.id)
+                && (m.context_length || 0) >= 16000)
+            .map((m: any) => ({ id: m.id, tools: (m.supported_parameters || []).includes('tools') })))
+        .catch(() => { freeModels = null; return []; });
+    return freeModels;
+};
+
+/** Today's free-model allowance on an OpenRouter key, or null elsewhere or when unknown. */
+export const openRouterQuota = async (settings?: AISettings): Promise<{ used: number, limit: number, remaining: number } | null> => {
+    if (!baseUrlOf(settings).includes('openrouter.ai') || !settings?.openRouterKey) return null;
+    try {
+        const response = await fetch(`${DEFAULT_BASE_URL}/key`, {
+            headers: { 'Authorization': `Bearer ${settings.openRouterKey}` }
+        });
+        if (!response.ok) return null;
+        const body: any = await response.json();
+        const daily = body?.data?.free_model_daily_requests;
+        return daily && typeof daily.limit === 'number' ? daily : null;
+    } catch {
+        return null;
+    }
+};
+
+const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+});
+
+/** Longest wait between retries of one model; beyond it switching models is faster. */
+const MAX_RETRY_WAIT_MS = 20_000;
+/** Models tried in one request, the chosen one included. */
+const MAX_MODELS = 4;
 
 /**
  * One request to the model, counted against today's spend.
  *
- * A 429 or a 5xx is retried once after a short pause: free models are
- * frequently busy for a moment, and failing a whole meeting turn for it was
- * the most common way a run fell apart.
+ * Free models are busy often and disappear from time to time, which used to
+ * fail whole tasks. Now a 429 or 5xx is retried twice, waiting as long as the
+ * provider asks; and when the model stays busy, is gone or cannot use tools,
+ * the request moves on to the user's main model and then, on OpenRouter, to
+ * other free models from its live list. The answer names the model that
+ * actually replied. What no other model fixes — the key, the balance, the
+ * daily free quota, the privacy setting — fails at once with a plain reason.
  */
 export const complete = async (
     request: CompletionRequest,
@@ -118,6 +210,7 @@ export const complete = async (
 ): Promise<Completion> => {
     const baseUrl = baseUrlOf(settings);
     const model = request.model || modelOf(settings);
+    const openRouter = baseUrl.includes('openrouter.ai');
 
     const body: Record<string, any> = {
         model,
@@ -135,7 +228,7 @@ export const complete = async (
     // OpenRouter credits the calling app by these; other providers ignore
     // them, but some reject unknown headers in CORS preflight, so they are
     // only sent where they mean something.
-    if (baseUrl.includes('openrouter.ai')) {
+    if (openRouter) {
         headers['HTTP-Referer'] = (globalThis as any).location?.origin || 'https://neon-extended.web.app';
         headers['X-Title'] = 'Potok';
     }
@@ -147,38 +240,80 @@ export const complete = async (
         signal: request.signal
     });
 
-    let response = await send();
-    if (response.status === 429 || response.status >= 500) {
-        await new Promise(r => setTimeout(r, 1500));
-        response = await send();
+    const candidates = [model];
+    let fallbacksAdded = false;
+    let lastError: ProviderError = { status: 0, detail: '' };
+
+    for (let i = 0; i < candidates.length && i < MAX_MODELS; i++) {
+        body.model = candidates[i];
+
+        for (let retry = 0; ; retry++) {
+            const response = await send();
+            if (response.ok) {
+                const data: any = await response.json();
+                const message = data.choices?.[0]?.message;
+                if (message) {
+                    const usage = usageFrom(data);
+                    await reportUsage(usage);
+                    return {
+                        content: message.content ?? null,
+                        model: data.model || body.model,
+                        usage,
+                        toolCalls: (message.tool_calls || []).map((call: any) => ({
+                            id: call.id,
+                            name: call.function?.name,
+                            args: call.function?.arguments || '{}'
+                        }))
+                    };
+                }
+                // OpenRouter reports an upstream failure inside a 200.
+                lastError = {
+                    status: Number(data.error?.code) || 502,
+                    detail: data.error?.message || 'модель вернула ответ без сообщения'
+                };
+            } else {
+                lastError = await readError(response);
+            }
+
+            // Some providers reject response_format outright; the prompt asks
+            // for JSON anyway, so the request is simply repeated without it.
+            if (lastError.status === 400 && body.response_format && !isModelMissing(lastError)) {
+                delete body.response_format;
+                continue;
+            }
+            if (isTransient(lastError) && !isDailyLimit(lastError) && retry < 2 && !request.signal?.aborted) {
+                const wait = lastError.retryAfterMs ?? 2000 * 2 ** retry;
+                if (wait <= MAX_RETRY_WAIT_MS) {
+                    await sleep(wait, request.signal);
+                    continue;
+                }
+            }
+            break;
+        }
+
+        if (request.signal?.aborted) break;
+        if (isDailyLimit(lastError) || isDataPolicy(lastError)) break;
+        const current = body.model as string;
+        const switchable = isModelMissing(lastError) || isToolsUnsupported(lastError)
+            || (isTransient(lastError) && current.endsWith(':free'));
+        if (!switchable) break;
+
+        if (!fallbacksAdded) {
+            fallbacksAdded = true;
+            const main = modelOf(settings);
+            if (!candidates.includes(main)) candidates.push(main);
+            if (openRouter) {
+                const needsTools = Boolean(request.tools?.length);
+                const free = (await openRouterFreeModels())
+                    .filter(m => !needsTools || m.tools)
+                    .map(m => m.id);
+                const ordered = free.includes(DEFAULT_MODEL) ? [DEFAULT_MODEL, ...free] : free;
+                for (const id of ordered) if (!candidates.includes(id)) candidates.push(id);
+            }
+        }
     }
 
-    // Some providers reject response_format outright; the prompt asks for
-    // JSON anyway, so the request is simply repeated without it.
-    if (response.status === 400 && body.response_format) {
-        delete body.response_format;
-        response = await send();
-    }
-
-    if (!response.ok) throw new Error(await describeHttpError(response));
-
-    const data: any = await response.json();
-    const message = data.choices?.[0]?.message;
-    if (!message) throw new Error('Модель вернула ответ без сообщения');
-
-    const usage = usageFrom(data);
-    await reportUsage(usage);
-
-    return {
-        content: message.content ?? null,
-        model: data.model || model,
-        usage,
-        toolCalls: (message.tool_calls || []).map((call: any) => ({
-            id: call.id,
-            name: call.function?.name,
-            args: call.function?.arguments || '{}'
-        }))
-    };
+    throw new Error(describeProviderError(lastError, model));
 };
 
 // --- Embeddings ---------------------------------------------------------------

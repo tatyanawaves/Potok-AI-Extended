@@ -247,6 +247,10 @@ const App: React.FC = () => {
         agentName: newSettings.agentName,
         agentRole: newSettings.agentRole,
         agentPrompt: newSettings.agentPrompt,
+        // Kept in step so the next sign-in, here or on another device,
+        // restores the model actually in use.
+        modelName: newSettings.openRouterModel || '',
+        apiBaseUrl: newSettings.apiBaseUrl || '',
         allowBoardUse: newSettings.allowBoardUse ?? false
       }).catch(err => console.error('Failed to sync profile:', err));
     }
