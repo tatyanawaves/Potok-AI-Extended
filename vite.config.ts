@@ -19,6 +19,11 @@ export default defineConfig(({ mode }) => {
     ],
     build: {
       rollupOptions: {
+        // The universe viewer is a separate page with no React or Firebase.
+        input: {
+          main: path.resolve(__dirname, 'index.html'),
+          universe: path.resolve(__dirname, 'universe.html')
+        },
         output: {
           // Libraries that change only when they are upgraded are kept apart
           // from application code, so a deploy does not invalidate them in
