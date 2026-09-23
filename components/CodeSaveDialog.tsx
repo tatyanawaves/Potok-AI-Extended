@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AISettings } from '../types';
 import { translations } from '../translations';
+import { Hint } from './Learning';
 import {
     CodeFile, folderPickerAvailable, saveToFolder, downloadFiles, saveToGitHub, safePath
 } from '../services/codeSave';
@@ -49,7 +50,7 @@ const CodeSaveDialog: React.FC<CodeSaveDialogProps> = ({ files: initial, setting
         <div className="fixed inset-0 z-[190] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={() => !busy && onClose()}>
             <div onClick={(e) => e.stopPropagation()} className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-w-md w-full p-5 max-h-[90vh] overflow-y-auto space-y-3">
                 <div className="flex items-start justify-between">
-                    <h3 className="text-lg font-bold font-display text-white">{t.saveCode || 'Сохранить код'}</h3>
+                    <h3 className="text-lg font-bold font-display text-white">{t.saveCode || 'Сохранить код'} <Hint id="github" always /></h3>
                     <button onClick={onClose} className="text-slate-500 hover:text-white">✕</button>
                 </div>
 

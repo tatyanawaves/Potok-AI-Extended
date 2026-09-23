@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { AISettings, Language } from '../types';
 import { translations } from '../translations';
-import { signInWithSocial, completeSocialSignIn, loginWithEmail, registerWithEmail, updateUserProfile, getUserProfile, SocialProvider, usingEmulators } from '../services/firebase';
+import { signInWithSocial, completeSocialSignIn, loginWithEmail, registerWithEmail, updateUserProfile, getUserProfile, SocialProvider, usingEmulators, resetPassword } from '../services/firebase';
+import { Hint } from './Learning';
 import { secureStorage } from '../services/encryption';
 
 interface AuthScreenProps {
@@ -208,6 +209,36 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
     }
   };
 
+  const [resetInfo, setResetInfo] = useState<string | null>(null);
+
+  /** Sends the reset email to the address typed above. */
+  const handleResetPassword = async () => {
+    setError(null);
+    setResetInfo(null);
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+      setError('Введите почту аккаунта в поле выше — на неё придёт ссылка для нового пароля.');
+      return;
+    }
+    const sent = `Если аккаунт с адресом ${email.trim()} существует, на него отправлено письмо со ссылкой для нового пароля. Проверьте и папку «Спам».`;
+    try {
+      await resetPassword(email);
+      setResetInfo(sent);
+    } catch (err: any) {
+      // Same answer whether or not the address is registered, so the form
+      // cannot be used to find out who has an account.
+      if (err?.code === 'auth/user-not-found') { setResetInfo(sent); return; }
+      setError(err?.code === 'auth/invalid-email' ? 'Некорректный адрес почты' : (err?.message || 'Не удалось отправить письмо'));
+    }
+  };
+
+  const forgotLink = !isRegistering && (
+    <div className="text-center">
+      <button type="button" onClick={handleResetPassword} className="text-xs text-slate-400 hover:text-cyan-300 underline decoration-dotted">
+        {(t as any).forgotPassword || 'Забыли пароль?'}
+      </button>
+    </div>
+  );
+
   const handleAgentEnter = (e: React.FormEvent) => {
     e.preventDefault();
     if (settings.openRouterKey && settings.agentName) {
@@ -261,6 +292,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         </div>
 
         {error && <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/50 rounded-lg text-rose-400 text-xs text-center">{error}</div>}
+        {resetInfo && <div className="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/40 rounded-lg text-emerald-300 text-xs text-center">{resetInfo}</div>}
+        <div className="flex justify-end -mt-2 mb-2"><Hint id="account" always /></div>
 
         {usingEmulators && (
           <div className="mb-4 p-3 rounded-xl border border-dashed border-amber-500/40 bg-amber-950/10">
@@ -342,6 +375,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
                 {isLoading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
                 <span>{isRegistering ? t.register : t.signIn}</span>
               </button>
+              {forgotLink}
               <div className="text-center text-xs text-slate-500">
                 {isRegistering ? t.haveAccount : t.dontHaveAccount}
                 <button type="button" onClick={() => setIsRegistering(!isRegistering)} className="text-indigo-400 hover:underline">
@@ -478,6 +512,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
               <span>{isRegistering ? t.register : t.enterNetwork}</span>
             </button>
 
+            {forgotLink}
             <div className="text-center text-xs text-slate-500">
               {isRegistering ? t.haveAccount : t.dontHaveAccount}
               <button type="button" onClick={() => setIsRegistering(!isRegistering)} className="text-cyan-400 hover:underline">

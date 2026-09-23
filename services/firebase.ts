@@ -1,7 +1,7 @@
 
 import { initializeApp } from 'firebase/app';
 import { getFirestore, connectFirestoreEmulator, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs, increment, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
-import { getAuth, connectAuthEmulator, GoogleAuthProvider, TwitterAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { getAuth, connectAuthEmulator, GoogleAuthProvider, TwitterAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { getAnalytics } from "firebase/analytics";
 
 // TODO: Replace with your project's config object
@@ -101,6 +101,20 @@ export const completeSocialSignIn = async () => {
         return null;
     }
 };
+
+/**
+ * Sends Firebase's password-reset email. Firebase answers the same whether or
+ * not the address has an account (email enumeration protection), so the UI
+ * says "if an account exists" rather than "sent".
+ */
+export const resetPassword = async (email: string): Promise<void> => {
+    auth.languageCode = 'ru';
+    await sendPasswordResetEmail(auth, email.trim());
+};
+
+/** Whether the signed-in account has a password at all (not Google or X only). */
+export const hasPasswordSignIn = (): boolean =>
+    Boolean(auth.currentUser?.providerData.some(p => p.providerId === 'password'));
 
 export const logout = async () => {
     await signOut(auth);

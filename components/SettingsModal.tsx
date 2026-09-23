@@ -4,6 +4,9 @@ import { DEFAULT_MODEL, DEFAULT_BASE_URL, embed } from '../services/llm';
 import { translations } from '../translations';
 import { isPipedreamConfigured, listConnectedAccounts, ConnectedAccount } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
+import { Hint } from './Learning';
+import { startOpenRouterLogin } from '../services/openrouterAuth';
+import { auth, resetPassword, hasPasswordSignIn } from '../services/firebase';
 import {
   saveSandboxKey, sandboxKeyStatus, deleteSandboxKey, SandboxProvider, SANDBOX_NAMES,
   saveGcpKey, gcpConnected, GCP_REGIONS
@@ -21,6 +24,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [memoryModel, setMemoryModel] = useState(settings.memoryModel || '');
   const [embeddingModel, setEmbeddingModel] = useState(settings.embeddingModel || '');
   const [githubToken, setGithubToken] = useState(settings.githubToken || '');
+  const [passwordInfo, setPasswordInfo] = useState<string | null>(null);
 
   // Sandbox keys go straight to the server; the page only learns whether one is set.
   const [sandboxKeys, setSandboxKeys] = useState<Record<SandboxProvider, boolean>>({ e2b: false, daytona: false });
@@ -172,6 +176,25 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
         <div className="p-6 space-y-6 overflow-y-auto custom-scrollbar flex-1 min-h-0">
 
 
+          {hasPasswordSignIn() && (
+            <div className="flex items-center gap-2">
+              <button type="button"
+                onClick={async () => {
+                  try {
+                    await resetPassword(auth.currentUser!.email!);
+                    setPasswordInfo(`Письмо со ссылкой для нового пароля отправлено на ${auth.currentUser!.email}`);
+                  } catch (e) {
+                    setPasswordInfo(e instanceof Error ? e.message : String(e));
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-300 text-[10px] font-mono uppercase tracking-wider hover:bg-slate-800">
+                {(t as any).changePassword || 'Сменить пароль'}
+              </button>
+              <Hint id="account" />
+              {passwordInfo && <span className="text-[10px] text-emerald-400">{passwordInfo}</span>}
+            </div>
+          )}
+
           <div className="space-y-2">
             <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
               {t.language}
@@ -233,8 +256,22 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
               </p>
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      {t.apiKeyLabel}
+                      {t.apiKeyLabel} <Hint id="api-key" always />
                     </label>
+                    {/* One click instead of hunting for the keys page: OpenRouter's
+                        own OAuth flow issues the key and sends it back here. */}
+                    {!apiBaseUrl.trim() || apiBaseUrl.includes('openrouter.ai') ? (
+                      <button type="button" onClick={() => startOpenRouterLogin()}
+                        className="w-full py-2 rounded-lg border border-indigo-500/40 bg-indigo-950/30 text-indigo-200 text-[11px] font-bold hover:bg-indigo-900/40">
+                        {(t as any).openRouterLogin || 'Войти через OpenRouter — получить ключ автоматически'}
+                      </button>
+                    ) : null}
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
+                      <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer" className="text-cyan-400/80 hover:text-cyan-300 underline">OpenRouter ↗</a>
+                      <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-cyan-400/80 hover:text-cyan-300 underline">Groq ↗</a>
+                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-cyan-400/80 hover:text-cyan-300 underline">Gemini ↗</a>
+                      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-cyan-400/80 hover:text-cyan-300 underline">OpenAI ↗</a>
+                    </div>
                     <input
                       type="password"
                       value={openRouterKey === 'google-auth' ? '' : openRouterKey}
@@ -246,7 +283,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      {t.modelLabel || 'Модель'}
+                      {t.modelLabel || 'Модель'} <a href="https://openrouter.ai/models?max_price=0" target="_blank" rel="noopener noreferrer" className="normal-case tracking-normal text-[10px] text-cyan-400/80 underline">бесплатные ↗</a>
                     </label>
                     <input
                       type="text"
@@ -259,7 +296,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      {t.memoryModelLabel || 'Модель для служебных задач'} ({t.optional || 'необязательно'})
+                      {t.memoryModelLabel || 'Модель для служебных задач'} ({t.optional || 'необязательно'}) <Hint id="memory-model" />
                     </label>
                     <input
                       type="text"
@@ -276,11 +313,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                   {isPipedreamConfigured() && (
                     <div className="space-y-2">
                       <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                        {(t as any).sandboxKeysLabel || 'Песочницы кода (ваш ключ)'}
+                        {(t as any).sandboxKeysLabel || 'Песочницы кода (ваш ключ)'} <Hint id="sandbox" always />
                       </label>
                       {(['e2b', 'daytona'] as SandboxProvider[]).map(provider => (
                         <div key={provider} className="flex gap-2 items-center">
-                          <span className="w-16 text-[11px] font-mono text-slate-400 shrink-0">{SANDBOX_NAMES[provider]}</span>
+                          <a href={provider === 'e2b' ? 'https://e2b.dev/dashboard' : 'https://app.daytona.io/dashboard/keys'} target="_blank" rel="noopener noreferrer"
+                            title="Где взять ключ" className="w-16 text-[11px] font-mono text-cyan-400/80 hover:text-cyan-300 underline shrink-0">{SANDBOX_NAMES[provider]} ↗</a>
                           {sandboxKeys[provider] ? (
                             <>
                               <span className="flex-1 text-[11px] text-emerald-400">✓ {(t as any).keySaved || 'ключ сохранён'}</span>
@@ -311,7 +349,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                   {isPipedreamConfigured() && (
                     <div className="space-y-2">
                       <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                        {(t as any).gcpLabel || 'Google Cloud Run (ваш проект)'}
+                        {(t as any).gcpLabel || 'Google Cloud Run (ваш проект)'} <Hint id="cloud-run" always />
                       </label>
                       {gcpSet ? (
                         <div className="flex items-center gap-2">
@@ -347,7 +385,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      {t.githubTokenLabel || 'Токен GitHub (сохранение кода)'}
+                      {t.githubTokenLabel || 'Токен GitHub (сохранение кода)'} <Hint id="github" always /> <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer" className="normal-case tracking-normal text-[10px] text-cyan-400/80 underline">создать ↗</a>
                     </label>
                     <input
                       type="password"
@@ -363,7 +401,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      {t.embeddingModelLabel || 'Модель эмбеддингов (поиск по смыслу)'}
+                      {t.embeddingModelLabel || 'Модель эмбеддингов (поиск по смыслу)'} <Hint id="embeddings" always />
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -448,7 +486,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                  {t.connectedAccounts || 'Подключённые аккаунты'}
+                  {t.connectedAccounts || 'Подключённые аккаунты'} <Hint id="pipedream" />
                 </label>
                 <button
                   type="button"
@@ -508,7 +546,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
           <div className="space-y-2">
             <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-              {t.mcpTokensLabel || 'Токены MCP-серверов'}
+              {t.mcpTokensLabel || 'Токены MCP-серверов'} <Hint id="mcp" />
             </label>
             <p className="text-[10px] text-slate-500">
               {t.mcpTokensDesc || 'Нужны только для серверов с авторизацией. Хранятся зашифрованными в этом браузере и никогда не попадают в базу — участники доски их не увидят.'}

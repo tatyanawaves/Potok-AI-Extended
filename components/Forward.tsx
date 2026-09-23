@@ -3,6 +3,7 @@ import { AISettings } from '../types';
 import { translations } from '../translations';
 import { auth, searchProfiles } from '../services/firebase';
 import { FollowedProfile } from '../services/social';
+import { Hint } from './Learning';
 import {
     ForwardPayload, ForwardTarget, ForwardDestinations, ForwardResult,
     loadForwardDestinations, forwardItem, targetKey, targetLabel, describeOrigin, isEmptyPayload
@@ -261,7 +262,7 @@ const ForwardDialog: React.FC<ForwardDialogProps> = ({ payload, settings, follow
             >
                 <div className="p-5 pb-3 border-b border-slate-800 shrink-0">
                     <div className="flex items-start justify-between gap-3">
-                        <h3 className="text-lg font-bold font-display text-white">{t.forward || 'Переслать'}</h3>
+                        <h3 className="text-lg font-bold font-display text-white">{t.forward || 'Переслать'} <Hint id="forward" /></h3>
                         <button onClick={onClose} disabled={sending} className="text-slate-500 hover:text-white">✕</button>
                     </div>
                     <div className="mt-2 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800">

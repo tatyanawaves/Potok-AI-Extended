@@ -11,6 +11,8 @@ import Boards from './components/Boards';
 import { useUnread } from './hooks/useUnread';
 import Messages from './components/Messages';
 import { ForwardProvider } from './components/Forward';
+import { LearningProvider, useLearning, Hint } from './components/Learning';
+import { finishOpenRouterLogin } from './services/openrouterAuth';
 import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
 import { Thought, SavedSession, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
@@ -249,6 +251,19 @@ const App: React.FC = () => {
       }).catch(err => console.error('Failed to sync profile:', err));
     }
   };
+
+  // Back from "Sign in with OpenRouter": the page arrives with ?code=…, which
+  // becomes this user's key, then Settings open so they see it took.
+  useEffect(() => {
+    finishOpenRouterLogin()
+      .then(key => {
+        if (!key) return;
+        handleSaveSettings({ ...settingsRef.current, openRouterKey: key, apiBaseUrl: '' });
+        setShowSettings(true);
+      })
+      .catch(err => setError(err instanceof Error ? err.message : String(err)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleAuthorize = (newSettings: AISettings) => {
     handleSaveSettings(newSettings);
@@ -1175,7 +1190,7 @@ const App: React.FC = () => {
   );
 
   if (!isAuthorized) {
-    return <AuthScreen onAuthorize={handleAuthorize} initialSettings={settings} />;
+    return <LearningProvider><AuthScreen onAuthorize={handleAuthorize} initialSettings={settings} /></LearningProvider>;
   }
 
   // overflow-clip, not overflow-hidden: a closed panel still sits outside the
@@ -1183,6 +1198,7 @@ const App: React.FC = () => {
   // something inside it takes focus. That scrolled the whole interface sideways
   // and pushed the header off the screen.
   return (
+    <LearningProvider>
     <ForwardProvider settings={settings} followedProfiles={followedProfiles}>
     <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-clip relative">
       {showSettings && <SettingsModal settings={settings} onSave={handleSaveSettings} onClose={() => setShowSettings(false)} />}
@@ -1247,6 +1263,7 @@ const App: React.FC = () => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
           </button>
+          <LearningButton title={(t as any).learning || 'Обучение'} />
           <button onClick={() => setShowSettings(true)} className="p-1.5 md:p-2 rounded-md hover:bg-slate-800 text-slate-400 transition-colors" title={t.settings}><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg></button>
           <button onClick={handleLogout} className="p-1.5 md:p-2 rounded-md hover:bg-rose-900/20 text-slate-400 hover:text-rose-400 transition-colors" title="Logout"><svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg></button>
         </div>
@@ -1460,6 +1477,7 @@ const App: React.FC = () => {
                   <div className="flex bg-slate-900/80 backdrop-blur rounded-lg p-1 border border-slate-700">
                     <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
                   </div>
+                  <span className="self-center"><Hint id="map" /></span>
                 </div>
                 {showingViewedMap && viewedUser && (
                   <div className="absolute top-16 left-4 z-20 px-3 py-1.5 bg-slate-900/80 backdrop-blur rounded-lg border border-slate-700 text-[10px] font-mono uppercase tracking-widest text-slate-400">
@@ -1584,6 +1602,17 @@ const App: React.FC = () => {
       </main >
     </div >
     </ForwardProvider>
+    </LearningProvider>
+  );
+};
+
+/** The 🎓 button: opens the help centre. Inside the provider, so it is its own component. */
+const LearningButton: React.FC<{ title: string }> = ({ title }) => {
+  const { openCenter } = useLearning();
+  return (
+    <button onClick={openCenter} className="p-1.5 md:p-2 rounded-md hover:bg-slate-800 text-slate-400 hover:text-cyan-300 transition-colors text-lg leading-none" title={title}>
+      🎓
+    </button>
   );
 };
 

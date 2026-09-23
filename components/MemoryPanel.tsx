@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { translations } from '../translations';
 import { AISettings } from '../types';
+import { Hint } from './Learning';
 import {
     subscribeToSummary, subscribeToNotes, addNote, deleteNote, resetSummary
 } from '../services/agentMemory';
@@ -46,7 +47,7 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, 
     return (
         <aside className="absolute md:relative inset-y-0 right-0 z-20 w-72 shrink-0 border-l border-slate-800 bg-slate-900 md:bg-slate-900/30 flex flex-col">
             <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-amber-300/80 flex items-center justify-between">
-                {t.memory || 'Память'}
+                <span>{t.memory || 'Память'} <Hint id="memory" always /></span>
                 <button onClick={onClose} className="text-slate-500 hover:text-white" title={t.close || 'Закрыть'}>✕</button>
             </div>
 

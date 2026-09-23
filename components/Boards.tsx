@@ -27,6 +27,7 @@ import { updateBot } from '../services/boards';
 import MemoryPanel from './MemoryPanel';
 import CodeSaveDialog from './CodeSaveDialog';
 import ToolAdvisor from './ToolAdvisor';
+import { Hint } from './Learning';
 import { cloudBrowserUrl, connectedMcpUrl, startOAuthConnection, OAUTH_PRESETS, sandboxUrl, cloudRunUrl } from '../services/connectors';
 import { extractCodeFiles, toFile, CodeFile } from '../services/codeSave';
 import {
@@ -720,7 +721,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             <aside className={`${activeBoardId ? 'hidden md:flex' : 'flex'} w-full md:w-56 shrink-0 border-r border-slate-800 bg-slate-900/40 flex-col`}>
                 <div className="p-4 border-b border-slate-800 flex items-center justify-between">
                     <span className="font-mono text-[10px] uppercase tracking-widest text-cyan-500 font-bold">
-                        {t.boards || 'Доски'}
+                        {t.boards || 'Доски'} <Hint id="boards" />
                     </span>
                     <button
                         onClick={() => openModal({ kind: 'createBoard' })}
@@ -895,6 +896,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         {t.memory || 'Память'}
                                     </button>
                                 )}
+                                {activeChannelId && <Hint id="memory" />}
 
                                 {activeChannelId && (
                                     <button
@@ -905,6 +907,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         {t.discussion || 'Совещание'}
                                     </button>
                                 )}
+                                {activeChannelId && <Hint id="meeting" />}
 
                                 <button
                                     onClick={() => setShowMembers(!showMembers)}
@@ -1414,9 +1417,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {modal.kind === 'createBoard' && (t.createBoard || 'Создать доску')}
                             {modal.kind === 'createChannel' && (t.createChannel || 'Создать канал')}
                             {modal.kind === 'addHuman' && (t.addHuman || 'Добавить человека')}
-                            {modal.kind === 'createBot' && (t.createBot || 'Создать бота')}
+                            {modal.kind === 'createBot' && <>{t.createBot || 'Создать бота'} <Hint id="bots" always /></>}
                             {modal.kind === 'cloneAgent' && (t.cloneAgent || 'Бот из персоны')}
-                            {modal.kind === 'discussion' && (t.discussion || 'Совещание ботов')}
+                            {modal.kind === 'discussion' && <>{t.discussion || 'Совещание ботов'} <Hint id="meeting" always /></>}
                             {modal.kind === 'editBot' && `${t.editBot || 'Изменить бота'} · ${modal.botName}`}
                             {modal.kind === 'deleteBoard' && (t.deleteBoard || 'Удалить доску')}
                             {modal.kind === 'deleteChannel' && (t.deleteChannel || 'Удалить канал')}
@@ -1554,7 +1557,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 className="mt-0.5 accent-sky-500"
                                             />
                                             <span className="text-[10px] leading-relaxed text-slate-400">
-                                                <span className="text-sky-300 font-bold block">{t.runOnServer || 'На сервере'}</span>
+                                                <span className="text-sky-300 font-bold block">{t.runOnServer || 'На сервере'} <Hint id="server-tasks" always /></span>
                                                 {t.runOnServerHint || 'Задача продолжится, даже если закрыть вкладку. Сервер получит ваш ключ API и право действовать от вашего имени на время задачи — в зашифрованном виде; подтверждать вызовы инструментов там некому.'}
                                             </span>
                                         </label>
@@ -1592,7 +1595,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 {activeBoard?.members.some(m => discussionBots.includes(m.id) && toolServersOf(m).length > 0) && (
                                     <div className="mb-4">
                                         <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
-                                            {t.toolAccess || 'Доступ к инструментам'}
+                                            {t.toolAccess || 'Доступ к инструментам'} <Hint id="tool-policy" always />
                                         </label>
                                         <div className="flex space-x-1">
                                             {([
@@ -1751,7 +1754,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 />
 
                                 <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
-                                    {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'}
+                                    {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'} <Hint id="oauth-connectors" always /> <Hint id="mcp" />
                                 </label>
 
                                 {/* Tools every user can have without installing anything. */}
