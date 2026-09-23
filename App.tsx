@@ -110,6 +110,8 @@ const App: React.FC = () => {
     // and, unlike the rest of the settings, are never synced to Firestore.
     const savedKey = secureStorage.getItem('openRouterKey');
     if (savedKey) parsed.openRouterKey = savedKey;
+    const savedGithubToken = secureStorage.getItem('githubToken');
+    if (savedGithubToken) parsed.githubToken = savedGithubToken;
 
     // Groq and Gemini were separate providers once. Their keys are carried
     // over to the single OpenAI-compatible API, then the old slots cleared.
@@ -219,6 +221,11 @@ const App: React.FC = () => {
     if (settingsToSave.openRouterKey) {
       secureStorage.setItem('openRouterKey', settingsToSave.openRouterKey);
       delete settingsToSave.openRouterKey;
+    }
+    if (settingsToSave.githubToken !== undefined) {
+      if (settingsToSave.githubToken) secureStorage.setItem('githubToken', settingsToSave.githubToken);
+      else secureStorage.removeItem('githubToken');
+      delete settingsToSave.githubToken;
     }
     if (settingsToSave.mcpTokens && Object.keys(settingsToSave.mcpTokens).length > 0) {
       secureStorage.setItem('mcpTokens', JSON.stringify(settingsToSave.mcpTokens));

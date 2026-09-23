@@ -71,6 +71,8 @@ export interface AISettings {
    * means keyword search only.
    */
   embeddingModel?: string;
+  /** GitHub token for saving bots' code to a repository; browser-only, like the API key. */
+  githubToken?: string;
   imageGenKey?: string;
   imageGenProvider?: 'flux' | 'replicate' | 'pollinations';
 }

@@ -18,6 +18,8 @@
  *   POST /pd/mcp            → MCP JSON-RPC, proxied with injected credentials
  *   POST /tasks/start       → run an orchestrated meeting here (./agentTasks)
  *   POST /tasks/cancel      → ask a running one to stop
+ *   POST /tools/browser     → cloud browser for bots, as MCP (./cloudBrowser)
+ *   POST /oauth/*, /connect/mcp → OAuth MCP servers such as Higgsfield (./oauthConnect)
  *   GET  /health
  */
 
@@ -26,6 +28,12 @@ import {
     mayAccessConversation, conversationOfKey, boardOfKey, isBoardMember
 } from './files';
 import { handleTaskStart, handleTaskCancel, type TaskEnv } from './agentTasks';
+import { handleMcpRequest } from './mcpServer';
+import { browserTools } from './cloudBrowser';
+import {
+    handleOAuthStart, handleOAuthCallback, handleOAuthStatus, handleOAuthDisconnect,
+    handleConnectedMcp, type OAuthEnv
+} from './oauthConnect';
 
 /**
  * R2 binding, typed structurally for the same reason FileBucket is: the test
@@ -45,7 +53,9 @@ interface AttachmentBucket {
     delete(key: string): Promise<void>;
 }
 
-export interface Env extends TaskEnv {
+export interface Env extends TaskEnv, OAuthEnv {
+    /** Cloudflare Browser Rendering, for the cloud browser tool. */
+    BROWSER?: unknown;
     FIREBASE_PROJECT_ID: string;
     PIPEDREAM_PROJECT_ID: string;
     PIPEDREAM_CLIENT_ID: string;
@@ -641,9 +651,17 @@ export default {
                 environment: env.PIPEDREAM_ENVIRONMENT,
                 secretConfigured: Boolean(env.PIPEDREAM_CLIENT_SECRET),
                 attachments: Boolean(env.FILES),
+                cloudBrowser: Boolean(env.BROWSER),
+                oauthConnectors: Boolean(env.CONNECTOR_TOKENS),
                 serverTasks: Boolean(env.AGENT_TASKS && env.FIREBASE_WEB_API_KEY
                     && (env.TASK_SEALING_SECRET || env.PIPEDREAM_CLIENT_SECRET))
             }, 200, cors);
+        }
+
+        // The provider redirects the user's browser here after sign-in; the
+        // one-time state, not a Firebase token, identifies them.
+        if (request.method === 'GET' && url.pathname === '/oauth/callback') {
+            return handleOAuthCallback(request, env);
         }
 
         // Downloads are GETs; everything else here is a POST.
@@ -687,6 +705,15 @@ export default {
             if (url.pathname === '/pd/mcp') {
                 return await handleMcp(request, env, uid, cors);
             }
+            if (url.pathname === '/tools/browser') {
+                if (!env.BROWSER) return json({ error: 'Cloud browser is not enabled on this worker' }, 501, cors);
+                return await handleMcpRequest(request, 'potok-cloud-browser', browserTools(env.BROWSER), cors);
+            }
+            const reply = (body: unknown, status: number) => json(body, status, cors);
+            if (url.pathname === '/oauth/start') return await handleOAuthStart(request, env, uid, reply);
+            if (url.pathname === '/oauth/status') return await handleOAuthStatus(request, env, uid, reply);
+            if (url.pathname === '/oauth/disconnect') return await handleOAuthDisconnect(request, env, uid, reply);
+            if (url.pathname === '/connect/mcp') return await handleConnectedMcp(request, env, uid, cors);
             if (url.pathname === '/tasks/start') {
                 return await handleTaskStart(request, env, uid, idToken, (body, status) => json(body, status, cors));
             }

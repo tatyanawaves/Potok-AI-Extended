@@ -4,7 +4,7 @@ import {
     RosterEntry, Plan, PlanStep, StepLog, Evaluation, FinalReport, OrchestrationProgress,
     planPrompt, parsePlan, evaluationPrompt, parseEvaluation, finalPrompt, parseFinal,
     renderPlan, renderReport, readySteps, inputsFor, appendStep,
-    MAX_ORCHESTRATED_STEPS, MAX_PARALLEL_STEPS
+    MAX_ORCHESTRATED_STEPS, MAX_PARALLEL_STEPS, MAX_RESUMES
 } from '../orchestratorCore';
 import { AgentStore } from './store';
 import { runAndPostTurn, probeToolServer, toolServersOf, ToolPolicy, ToolApprover } from './turn';
@@ -48,6 +48,11 @@ export interface RunState {
     evaluation: Evaluation | null;
     stopped: boolean;
     finished: boolean;
+    /**
+     * Seconds to pause before the next wave, when a bot is waiting on a slow
+     * job. The server sleeps durably; the browser simply waits.
+     */
+    sleepSeconds?: number;
 }
 
 const bookkeeping = (settings: AISettings) => settings.memoryModel || undefined;
@@ -138,16 +143,40 @@ export const iterate = async (
         }
     })));
 
-    const log = [...state.log, ...wave.map((step, i) => ({
-        stepId: step.id,
-        bot: step.bot,
-        instruction: step.instruction,
-        result: outcomes[i].ok ? outcomes[i].result!.reply : (outcomes[i].error || 'ошибка'),
-        ok: outcomes[i].ok
-    }))];
-    wave.forEach(s => done.add(s.id));
+    // A step that asked to wait goes back into the plan, to the same bot,
+    // told what to check; it is not logged as a result yet.
+    let steps = state.steps;
+    let sleepSeconds = 0;
+    const finishedHere: typeof wave = [];
 
-    let next: RunState = { ...state, log, done: [...done] };
+    wave.forEach((step, i) => {
+        const wait = outcomes[i].ok ? outcomes[i].result!.wait : undefined;
+        if (wait && (step.resumes || 0) < MAX_RESUMES) {
+            sleepSeconds = Math.max(sleepSeconds, wait.seconds);
+            steps = steps.map(s => s.id === step.id ? {
+                ...s,
+                resumes: (s.resumes || 0) + 1,
+                instruction: `${step.instruction.split('\n[ПРОДОЛЖЕНИЕ]')[0]}\n[ПРОДОЛЖЕНИЕ] Ты ставил паузу. Проверь: ${wait.note}`
+            } : s);
+        } else {
+            finishedHere.push(step);
+        }
+    });
+
+    const log = [...state.log, ...finishedHere.map(step => {
+        const i = wave.indexOf(step);
+        return {
+            stepId: step.id,
+            bot: step.bot,
+            instruction: step.instruction,
+            result: outcomes[i].ok ? outcomes[i].result!.reply : (outcomes[i].error || 'ошибка'),
+            ok: outcomes[i].ok
+        };
+    })];
+    finishedHere.forEach(s => done.add(s.id));
+
+    let next: RunState = { ...state, steps, log, done: [...done], sleepSeconds };
+    if (sleepSeconds > 0) return next;
 
     // A bad key or a missing model fails every later step the same way.
     if (outcomes.some(o => !o.ok && isFatalProviderError(o.error))) {
@@ -215,6 +244,13 @@ export const runOrchestration = async (
     let state = await startRun(ctx);
     while (!state.finished) {
         if (shouldStop?.()) { state = { ...state, stopped: true, finished: true }; break; }
+        if (state.sleepSeconds) {
+            // In the browser a pause is a timer; Stop still ends it at once.
+            const until = Date.now() + state.sleepSeconds * 1000;
+            while (Date.now() < until && !shouldStop?.()) await new Promise(r => setTimeout(r, 1000));
+            state = { ...state, sleepSeconds: 0 };
+            continue;
+        }
         state = await iterate(ctx, state, onProgress);
     }
 

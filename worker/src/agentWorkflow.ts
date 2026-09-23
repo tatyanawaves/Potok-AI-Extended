@@ -17,7 +17,7 @@ import { openRuntime, type TaskParams } from './agentTasks';
 import worker, { type Env } from './index';
 
 /** Upper bound on waves, far above what MAX_ORCHESTRATED_STEPS allows. */
-const MAX_WAVES = 24;
+const MAX_WAVES = 40;
 
 // Results are plain JSON; the cast only quiets the Serializable constraint.
 const plain = <T>(value: T): any => JSON.parse(JSON.stringify(value));
@@ -42,6 +42,14 @@ export class AgentTaskWorkflow extends WorkflowEntrypoint<Env, TaskParams> {
                 if (cancelled) {
                     state = { ...state, stopped: true, finished: true };
                     break;
+                }
+
+                if (state.sleepSeconds) {
+                    // A durable pause: the instance sleeps without holding a
+                    // request open, and wakes up here even after a restart.
+                    await rt.setTask({ phase: 'waiting', waitUntil: Date.now() + state.sleepSeconds * 1000 });
+                    await step.sleep(`pause-${wave}`, state.sleepSeconds * 1000);
+                    state = { ...state, sleepSeconds: 0 };
                 }
 
                 const current = state;

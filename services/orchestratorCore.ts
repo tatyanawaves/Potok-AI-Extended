@@ -29,7 +29,12 @@ export interface PlanStep {
      * together, in the same wave.
      */
     after: number[];
+    /** Times this step paused with wait_and_resume and came back. */
+    resumes?: number;
 }
+
+/** Most times one step may pause; past it the step is taken as finished. */
+export const MAX_RESUMES = 4;
 
 /** A step the supervisor asks for, before it gets an id and dependencies. */
 export interface StepRequest {

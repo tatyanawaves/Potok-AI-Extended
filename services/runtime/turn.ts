@@ -85,7 +85,29 @@ const BUILTIN_TOOLS: McpTool[] = [
     }
 ];
 
-const isBuiltin = (name: string) => BUILTIN_TOOLS.some(t => t.name === name);
+/**
+ * Offered only inside an orchestrated task. Some work takes minutes — a video
+ * render, a long build — and a bot that polls in a loop burns its tool rounds
+ * and the user's tokens. It says how long to wait instead; the orchestrator
+ * pauses (a durable sleep on the server) and gives the same step back.
+ */
+const WAIT_TOOL: McpTool = {
+    name: 'wait_and_resume',
+    description: 'Pause this step and continue it later — use when a job you started (video/image generation, a build, a long export) needs minutes to finish. Say what to check when you resume.',
+    inputSchema: {
+        type: 'object',
+        properties: {
+            seconds: { type: 'number', description: 'How long to wait, 30 to 1800.' },
+            note: { type: 'string', description: 'What to check on resume, with any job ids.' }
+        },
+        required: ['seconds', 'note']
+    }
+};
+
+export const MIN_WAIT_SECONDS = 30;
+export const MAX_WAIT_SECONDS = 1800;
+
+const isBuiltin = (name: string) => name === WAIT_TOOL.name || BUILTIN_TOOLS.some(t => t.name === name);
 
 // --- Prompt -------------------------------------------------------------------
 
@@ -188,6 +210,8 @@ export interface TurnResult {
     modelName: string;
     toolsUsed: string[];
     usage: TokenUsage;
+    /** Set when the bot asked to pause its step and come back later. */
+    wait?: { seconds: number, note: string };
 }
 
 export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
@@ -201,7 +225,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
 
     // Connect every server; a dead one must not silence the bot.
     const toolOwner = new Map<string, McpConnection>();
-    const available: McpTool[] = [...BUILTIN_TOOLS];
+    const available: McpTool[] = assignment ? [...BUILTIN_TOOLS, WAIT_TOOL] : [...BUILTIN_TOOLS];
     const notes: string[] = [];
 
     if (toolPolicy !== 'off') {
@@ -257,7 +281,16 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
         return found.length ? found.map(n => `- ${n.text} (${n.author})`).join('\n') : 'Nothing relevant in board memory.';
     };
 
+    let waitRequest: TurnResult['wait'];
+
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+        if (waitRequest) {
+            return {
+                reply: `⏳ Жду ${waitRequest.seconds} с: ${waitRequest.note}`,
+                modelName: model, toolsUsed, usage, wait: waitRequest
+            };
+        }
+
         // Final round without tools, so the model has to answer in prose.
         const offer = round < MAX_TOOL_ROUNDS ? tools : undefined;
         const completion = await complete({ messages, tools: offer, model, temperature: 0.8, signal }, settings);
@@ -288,7 +321,11 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
 
             let result: string;
             try {
-                if (isBuiltin(call.name)) {
+                if (call.name === WAIT_TOOL.name) {
+                    const seconds = Math.min(MAX_WAIT_SECONDS, Math.max(MIN_WAIT_SECONDS, Number(args.seconds) || 60));
+                    waitRequest = { seconds, note: String(args.note || '').slice(0, 500) };
+                    result = `Paused for ${seconds}s; you will be called again.`;
+                } else if (isBuiltin(call.name)) {
                     result = await runBuiltin(call.name, args);
                 } else {
                     const connection = toolOwner.get(call.name);

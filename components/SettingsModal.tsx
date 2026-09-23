@@ -16,6 +16,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || DEFAULT_MODEL);
   const [memoryModel, setMemoryModel] = useState(settings.memoryModel || '');
   const [embeddingModel, setEmbeddingModel] = useState(settings.embeddingModel || '');
+  const [githubToken, setGithubToken] = useState(settings.githubToken || '');
   const [embeddingCheck, setEmbeddingCheck] = useState<{ ok: boolean, text: string } | null>(null);
 
   /** One tiny request, so a wrong model name shows up here and not as silent keyword search. */
@@ -79,6 +80,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       aiProvider: 'openrouter',
       memoryModel: memoryModel.trim() || undefined,
       embeddingModel: embeddingModel.trim() || undefined,
+      githubToken: githubToken.trim(),
       apiBaseUrl,
       language,
       agentName,
@@ -227,6 +229,22 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                     />
                     <p className="text-[10px] text-slate-600 leading-relaxed">
                       {t.memoryModelHint || 'Сжатие памяти, план и проверки совещаний. Дешёвая быстрая модель здесь экономит токены, не трогая ответы ботов.'}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      {t.githubTokenLabel || 'Токен GitHub (сохранение кода)'}
+                    </label>
+                    <input
+                      type="password"
+                      value={githubToken}
+                      onChange={(e) => setGithubToken(e.target.value)}
+                      placeholder="github_pat_..."
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                    />
+                    <p className="text-[10px] text-slate-600 leading-relaxed">
+                      {t.githubTokenHint || 'Fine-grained токен с правом Contents: Read and write на нужные репозитории. Хранится только в этом браузере.'}
                     </p>
                   </div>
 

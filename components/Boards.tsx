@@ -25,6 +25,10 @@ import {
 } from '../services/orchestrator';
 import { updateBot } from '../services/boards';
 import MemoryPanel from './MemoryPanel';
+import CodeSaveDialog from './CodeSaveDialog';
+import ToolAdvisor from './ToolAdvisor';
+import { cloudBrowserUrl, connectedMcpUrl, startOAuthConnection, OAUTH_PRESETS } from '../services/connectors';
+import { extractCodeFiles, toFile, CodeFile } from '../services/codeSave';
 import {
     serverTasksAvailable, startServerTask, cancelServerTask, subscribeToTasks,
     isActive, isLocalUrl, ServerTask, STALE_AFTER_MS
@@ -140,6 +144,23 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
     // Server tasks: meetings the worker runs, which outlive this tab.
     const [runOnServer, setRunOnServer] = useState(false);
+    const [codeToSave, setCodeToSave] = useState<CodeFile[] | null>(null);
+    const [advisorTask, setAdvisorTask] = useState<string | null>(null);
+
+    /** Keeps the files in the board's storage, as a message in this channel. */
+    const saveCodeToBoard = async (files: CodeFile[]) => {
+        if (!activeBoard || !activeChannelId || !currentUid) throw new Error('Откройте канал');
+        const attachments = await Promise.all(files.map(f => uploadAttachment({ boardId: activeBoard.id! }, toFile(f))));
+        await sendMessage({
+            channelId: activeChannelId,
+            boardId: activeBoard.id!,
+            authorId: currentUid,
+            authorName: settings.agentName || 'User',
+            authorType: settings.userType === 'agent' ? 'agent' : 'human',
+            content: `💾 ${files.map(f => f.path).join(', ')}`,
+            attachments
+        });
+    };
     const [serverTasks, setServerTasks] = useState<ServerTask[]>([]);
 
     /**
@@ -940,6 +961,15 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 <span className="text-[10px] text-slate-600 font-mono">
                                                     {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                 </span>
+                                                {msg.content.includes('```') && (
+                                                    <button
+                                                        onClick={() => setCodeToSave(extractCodeFiles(msg.content))}
+                                                        className="text-[11px] text-slate-500 hover:text-cyan-300 md:opacity-0 md:group-hover:opacity-100"
+                                                        title={t.saveCode || 'Сохранить код'}
+                                                    >
+                                                        💾
+                                                    </button>
+                                                )}
                                                 <ForwardButton
                                                     title={t.forward || 'Переслать'}
                                                     className="md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
@@ -1026,6 +1056,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                                 : task.status === 'done' ? `${t.taskDone || 'готово'} · ${task.progress}%`
                                                                     : task.status === 'stopped' ? (t.taskStopped || 'остановлено')
                                                                         : task.status === 'failed' ? `${t.taskFailed || 'ошибка'}: ${task.error || ''}`
+                                                                            : task.phase === 'waiting' ? `${t.taskWaiting || 'пауза до'} ${new Date(task.waitUntil || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
                                                                             : task.phase === 'planning' ? (t.orchPlanning || 'план…')
                                                                                 : task.phase === 'checking' ? (t.orchChecking || 'проверка…')
                                                                                     : task.phase === 'finishing' ? (t.orchFinishing || 'итог…')
@@ -1283,6 +1314,27 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                     </>
                 )}
             </section>
+
+            {advisorTask && activeBoard && currentUid && (
+                <ToolAdvisor
+                    task={advisorTask}
+                    bots={activeBoard.members.filter(isBot)}
+                    boardId={activeBoard.id!}
+                    ownerId={currentUid}
+                    settings={settings}
+                    onCodeFiles={files => setCodeToSave(files)}
+                    onClose={() => setAdvisorTask(null)}
+                />
+            )}
+
+            {codeToSave && codeToSave.length > 0 && (
+                <CodeSaveDialog
+                    files={codeToSave}
+                    settings={settings}
+                    onSaveToBoard={attachmentsAvailable() ? saveCodeToBoard : undefined}
+                    onClose={() => setCodeToSave(null)}
+                />
+            )}
 
             {lightbox && (
                 <ImageLightbox
@@ -1560,8 +1612,17 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     value={botPrompt}
                                     onChange={(e) => setBotPrompt(e.target.value)}
                                     placeholder={t.taskPlaceholder || 'Задача: собрать 3 варианта слогана для баннера и выбрать лучший, с обоснованием.'}
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-4 font-mono"
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-2 font-mono"
                                 />
+                                <button
+                                    type="button"
+                                    disabled={!botPrompt.trim()}
+                                    onClick={() => setAdvisorTask(botPrompt.trim())}
+                                    className="w-full mb-4 py-2 rounded-lg border border-dashed border-cyan-500/40 text-cyan-300 text-[10px] font-mono uppercase tracking-wider hover:bg-cyan-950/30 disabled:opacity-40"
+                                    title={t.toolAdvisorHint || 'Оркестратор проверит, каких инструментов не хватает, и предложит подключить их, создать бота или свой MCP'}
+                                >
+                                    🧩 {t.toolAdvisor || 'Подобрать инструменты'}
+                                </button>
                             </>
                         )}
 
@@ -1674,6 +1735,43 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
                                     {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'}
                                 </label>
+
+                                {/* Tools every user can have without installing anything. */}
+                                {isPipedreamConfigured() && (
+                                    <div className="flex flex-wrap items-center gap-1 mb-2">
+                                        {[
+                                            { name: '🌐 Облачный браузер', url: cloudBrowserUrl(), oauth: null as string | null },
+                                            ...OAUTH_PRESETS.map(p => ({ name: p.name, url: connectedMcpUrl(p.server), oauth: p.server }))
+                                        ].map(preset => {
+                                            const picked = splitUrls(botToolUrl).includes(preset.url);
+                                            return (
+                                                <span key={preset.url} className="inline-flex">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setBotToolUrl(prev => (picked
+                                                            ? splitUrls(prev).filter(u => u !== preset.url)
+                                                            : [...splitUrls(prev), preset.url]).join('\n'))}
+                                                        className={`text-[10px] font-mono px-2 py-1 rounded-l border transition-all ${picked
+                                                            ? 'bg-sky-950/50 border-sky-500/40 text-sky-200'
+                                                            : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
+                                                    >
+                                                        {picked ? '✓ ' : ''}{preset.name}
+                                                    </button>
+                                                    {preset.oauth && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => startOAuthConnection(preset.oauth!).catch(e => setError(e instanceof Error ? e.message : String(e)))}
+                                                            className="text-[10px] font-mono px-1.5 py-1 rounded-r border border-l-0 border-slate-700 text-amber-300/80 hover:text-amber-200"
+                                                            title={t.signInOnce || 'Войти один раз — дальше бот работает от вашего аккаунта'}
+                                                        >
+                                                            🔑
+                                                        </button>
+                                                    )}
+                                                </span>
+                                            );
+                                        })}
+                                    </div>
+                                )}
 
                                 {isPipedreamConfigured() && (
                                     <div className="flex flex-wrap items-center gap-1 mb-2">

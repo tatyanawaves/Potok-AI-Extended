@@ -1,6 +1,8 @@
 name = "potok-pipedream"
 main = "src/main.ts"
 compatibility_date = "2025-09-01"
+# @cloudflare/puppeteer (the cloud browser) needs Node built-ins such as node:buffer.
+compatibility_flags = ["nodejs_compat"]
 
 # Public configuration. The only secret is PIPEDREAM_CLIENT_SECRET, set with
 #   wrangler secret put PIPEDREAM_CLIENT_SECRET
@@ -33,3 +35,12 @@ bucket_name = "potok-files"
 name = "potok-agent-tasks"
 binding = "AGENT_TASKS"
 class_name = "AgentTaskWorkflow"
+
+# Cloud browser for bots (src/cloudBrowser.ts): Cloudflare Browser Rendering.
+[browser]
+binding = "BROWSER"
+
+# Per-user OAuth tokens of connected MCP servers (src/oauthConnect.ts), sealed.
+[[kv_namespaces]]
+binding = "CONNECTOR_TOKENS"
+id = "a6df5e01811e4cc692847cdca785d594"

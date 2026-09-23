@@ -21,7 +21,9 @@ export const serverTasksAvailable = (): boolean => Boolean(TASKS_URL);
 export interface ServerTask {
     id: string;
     status: 'queued' | 'running' | 'done' | 'stopped' | 'failed';
-    phase: 'planning' | 'working' | 'checking' | 'finishing' | 'done';
+    phase: 'planning' | 'working' | 'checking' | 'waiting' | 'finishing' | 'done';
+    /** While paused on a slow job: when it wakes up. */
+    waitUntil?: number;
     task: string;
     channelId: string;
     startedBy: string;
