@@ -173,3 +173,18 @@ Playwright открыл страницу в headless-Chrome.
   ботов и доступные коннекторы (облачные, OAuth, подключённые и найденные в каталоге
   Pipedream) и предлагает подключить инструмент боту, создать бота по промпту или
   сгенерировать свой MCP-сервер (Cloudflare Worker) — код сохраняется тем же окном.
+
+## Песочницы и Google Cloud Run — на ключах каждого пользователя
+
+- **E2B / Daytona** (`{воркер}/tools/sandbox?provider=…`): ключ пользователь сохраняет
+  в Настройках; воркер проверяет его у провайдера и хранит зашифрованным в KV.
+- **Cloud Run** (`{воркер}/tools/cloudrun`): пользователь загружает JSON-ключ
+  сервисного аккаунта своего проекта и выбирает регион. Инструменты бота:
+  `cloudrun_deploy_image`, `cloudrun_deploy_files` (исходники → Cloud Storage →
+  Cloud Build: Dockerfile или buildpacks → Artifact Registry → Cloud Run),
+  `cloudrun_deploy_github` (публичный репозиторий), `cloudrun_build_status`,
+  `cloudrun_service_status`, `cloudrun_list_services`, `cloudrun_delete_service`.
+  Сборка идёт минуты — в задаче оркестратора бот ставит `wait_and_resume` и проверяет
+  статус. Роли сервисного аккаунта: Cloud Run Admin, Cloud Build Editor, Storage Admin,
+  Artifact Registry Administrator, Service Account User; API: run, cloudbuild,
+  artifactregistry, storage. Удаление сервиса необратимо — политика «С подтверждением».

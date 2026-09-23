@@ -56,6 +56,7 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
     const connect = async (c: ToolCandidate) => {
         if (c.kind === 'oauth') await startOAuthConnection(c.target!);
         else if (c.kind === 'pipedream') await startAccountConnection(c.target!);
+        else if (c.kind === 'gcp') throw new Error('Добавьте ключ сервисного аккаунта Google Cloud в Настройках → «Google Cloud Run»');
         else if (c.kind === 'sandbox') throw new Error(`Добавьте свой ключ ${c.name.replace('Песочница ', '')} в Настройках → «Песочницы кода»`);
     };
 

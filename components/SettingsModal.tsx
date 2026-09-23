@@ -5,7 +5,8 @@ import { translations } from '../translations';
 import { isPipedreamConfigured, listConnectedAccounts, ConnectedAccount } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
 import {
-  saveSandboxKey, sandboxKeyStatus, deleteSandboxKey, SandboxProvider, SANDBOX_NAMES
+  saveSandboxKey, sandboxKeyStatus, deleteSandboxKey, SandboxProvider, SANDBOX_NAMES,
+  saveGcpKey, gcpConnected, GCP_REGIONS
 } from '../services/connectors';
 
 interface SettingsModalProps {
@@ -26,6 +27,25 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [sandboxDraft, setSandboxDraft] = useState<Record<SandboxProvider, string>>({ e2b: '', daytona: '' });
   const [sandboxMessage, setSandboxMessage] = useState<string | null>(null);
   useEffect(() => { if (isPipedreamConfigured()) sandboxKeyStatus().then(setSandboxKeys).catch(() => { }); }, []);
+
+  // Google Cloud: a service-account JSON key, sent to the server and not kept here.
+  const [gcpSet, setGcpSet] = useState(false);
+  const [gcpJson, setGcpJson] = useState('');
+  const [gcpRegion, setGcpRegion] = useState('europe-west1');
+  const [gcpMessage, setGcpMessage] = useState<string | null>(null);
+  useEffect(() => { if (isPipedreamConfigured()) gcpConnected().then(setGcpSet).catch(() => { }); }, []);
+
+  const storeGcpKey = async () => {
+    setGcpMessage('…');
+    try {
+      await saveGcpKey(gcpJson.trim(), gcpRegion);
+      setGcpSet(true);
+      setGcpJson('');
+      setGcpMessage('Проект подключён: доступ к Cloud Run проверен');
+    } catch (e) {
+      setGcpMessage(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const storeSandboxKey = async (provider: SandboxProvider) => {
     setSandboxMessage('…');
@@ -284,6 +304,43 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                       {sandboxMessage && <p className="text-[10px] text-slate-400">{sandboxMessage}</p>}
                       <p className="text-[10px] text-slate-600 leading-relaxed">
                         {(t as any).sandboxKeysHint || 'Боты запускают код, команды и работают с файлами в вашей облачной песочнице — вы платите провайдеру напрямую. Ключ проверяется и хранится зашифрованным на сервере Potok, в браузере не остаётся. Ключ: e2b.dev/dashboard или app.daytona.io → API Keys.'}
+                      </p>
+                    </div>
+                  )}
+
+                  {isPipedreamConfigured() && (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                        {(t as any).gcpLabel || 'Google Cloud Run (ваш проект)'}
+                      </label>
+                      {gcpSet ? (
+                        <div className="flex items-center gap-2">
+                          <span className="flex-1 text-[11px] text-emerald-400">✓ {(t as any).gcpConnected || 'проект подключён'}</span>
+                          <button type="button" onClick={() => deleteSandboxKey('gcp').then(() => setGcpSet(false))}
+                            className="text-[10px] font-mono text-slate-500 hover:text-rose-300">{(t as any).remove || 'удалить'}</button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex gap-2">
+                            <label className="flex-1 text-center cursor-pointer px-2 py-1.5 rounded-lg border border-dashed border-slate-600 text-[11px] text-slate-400 hover:border-slate-400">
+                              {gcpJson ? '✓ JSON-ключ загружен' : ((t as any).pickKeyFile || 'Выбрать JSON-ключ…')}
+                              <input type="file" accept=".json,application/json" className="hidden"
+                                onChange={async (e) => { const f = e.target.files?.[0]; if (f) setGcpJson(await f.text()); e.target.value = ''; }} />
+                            </label>
+                            <select value={gcpRegion} onChange={(e) => setGcpRegion(e.target.value)}
+                              className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-[11px] font-mono text-slate-200">
+                              {GCP_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                            <button type="button" disabled={!gcpJson} onClick={storeGcpKey}
+                              className="px-2 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-300 text-[10px] font-mono uppercase disabled:opacity-40">
+                              {(t as any).connect || 'Подключить'}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                      {gcpMessage && <p className="text-[10px] text-slate-400 break-words">{gcpMessage}</p>}
+                      <p className="text-[10px] text-slate-600 leading-relaxed">
+                        {(t as any).gcpHint || 'Боты разворачивают сервисы в вашем проекте Google Cloud — оплата идёт с вашего аккаунта. Создайте сервисный аккаунт (роли: Cloud Run Admin, Cloud Build Editor, Storage Admin, Artifact Registry Administrator, Service Account User), включите API run, cloudbuild, artifactregistry, storage и загрузите его JSON-ключ. Ключ хранится зашифрованным на сервере Potok.'}
                       </p>
                     </div>
                   )}

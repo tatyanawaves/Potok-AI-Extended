@@ -18,9 +18,16 @@
 import { seal, open } from './taskCrypto';
 import type { KvLike } from './oauthConnect';
 import type { ServerTool } from './mcpServer';
+import { parseServiceAccount, validateGcp, type GcpConfig } from './cloudRun';
 
 export type Provider = 'e2b' | 'daytona';
 export const PROVIDERS: Provider[] = ['e2b', 'daytona'];
+
+/** Every per-user key kept here: the two sandboxes, and Google Cloud for Cloud Run. */
+export type KeyKind = Provider | 'gcp';
+const KEY_KINDS: KeyKind[] = ['e2b', 'daytona', 'gcp'];
+const isKeyKind = (value: unknown): value is KeyKind => KEY_KINDS.includes(value as KeyKind);
+export const DEFAULT_GCP_REGION = 'europe-west1';
 
 export interface SandboxEnv {
     CONNECTOR_TOKENS?: KvLike;
@@ -31,7 +38,7 @@ export interface SandboxEnv {
 type Json = (body: unknown, status: number) => Response;
 
 const secretOf = (env: SandboxEnv) => env.TASK_SEALING_SECRET || env.PIPEDREAM_CLIENT_SECRET || '';
-const keyName = (uid: string, p: Provider) => `key:${uid}:${p}`;
+const keyName = (uid: string, p: KeyKind) => `key:${uid}:${p}`;
 const boxName = (uid: string, p: Provider) => `box:${uid}:${p}`;
 /** How long a sandbox id is reused; the provider's own idle timeout is similar. */
 const REUSE_SECONDS = 25 * 60;
@@ -61,26 +68,43 @@ const validateKey = async (provider: Provider, key: string): Promise<void> => {
 export const handleKeySet = async (request: Request, env: SandboxEnv, uid: string, json: Json): Promise<Response> => {
     if (!env.CONNECTOR_TOKENS || !secretOf(env)) return json({ error: 'Key storage is not enabled on this worker' }, 501);
     const body: any = await request.json().catch(() => ({}));
-    if (!isProvider(body.provider) || typeof body.key !== 'string' || !body.key.trim()) {
-        return json({ error: 'provider (e2b|daytona) and key are required' }, 400);
+    if (!isKeyKind(body.provider) || typeof body.key !== 'string' || !body.key.trim()) {
+        return json({ error: 'provider (e2b|daytona|gcp) and key are required' }, 400);
     }
-    await validateKey(body.provider, body.key.trim());
-    await env.CONNECTOR_TOKENS.put(keyName(uid, body.provider), await seal(body.key.trim(), secretOf(env)));
+
+    let stored = body.key.trim();
+    if (body.provider === 'gcp') {
+        // The JSON key plus the region deployments go to; checked for real.
+        const region = /^[a-z]+-[a-z]+\d$/.test(String(body.region || '')) ? String(body.region) : DEFAULT_GCP_REGION;
+        const config: GcpConfig = { account: parseServiceAccount(stored), region };
+        await validateGcp(config);
+        stored = JSON.stringify(config);
+    } else {
+        await validateKey(body.provider, stored);
+    }
+    await env.CONNECTOR_TOKENS.put(keyName(uid, body.provider), await seal(stored, secretOf(env)));
     return json({ ok: true }, 200);
 };
 
 export const handleKeyStatus = async (_request: Request, env: SandboxEnv, uid: string, json: Json): Promise<Response> => {
     const status: Record<string, boolean> = {};
-    for (const p of PROVIDERS) status[p] = Boolean(await env.CONNECTOR_TOKENS?.get(keyName(uid, p)));
+    for (const p of KEY_KINDS) status[p] = Boolean(await env.CONNECTOR_TOKENS?.get(keyName(uid, p)));
     return json(status, 200);
 };
 
 export const handleKeyDelete = async (request: Request, env: SandboxEnv, uid: string, json: Json): Promise<Response> => {
     const body: any = await request.json().catch(() => ({}));
-    if (!isProvider(body.provider)) return json({ error: 'provider is required' }, 400);
+    if (!isKeyKind(body.provider)) return json({ error: 'provider is required' }, 400);
     await env.CONNECTOR_TOKENS?.delete(keyName(uid, body.provider));
-    await env.CONNECTOR_TOKENS?.delete(boxName(uid, body.provider));
+    if (isProvider(body.provider)) await env.CONNECTOR_TOKENS?.delete(boxName(uid, body.provider));
     return json({ ok: true }, 200);
+};
+
+/** The user's Cloud Run configuration, or an error that says how to add it. */
+export const userGcp = async (env: SandboxEnv, uid: string): Promise<GcpConfig> => {
+    const sealed = await env.CONNECTOR_TOKENS?.get(keyName(uid, 'gcp'));
+    if (!sealed) throw new Error('Google Cloud не подключён — добавьте ключ сервисного аккаунта в Настройках Potok');
+    return JSON.parse(await open<string>(sealed, secretOf(env))) as GcpConfig;
 };
 
 export const userKey = async (env: SandboxEnv, uid: string, provider: Provider): Promise<string | null> => {

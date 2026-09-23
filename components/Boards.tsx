@@ -27,7 +27,7 @@ import { updateBot } from '../services/boards';
 import MemoryPanel from './MemoryPanel';
 import CodeSaveDialog from './CodeSaveDialog';
 import ToolAdvisor from './ToolAdvisor';
-import { cloudBrowserUrl, connectedMcpUrl, startOAuthConnection, OAUTH_PRESETS, sandboxUrl } from '../services/connectors';
+import { cloudBrowserUrl, connectedMcpUrl, startOAuthConnection, OAUTH_PRESETS, sandboxUrl, cloudRunUrl } from '../services/connectors';
 import { extractCodeFiles, toFile, CodeFile } from '../services/codeSave';
 import {
     serverTasksAvailable, startServerTask, cancelServerTask, subscribeToTasks,
@@ -1743,6 +1743,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                             { name: '🌐 Облачный браузер', url: cloudBrowserUrl(), oauth: null as string | null },
                                             { name: '🧪 E2B', url: sandboxUrl('e2b'), oauth: null as string | null },
                                             { name: '🧪 Daytona', url: sandboxUrl('daytona'), oauth: null as string | null },
+                                            { name: '☁ Cloud Run', url: cloudRunUrl(), oauth: null as string | null },
                                             ...OAUTH_PRESETS.map(p => ({ name: p.name, url: connectedMcpUrl(p.server), oauth: p.server }))
                                         ].map(preset => {
                                             const picked = splitUrls(botToolUrl).includes(preset.url);

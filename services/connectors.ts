@@ -56,11 +56,24 @@ export const saveSandboxKey = (provider: SandboxProvider, key: string): Promise<
 export const sandboxKeyStatus = async (): Promise<Record<SandboxProvider, boolean>> =>
     ({ e2b: false, daytona: false, ...(await post('/keys/status', {}).catch(() => ({}))) });
 
-export const deleteSandboxKey = (provider: SandboxProvider): Promise<void> => post('/keys/delete', { provider });
+export const deleteSandboxKey = (provider: SandboxProvider | 'gcp'): Promise<void> => post('/keys/delete', { provider });
+
+// --- Google Cloud Run in the user's own project ------------------------------------------
+
+export const cloudRunUrl = (): string => `${workerUrl}/tools/cloudrun`;
+
+export const GCP_REGIONS = ['europe-west1', 'europe-west4', 'europe-north1', 'us-central1', 'us-east1', 'asia-northeast1'];
+
+/** Saves a service-account JSON key; the worker checks it against Cloud Run first. */
+export const saveGcpKey = (json: string, region: string): Promise<void> =>
+    post('/keys/set', { provider: 'gcp', key: json, region });
+
+export const gcpConnected = async (): Promise<boolean> =>
+    Boolean((await post('/keys/status', {}).catch(() => ({}))).gcp);
 
 export interface ToolCandidate {
     id: string;
-    kind: 'cloud' | 'oauth' | 'pipedream' | 'public' | 'sandbox';
+    kind: 'cloud' | 'oauth' | 'pipedream' | 'public' | 'sandbox' | 'gcp';
     name: string;
     description: string;
     /** Tool server URL to give a bot. */
@@ -91,7 +104,12 @@ export const collectCandidates = async (task: string): Promise<ToolCandidate[]> 
             description: 'Open pages with JavaScript, extract elements, search the web (Cloudflare Browser Rendering).',
             url: cloudBrowserUrl(), needsConnection: false
         });
-        const keys = await sandboxKeyStatus().catch(() => ({ e2b: false, daytona: false }));
+        const keys: any = await post('/keys/status', {}).catch(() => ({}));
+        list.push({
+            id: 'cloudrun', kind: 'gcp', name: 'Google Cloud Run',
+            description: 'Deploy apps and APIs the team wrote (files, GitHub repo or image) to the user\'s Google Cloud project and get a public URL.',
+            url: cloudRunUrl(), needsConnection: !keys.gcp
+        });
         for (const provider of ['e2b', 'daytona'] as SandboxProvider[]) {
             list.push({
                 id: `sandbox:${provider}`, kind: 'sandbox', name: `Песочница ${SANDBOX_NAMES[provider]}`,

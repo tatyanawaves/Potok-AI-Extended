@@ -21,6 +21,7 @@
  *   POST /tools/browser     → cloud browser for bots, as MCP (./cloudBrowser)
  *   POST /oauth/*, /connect/mcp → OAuth MCP servers such as Higgsfield (./oauthConnect)
  *   POST /keys/*, /tools/sandbox → E2B / Daytona sandboxes on each user's key (./sandbox)
+ *   POST /tools/cloudrun    → Google Cloud Run deployments in the user's project (./cloudRun)
  *   GET  /health
  */
 
@@ -31,7 +32,8 @@ import {
 import { handleTaskStart, handleTaskCancel, type TaskEnv } from './agentTasks';
 import { handleMcpRequest } from './mcpServer';
 import { browserTools } from './cloudBrowser';
-import { sandboxTools, isProvider, handleKeySet, handleKeyStatus, handleKeyDelete } from './sandbox';
+import { sandboxTools, isProvider, handleKeySet, handleKeyStatus, handleKeyDelete, userGcp } from './sandbox';
+import { cloudRunTools } from './cloudRun';
 import {
     handleOAuthStart, handleOAuthCallback, handleOAuthStatus, handleOAuthDisconnect,
     handleConnectedMcp, type OAuthEnv
@@ -719,6 +721,9 @@ export default {
             if (url.pathname === '/keys/set') return await handleKeySet(request, env, uid, reply);
             if (url.pathname === '/keys/status') return await handleKeyStatus(request, env, uid, reply);
             if (url.pathname === '/keys/delete') return await handleKeyDelete(request, env, uid, reply);
+            if (url.pathname === '/tools/cloudrun') {
+                return await handleMcpRequest(request, 'potok-cloud-run', cloudRunTools(() => userGcp(env, uid)), cors);
+            }
             if (url.pathname === '/tools/sandbox') {
                 const provider = url.searchParams.get('provider');
                 if (!isProvider(provider)) return json({ error: 'provider must be e2b or daytona' }, 400, cors);
