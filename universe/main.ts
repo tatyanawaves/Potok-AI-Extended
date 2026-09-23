@@ -10,6 +10,7 @@ import { CosmicWebLevel } from './levels/cosmicWeb';
 import { GalaxyLevel } from './levels/galaxy';
 import { StarSystemLevel } from './levels/starSystem';
 import { BlackHoleLevel } from './levels/blackHole';
+import { PlanetLevel } from './levels/planet';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -44,8 +45,8 @@ const host: LevelHost = {
     labelLayer: ui.labels,
     open: req => navigate([...path, req]),
     back: () => { if (path.length > 1) navigate(path.slice(0, -1)); },
-    saveCamera: (position, quaternion) => {
-        path[path.length - 1].resume = { position: position.toArray(), quaternion: quaternion.toArray() };
+    saveCamera: (position, quaternion, data) => {
+        path[path.length - 1].resume = { position: position.toArray(), quaternion: quaternion.toArray(), data };
     },
     toast: text => {
         ui.toast.textContent = text;
@@ -69,6 +70,7 @@ function crumbName(r: LevelRequest): string {
         case 'galaxy': return r.galaxy.name;
         case 'system': return r.star === 'sun' ? 'Солнечная система' : 'Звёздная система';
         case 'blackhole': return r.galaxy.isMilkyWay ? 'Стрелец A*' : 'Чёрная дыра';
+        case 'planet': return r.visit.name;
     }
 }
 
@@ -78,6 +80,7 @@ function create(r: LevelRequest): Level {
         case 'galaxy': return new GalaxyLevel(host, r.galaxy);
         case 'system': return new StarSystemLevel(host, r.galaxy, r.star);
         case 'blackhole': return new BlackHoleLevel(host, r.galaxy);
+        case 'planet': return new PlanetLevel(host, r.visit);
     }
 }
 
@@ -99,7 +102,7 @@ async function navigate(next: LevelRequest[]) {
         if (req.resume) {
             level.camera.position.fromArray(req.resume.position);
             level.camera.quaternion.fromArray(req.resume.quaternion);
-            level.resumed?.();
+            level.resumed?.(req.resume);
         }
     } catch (err) {
         console.error(err);

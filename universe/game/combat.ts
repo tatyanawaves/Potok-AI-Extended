@@ -1,14 +1,12 @@
 // Ship combat. Everything here lives in kilometres, in a frame riding along
 // with an anchor body (the planet the fight is near), so a battle is not torn
 // apart by the planet's orbital motion. Meshes are placed into scene units
-// (10⁶ km) every frame.
+// every frame: 10⁶ km in a star system, metres on a planet's surface.
 
 import * as THREE from 'three';
 import { UNIT_KM } from '../physics';
 import { EnemyKind, makeEnemy } from './models';
 
-const KM = 1 / UNIT_KM;   // scene units per km
-const M = KM / 1000;      // scene units per metre
 
 export interface Anchor { name: string; pos: THREE.Vector3 }
 
@@ -71,6 +69,13 @@ interface Burst {
     maxLife: number;
 }
 
+export interface CombatOptions {
+    /** Scene units per kilometre (10⁻⁶ in a star system, 1000 on a surface). */
+    unitsPerKm?: number;
+    /** Terrain height (km) under a point (km), so creatures stay above the ground. */
+    ground?: (xKm: number, zKm: number) => number;
+}
+
 export interface PlayerState {
     hull: number;
     maxHull: number;
@@ -86,9 +91,12 @@ const friendlyMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x66ddf
 const hostileMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff3344).multiplyScalar(6) });
 const plasmaMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xcc44ff).multiplyScalar(6) });
 
+export const pilotState: PlayerState = { hull: 100, maxHull: 100, shield: 100, maxShield: 100, score: 0, sinceHit: 99, dead: false };
+
 export class Combat {
     readonly group = new THREE.Group();
-    readonly player: PlayerState = { hull: 100, maxHull: 100, shield: 100, maxShield: 100, score: 0, sinceHit: 99, dead: false };
+    /** One pilot across every level: score, hull and shield carry over. */
+    readonly player: PlayerState = pilotState;
     anchor: Anchor | null = null;
     onKill?: (kind: EnemyKind) => void;
     onPlayerHit?: () => void;
@@ -100,8 +108,14 @@ export class Combat {
     private labelLayer: HTMLDivElement;
     private time = 0;
     private v = new THREE.Vector3();
+    private readonly KM: number;
+    private readonly M: number;
+    private ground?: (xKm: number, zKm: number) => number;
 
-    constructor(private scene: THREE.Scene, layer: HTMLElement) {
+    constructor(private scene: THREE.Scene, layer: HTMLElement, opts: CombatOptions = {}) {
+        this.KM = opts.unitsPerKm ?? 1 / UNIT_KM;
+        this.M = this.KM / 1000;
+        this.ground = opts.ground;
         scene.add(this.group);
         this.labelLayer = document.createElement('div');
         layer.appendChild(this.labelLayer);
@@ -118,11 +132,11 @@ export class Combat {
     /** The player's position in the combat frame, km. */
     toLocal(world: THREE.Vector3, out = new THREE.Vector3()): THREE.Vector3 | null {
         if (!this.anchor) return null;
-        return out.subVectors(world, this.anchor.pos).multiplyScalar(UNIT_KM);
+        return out.subVectors(world, this.anchor.pos).divideScalar(this.KM);
     }
 
     private toWorld(local: THREE.Vector3, out = new THREE.Vector3()): THREE.Vector3 {
-        return out.copy(local).multiplyScalar(KM).add(this.anchor!.pos);
+        return out.copy(local).multiplyScalar(this.KM).add(this.anchor!.pos);
     }
 
     /** Put `count` enemies on a shell 6–14 km around a point (in the anchor's frame). */
@@ -134,7 +148,7 @@ export class Combat {
         for (let i = 0; i < count; i++) {
             const dir = new THREE.Vector3().randomDirection();
             const mesh = makeEnemy(kind);
-            mesh.scale.setScalar(M);
+            mesh.scale.setScalar(this.M);
             this.group.add(mesh);
             const label = document.createElement('div');
             label.className = 'elabel';
@@ -192,6 +206,7 @@ export class Combat {
     private addBolt(local: THREE.Vector3, vel: THREE.Vector3, damage: number, friendly: boolean, radius: number, mat: THREE.Material, life: number) {
         const mesh = new THREE.Mesh(boltGeo, mat);
         const big = mat === plasmaMat;
+        const M = this.M;
         mesh.scale.set((big ? 25 : 1.5) * M, (big ? 25 : 1.5) * M, (big ? 60 : 45) * M);
         this.group.add(mesh);
         this.bolts.push({ local, vel, life, damage, friendly, radius, mesh });
@@ -292,7 +307,7 @@ export class Combat {
             const t = s.maxLife - s.life;
             for (let i = 0; i < s.vel.length; i++) s.offs[i] = s.vel[i] * t;
             s.points.position.copy(this.toWorld(s.local));
-            s.points.scale.setScalar(KM);
+            s.points.scale.setScalar(this.KM);
             (s.points.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
             (s.points.material as THREE.PointsMaterial).opacity = Math.max(0, s.life / s.maxLife);
         }
@@ -335,6 +350,10 @@ export class Combat {
         }
         e.vel.lerp(want, 1 - Math.exp(-1.2 * dt));
         e.local.addScaledVector(e.vel, dt);
+        if (this.ground) {
+            const floor = this.ground(e.local.x, e.local.z) + def.hitKm + 0.05;
+            if (e.local.y < floor) { e.local.y = floor; e.vel.y = Math.max(e.vel.y, 0); }
+        }
 
         // Weapons: lead the target like a gunner would.
         e.cooldown -= dt;

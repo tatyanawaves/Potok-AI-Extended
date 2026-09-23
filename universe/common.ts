@@ -13,17 +13,23 @@ export interface LevelHost {
     /** Go up one level, as if the pilot flew out of this one. */
     back(): void;
     /** Remember where the camera is, so coming back up returns here instead of to the overview. */
-    saveCamera(position: THREE.Vector3, quaternion: THREE.Quaternion): void;
+    saveCamera(position: THREE.Vector3, quaternion: THREE.Quaternion, data?: CameraState['data']): void;
     toast(text: string): void;
 }
 
-export interface CameraState { position: number[]; quaternion: number[] }
+export interface CameraState {
+    position: number[];
+    quaternion: number[];
+    /** Anything else a level needs to pick up where it left off (time, the planet we landed on…). */
+    data?: Record<string, number | string>;
+}
 
 export type LevelRequest = (
     | { kind: 'web' }
     | { kind: 'galaxy'; galaxy: import('./mandelbrot').GalaxySpec }
     | { kind: 'system'; galaxy: import('./mandelbrot').GalaxySpec; star: { seed: number; mass: number } | 'sun' }
     | { kind: 'blackhole'; galaxy: import('./mandelbrot').GalaxySpec }
+    | { kind: 'planet'; galaxy: import('./mandelbrot').GalaxySpec; visit: import('./levels/planet').PlanetVisit }
 ) & { resume?: CameraState };
 
 export interface Action {
@@ -53,7 +59,7 @@ export interface Level {
     setBufferSize?(width: number, height: number): void;
     click?(x: number, y: number): void;
     /** The camera was put back where the pilot left it; controllers should take it over. */
-    resumed?(): void;
+    resumed?(state: CameraState): void;
     dispose(): void;
 }
 

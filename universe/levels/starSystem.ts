@@ -14,6 +14,8 @@ import { BodyData, SOLAR_SYSTEM, SUN } from '../solarSystem';
 import { FLY_HELP, FlyController } from '../flight';
 import { ShipGame } from '../game/shipGame';
 import { generatedMissions, solarMissions } from '../game/missions';
+import { landable } from '../atmosphere';
+import type { CameraState } from '../common';
 import {
     PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG, WELL_FRAG, WELL_VERT,
 } from '../shaders';
@@ -133,6 +135,8 @@ export class StarSystemLevel implements Level {
     /** Radius of the outermost orbit; flying three times farther leaves for the galaxy. */
     private outer = 1;
     private leave = new ProximityTrigger(1);
+    /** Dropping below 3% of a planet's radius takes us down to its surface. */
+    private land = new ProximityTrigger(1);
 
     private onKeyDown = (e: KeyboardEvent) => {
         if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
@@ -214,8 +218,8 @@ export class StarSystemLevel implements Level {
 
         this.ctl = new FlyController(this.pilot, host.canvas, { speed: this.cruise, minSpeed: 1e-7, maxSpeed: this.cruise * 30 });
         const planetNames = this.bodies.filter(b => b.parent?.kind === 'star').map(b => b.name);
-        this.game = new ShipGame(this.scene, host.canvas, host.labelLayer,
-            this.system ? generatedMissions(planetNames, this.system.seed) : solarMissions(),
+        this.game = new ShipGame(this.scene, host.canvas, host.labelLayer, this.system ? `sys:${this.system.seed}` : 'sys:sun',
+            () => this.system ? generatedMissions(planetNames, this.system.seed) : solarMissions(),
             name => this.bodies.find(b => b.name === name), text => host.toast(text));
         this.ctl.enabled = false;
         window.addEventListener('keydown', this.onKeyDown);
@@ -472,11 +476,42 @@ export class StarSystemLevel implements Level {
         this.ctl.enabled = false;
     }
 
-    resumed() {
+    resumed(state: CameraState) {
         this.pilot.position.copy(this.camera.position);
         this.pilot.quaternion.copy(this.camera.quaternion);
+        const d = state.data;
+        if (d && typeof d.body === 'string') {
+            // Back from a planet's surface: same moment in the system, just above that planet's dayside.
+            this.tDays = Number(d.tDays);
+            this.timeScale = Number(d.timeScale);
+            this.updatePositions(0);
+            const b = this.bodies.find(x => x.name === d.body);
+            if (b) {
+                const out = b.pos.clone().sub(this.bodies[0].pos).negate().normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.6);
+                this.pilot.position.copy(b.pos).addScaledVector(out, b.radius * 1.06);
+                this.pilot.lookAt(this.pilot.position.clone().add(new THREE.Vector3(0, 1, 0).cross(out)));
+                this.target = b;
+            }
+        }
         this.mode = 'orbit';
         this.goFree();
+    }
+
+    /** Go down to a body's surface (the planet level). */
+    private landOn(b: Body) {
+        if (!landable(b.kind)) {
+            this.host.toast(`${b.name}: твёрдой поверхности нет — только облака и давление`);
+            return;
+        }
+        this.host.saveCamera(this.pilot.position, this.pilot.quaternion, { tDays: this.tDays, timeScale: this.timeScale, body: b.name });
+        this.host.open({
+            kind: 'planet', galaxy: this.galaxy,
+            visit: {
+                name: b.name, kind: b.kind as PlanetKind | 'moon', radiusKm: b.radiusKm,
+                gravity: surfaceGravity(b.massEarth, b.radiusKm / R_EARTH_KM), dayDays: b.dayDays || 1, seed: b.name.length * 131 + Math.round(b.radiusKm),
+                systemKey: this.system ? `sys:${this.system.seed}` : 'sys:sun',
+            },
+        });
     }
 
     /** Hand the camera to the pilot, keeping where it looks. */
@@ -520,6 +555,7 @@ export class StarSystemLevel implements Level {
     actions(): Action[] {
         const list: Action[] = [...this.game.actions()];
         if (this.target && this.mode !== 'auto') list.push({ label: `▶ Лететь: ${this.target.name}`, run: () => this.flyTo(this.target!) });
+        if (this.target && landable(this.target.kind)) list.push({ label: `🪂 Сесть: ${this.target.name}`, title: 'Спуститься на поверхность', run: () => this.landOn(this.target!) });
         if (this.target && this.mode === 'auto') list.push({ label: '■ Стоп', run: () => { this.goFree(); this.ctl.stop(); this.speed = 0; } });
         if (this.mode !== 'free') list.push({ label: '✈ Свободный полёт', title: FLY_HELP, run: () => this.goFree() });
         if (!this.system) {
@@ -655,6 +691,14 @@ export class StarSystemLevel implements Level {
             starPos: this.bodies[0].pos, nearest: this.frameBody() ?? this.nearestSurface(this.pilot.position).body,
             width: this.width, height: this.height, now: this.realTime,
         });
+        {
+            const near = this.nearestSurface(this.pilot.position);
+            if (near.body.kind !== 'star' && landable(near.body.kind) && this.land.check(dt, () => near.dist / (near.body.radius * 0.03))) {
+                this.host.toast(`Снижение: ${near.body.name}`);
+                this.landOn(near.body);
+                return;
+            }
+        }
         if (this.mode === 'free' && this.leave.check(dt, () => this.outer * 3.5 - this.pilot.position.distanceTo(this.bodies[0].pos))) {
             this.host.toast('Покидаем систему — выходим в галактику');
             this.host.back();

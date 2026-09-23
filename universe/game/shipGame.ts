@@ -5,11 +5,12 @@ import * as THREE from 'three';
 import type { Action } from '../common';
 import { virtualKeys } from '../flight';
 import { UNIT_KM } from '../physics';
-import { Combat } from './combat';
+import { Combat, CombatOptions } from './combat';
 import { Mission, MissionLog, objectiveText } from './missions';
 import { makeShip } from './models';
 
-const M = 1 / UNIT_KM / 1000; // scene units per metre
+/** Mission progress per place (a system, or a planet's surface) survives leaving and coming back. */
+const logs = new Map<string, MissionLog>();
 
 export interface BodyLike { name: string; pos: THREE.Vector3; radius: number }
 
@@ -58,15 +59,23 @@ export class ShipGame {
         this.mouse = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     };
 
+    /** Scene units per km and per metre. */
+    private readonly KM: number;
+    private readonly M: number;
+
     constructor(
         private scene: THREE.Scene, private canvas: HTMLCanvasElement, labelLayer: HTMLElement,
-        missions: Mission[], private bodyByName: (name: string) => BodyLike | undefined, private toast: (t: string) => void,
+        key: string, missions: () => Mission[], private bodyByName: (name: string) => BodyLike | undefined, private toast: (t: string) => void,
+        combat: CombatOptions = {},
     ) {
-        this.ship.scale.setScalar(M);
+        this.KM = combat.unitsPerKm ?? 1 / UNIT_KM;
+        this.M = this.KM / 1000;
+        this.ship.scale.setScalar(this.M);
         this.ship.visible = false;
         scene.add(this.ship, this.sun, this.sun.target, this.fill);
-        this.combat = new Combat(scene, labelLayer);
-        this.log = new MissionLog(missions);
+        this.combat = new Combat(scene, labelLayer, combat);
+        if (!logs.has(key)) logs.set(key, new MissionLog(missions()));
+        this.log = logs.get(key)!;
         this.combat.onKill = kind => this.log.kill(kind);
         this.combat.onPlayerHit = () => {
             this.hud.flash.classList.remove('on');
@@ -164,7 +173,7 @@ export class ShipGame {
     speedLimit(pilotPos: THREE.Vector3, boosted: boolean): number {
         const local = this.combat.toLocal(pilotPos);
         if (!this.combat.engaged(local)) return Infinity;
-        return (boosted ? 40 : 4) / UNIT_KM;
+        return (boosted ? 40 : 4) * this.KM;
     }
 
     actions(): Action[] {
@@ -190,7 +199,7 @@ export class ShipGame {
         const m = this.log.active;
         if (m && m.state === 'active' && !m.spawned) {
             const body = this.bodyByName(m.location);
-            if (body && (f.pilot.position.distanceTo(body.pos) - body.radius) * UNIT_KM < m.triggerKm) {
+            if (body && (f.pilot.position.distanceTo(body.pos) - body.radius) / this.KM < m.triggerKm) {
                 m.spawned = true;
                 if (m.spawn.length) {
                     for (const s of m.spawn) this.combat.spawn(s.kind, body, f.pilot.position, s.count);
@@ -201,24 +210,24 @@ export class ShipGame {
         }
         this.log.proximity(name => {
             const b = this.bodyByName(name);
-            return b ? (f.pilot.position.distanceTo(b.pos) - b.radius) * UNIT_KM : Infinity;
+            return b ? (f.pilot.position.distanceTo(b.pos) - b.radius) / this.KM : Infinity;
         }, f.now);
 
         // Shooting: towards the mouse cursor, or straight ahead on touch screens.
         const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(f.pilot.quaternion);
-        const nose = f.pilot.position.clone().addScaledVector(forward, 25 * M);
+        const nose = f.pilot.position.clone().addScaledVector(forward, 25 * this.M);
         if (firing && f.free) {
             let dir = forward;
             if (this.mouse) {
                 const ray = new THREE.Raycaster();
                 ray.setFromCamera(this.mouse, f.camera);
                 // Converge on a point 3 km out along the cursor ray.
-                dir = ray.ray.origin.clone().addScaledVector(ray.ray.direction, 3 / UNIT_KM).sub(nose).normalize();
+                dir = ray.ray.origin.clone().addScaledVector(ray.ray.direction, 3 * this.KM).sub(nose).normalize();
             }
-            this.combat.fire(nose, dir, f.velocity.clone().multiplyScalar(UNIT_KM));
+            this.combat.fire(nose, dir, f.velocity.clone().divideScalar(this.KM));
         }
 
-        this.combat.update(dt, f.pilot.position, f.velocity.clone().multiplyScalar(UNIT_KM), f.camera, f.width, f.height);
+        this.combat.update(dt, f.pilot.position, f.velocity.clone().divideScalar(this.KM), f.camera, f.width, f.height);
 
         if (this.deadFor >= 0) {
             this.deadFor += dt;
@@ -226,7 +235,7 @@ export class ShipGame {
                 this.deadFor = -1;
                 this.combat.respawn();
                 // Come back a little way off, out of the thick of it.
-                f.pilot.position.addScaledVector(forward, -60 / UNIT_KM);
+                f.pilot.position.addScaledVector(forward, -60 * this.KM);
                 this.toast('Корабль восстановлен (−200 очков)');
             }
         }
@@ -247,11 +256,11 @@ export class ShipGame {
         this.ship.visible = showShip;
         this.ship.position.copy(f.pilot.position);
         this.ship.quaternion.copy(f.pilot.quaternion);
-        const thrust = Math.min(1, f.velocity.length() * UNIT_KM / 5);
+        const thrust = Math.min(1, f.velocity.length() / this.KM / 5);
         this.ship.traverse(o => { if (o.name === 'flame') o.scale.set(1, 0.3 + thrust * 1.5, 1); });
         if (showShip) {
             // Behind and above, looking a little down past the ship.
-            const offset = new THREE.Vector3(0, 16, 75).multiplyScalar(M).applyQuaternion(f.pilot.quaternion);
+            const offset = new THREE.Vector3(0, 16, 75).multiplyScalar(this.M).applyQuaternion(f.pilot.quaternion);
             f.camera.position.copy(f.pilot.position).add(offset);
             f.camera.quaternion.copy(f.pilot.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.1));
         } else {
@@ -284,7 +293,7 @@ export class ShipGame {
         if (this.lastPilot) {
             const b = this.bodyByName(this.objectiveBody ?? '');
             if (b) {
-                const d = (this.lastPilot.position.distanceTo(b.pos) - b.radius) * UNIT_KM;
+                const d = (this.lastPilot.position.distanceTo(b.pos) - b.radius) / this.KM;
                 const line = document.createElement('small');
                 line.textContent = `До цели: ${d > 1e6 ? `${(d / 1e6).toFixed(1)} млн км` : `${Math.round(d).toLocaleString('ru-RU')} км`}`;
                 t.appendChild(line);
