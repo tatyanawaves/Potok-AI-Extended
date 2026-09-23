@@ -233,7 +233,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
               </p>
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      API {t.apiKeyLabel}
+                      {t.apiKeyLabel}
                     </label>
                     <input
                       type="password"

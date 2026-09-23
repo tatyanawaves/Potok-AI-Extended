@@ -896,7 +896,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     </button>
                                 )}
 
-                                {activeBoard.members.some(isBot) && activeChannelId && (
+                                {activeChannelId && (
                                     <button
                                         onClick={() => openModal({ kind: 'discussion' })}
                                         disabled={Boolean(discussionProgress || orchestration)}
@@ -1483,6 +1483,24 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         </button>
                                     ))}
                                 </div>
+                                {/* A new board has no bots yet: say what to do instead of
+                                    showing an empty list and a disabled button. */}
+                                {!activeBoard?.members.some(isBot) && (
+                                    <div className="mb-4 p-3 rounded-lg border border-amber-500/30 bg-amber-950/10 space-y-2">
+                                        <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                                            {t.noBotsForMeeting || 'В доске пока нет ботов. Создайте их — или опишите задачу ниже и нажмите «Подобрать инструменты»: оркестратор предложит нужных ботов и создаст их по одному нажатию.'}
+                                        </p>
+                                        {activeBoard?.ownerId === currentUid && (
+                                            <button
+                                                type="button"
+                                                onClick={() => openModal({ kind: 'createBot' })}
+                                                className="w-full py-1.5 rounded-lg border border-indigo-500/30 text-indigo-200 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-950/40"
+                                            >
+                                                + {t.createBot || 'Создать бота'}
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
                                 <div className="mb-4 space-y-1 max-h-36 overflow-y-auto border border-slate-800 rounded-lg p-2">
                                     {activeBoard?.members.filter(isBot).map(bot => {
                                         const picked = discussionBots.includes(bot.id);
