@@ -20,6 +20,19 @@ export interface RosterEntry {
 }
 
 export interface PlanStep {
+    /** 1-based, in plan order. */
+    id: number;
+    bot: string;
+    instruction: string;
+    /**
+     * Steps whose results this one needs. Steps with nothing pending here run
+     * together, in the same wave.
+     */
+    after: number[];
+}
+
+/** A step the supervisor asks for, before it gets an id and dependencies. */
+export interface StepRequest {
     bot: string;
     instruction: string;
 }
@@ -35,11 +48,12 @@ export interface Evaluation {
     progress: number;
     done: boolean;
     criteriaMet: boolean[];
-    next?: PlanStep;
+    next?: StepRequest;
     reason: string;
 }
 
 export interface StepLog {
+    stepId: number;
     bot: string;
     instruction: string;
     result: string;
@@ -53,6 +67,8 @@ export interface FinalReport {
 }
 
 export const MAX_ORCHESTRATED_STEPS = 8;
+/** Steps of one wave that run at the same time. */
+export const MAX_PARALLEL_STEPS = 3;
 
 const clip = (text: string, max: number) => text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 
@@ -95,23 +111,42 @@ Rules:
 - 2-4 success criteria that can be checked from the bots' answers.
 - At most ${maxSteps} steps. Assign each step to the bot whose role and tools fit it best; a bot may get several steps.
 - Steps that need external data go to a bot with the matching tools.
-- Each instruction is concrete and self-contained; the last step produces the final deliverable.
+- "after" lists the numbers of the steps whose results a step needs. Independent steps get [] and run at the same time — split gathering and research into independent steps where you can.
+- Each instruction is concrete and self-contained; the last step produces the final deliverable and comes after the steps it combines.
 - Write in the language of the task.
-Respond ONLY in JSON: {"goal": "...", "criteria": ["..."], "steps": [{"bot": "Name", "instruction": "..."}]}`;
+Respond ONLY in JSON: {"goal": "...", "criteria": ["..."], "steps": [{"bot": "Name", "instruction": "...", "after": []}]}`;
 
 /**
- * Reads a plan, keeping only steps assigned to real bots. When the model's
- * answer is unusable, every bot gets the task once — a plain plan is better
- * than no run.
+ * Reads a plan, keeping only steps assigned to real bots. Dependencies may
+ * only point backwards, which rules out cycles; a step that states none
+ * waits for the one before it, the safe reading of a model that ignored the
+ * field. When the answer is unusable, every bot gets the task once.
  */
 export const parsePlan = (raw: string | null, task: string, roster: RosterEntry[], maxSteps: number): Plan => {
     const data = parseObject(raw);
-    const steps: PlanStep[] = Array.isArray(data?.steps)
-        ? data.steps
-            .map((s: any) => ({ bot: matchBot(s?.bot, roster), instruction: String(s?.instruction || '').trim() }))
-            .filter((s: any): s is PlanStep => Boolean(s.bot && s.instruction))
-            .slice(0, maxSteps)
-        : [];
+    const kept: Array<{ original: number, bot: string, instruction: string, after: unknown }> = [];
+
+    if (Array.isArray(data?.steps)) {
+        data.steps.forEach((s: any, index: number) => {
+            const bot = matchBot(s?.bot, roster);
+            const instruction = String(s?.instruction || '').trim();
+            if (bot && instruction && kept.length < maxSteps) {
+                kept.push({ original: index + 1, bot, instruction, after: s?.after });
+            }
+        });
+    }
+
+    // The model numbers steps as it wrote them; dropped steps shift the rest.
+    const idOf = new Map(kept.map((k, i) => [k.original, i + 1]));
+    const steps: PlanStep[] = kept.map((k, i) => {
+        const id = i + 1;
+        const after = Array.isArray(k.after)
+            ? [...new Set((k.after as unknown[])
+                .map(n => idOf.get(Number(n)))
+                .filter((n): n is number => n !== undefined && n < id))]
+            : (id > 1 ? [id - 1] : []);
+        return { id, bot: k.bot, instruction: k.instruction, after };
+    });
 
     const criteria: string[] = Array.isArray(data?.criteria)
         ? data.criteria.map((c: unknown) => String(c).trim()).filter(Boolean).slice(0, 4)
@@ -122,9 +157,27 @@ export const parsePlan = (raw: string | null, task: string, roster: RosterEntry[
         criteria: criteria.length ? criteria : ['Задача выполнена полностью, результат конкретный'],
         steps: steps.length
             ? steps
-            : roster.slice(0, maxSteps).map(r => ({ bot: r.name, instruction: task }))
+            : roster.slice(0, maxSteps).map((r, i) => ({ id: i + 1, bot: r.name, instruction: task, after: [] }))
     };
 };
+
+/**
+ * The next wave: steps not yet done whose dependencies all are, at most
+ * `limit` of them. Empty when nothing can run — either everything is done or
+ * the remaining steps wait on something that failed to run.
+ */
+export const readySteps = (steps: PlanStep[], done: Set<number>, limit = MAX_PARALLEL_STEPS): PlanStep[] =>
+    steps.filter(s => !done.has(s.id) && s.after.every(d => done.has(d))).slice(0, limit);
+
+/** Results a step builds on, for its assignment. */
+export const inputsFor = (step: PlanStep, log: StepLog[]): Array<{ bot: string, result: string }> =>
+    log.filter(l => step.after.includes(l.stepId) && l.ok).map(l => ({ bot: l.bot, result: clip(l.result, 1500) }));
+
+/** Turns a supervisor's request into a step that follows everything done so far. */
+export const appendStep = (steps: PlanStep[], request: StepRequest, done: Set<number>): PlanStep[] => [
+    ...steps,
+    { id: Math.max(0, ...steps.map(s => s.id)) + 1, bot: request.bot, instruction: request.instruction, after: [...done] }
+];
 
 export const evaluationPrompt = (plan: Plan, log: StepLog[], remaining: PlanStep[], roster: RosterEntry[]): string => `ORCHESTRATOR_EVAL
 You supervise a team of AI bots. Judge progress on the goal from the work so far.
@@ -136,11 +189,11 @@ ${plan.criteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 DONE SO FAR:
 ${logText(log)}
 
-PLANNED NEXT: ${remaining.length ? remaining.map(s => `${s.bot}: ${s.instruction}`).join(' | ') : '(nothing)'}
+PLANNED NEXT: ${remaining.length ? remaining.map(s => `${s.id}. ${s.bot}: ${s.instruction}`).join(' | ') : '(nothing)'}
 TEAM: ${roster.map(r => r.name).join(', ')}
 
 Decide: progress 0-100; which criteria are met; done=true only if every criterion is met.
-If the planned next step is wrong or missing and work remains, give "next" (bot + instruction); otherwise null.
+If work remains that no planned step covers, give "next" (bot + instruction) — it is added after the work done; otherwise null.
 Respond ONLY in JSON: {"progress": 0, "criteria_met": [true], "done": false, "next": null, "reason": "one sentence"}`;
 
 export const parseEvaluation = (raw: string | null, plan: Plan, roster: RosterEntry[]): Evaluation => {
@@ -195,6 +248,16 @@ export const parseFinal = (raw: string | null, plan: Plan, fallback: Evaluation 
 export const estimateOrchestrationRequests = (maxSteps: number, requestsPerTurn: number): number =>
     1 + maxSteps * (requestsPerTurn + 1) + 1;
 
+/** Progress of a run, as shown in the channel and stored for server tasks. */
+export interface OrchestrationProgress {
+    phase: 'planning' | 'working' | 'checking' | 'finishing';
+    step: number;
+    totalSteps: number;
+    /** The bots working right now; several when a wave runs in parallel. */
+    bot?: string;
+    progress: number;
+}
+
 export const renderReport = (report: FinalReport): string => [
     `✅ Итог`,
     report.answer,
@@ -206,5 +269,5 @@ export const renderReport = (report: FinalReport): string => [
 export const renderPlan = (plan: Plan): string => [
     `🧭 План: ${plan.goal}`,
     `Критерии: ${plan.criteria.join('; ')}`,
-    ...plan.steps.map((s, i) => `${i + 1}. @${s.bot} — ${s.instruction}`)
+    ...plan.steps.map(s => `${s.id}. ${s.bot} — ${s.instruction}${s.after.length ? ` (после ${s.after.join(', ')})` : ' (сразу)'}`)
 ].join('\n');

@@ -66,6 +66,11 @@ export interface AISettings {
    * and progress checks. Falls back to openRouterModel.
    */
   memoryModel?: string;
+  /**
+   * Embedding model on the same API, for finding notes by meaning. Empty
+   * means keyword search only.
+   */
+  embeddingModel?: string;
   imageGenKey?: string;
   imageGenProvider?: 'flux' | 'replicate' | 'pollinations';
 }

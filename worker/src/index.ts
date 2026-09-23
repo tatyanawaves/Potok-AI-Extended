@@ -16,6 +16,8 @@
  * Endpoints:
  *   POST /pd/connect-token  → short-lived token for the account-connect UI
  *   POST /pd/mcp            → MCP JSON-RPC, proxied with injected credentials
+ *   POST /tasks/start       → run an orchestrated meeting here (./agentTasks)
+ *   POST /tasks/cancel      → ask a running one to stop
  *   GET  /health
  */
 
@@ -23,6 +25,7 @@ import {
     MAX_FILE_BYTES, keyFor, boardKeyFor, putFile,
     mayAccessConversation, conversationOfKey, boardOfKey, isBoardMember
 } from './files';
+import { handleTaskStart, handleTaskCancel, type TaskEnv } from './agentTasks';
 
 /**
  * R2 binding, typed structurally for the same reason FileBucket is: the test
@@ -42,7 +45,7 @@ interface AttachmentBucket {
     delete(key: string): Promise<void>;
 }
 
-export interface Env {
+export interface Env extends TaskEnv {
     FIREBASE_PROJECT_ID: string;
     PIPEDREAM_PROJECT_ID: string;
     PIPEDREAM_CLIENT_ID: string;
@@ -98,9 +101,17 @@ const base64UrlDecode = (input: string): Uint8Array => {
  * Verifies a Firebase ID token and returns its uid.
  * Throws when the token is malformed, expired, or not issued for this project.
  */
-const verifyIdToken = async (token: string, projectId: string): Promise<string> => {
+const verifyIdToken = async (token: string, projectId: string, emulator = false): Promise<string> => {
     const parts = token.split('.');
     if (parts.length !== 3) throw new Error('Malformed token');
+
+    // The Auth emulator issues unsigned tokens. Accepted only when the worker
+    // runs locally against it — AUTH_EMULATOR_HOST is never set in production.
+    if (emulator) {
+        const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(parts[1])));
+        if (payload.aud !== projectId || !payload.sub) throw new Error('Token audience mismatch');
+        return payload.sub as string;
+    }
 
     const [rawHeader, rawPayload, rawSignature] = parts;
 
@@ -230,7 +241,7 @@ const requireCaller = async (
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token) throw new Error('Missing Firebase ID token');
 
-    return { uid: await verifyIdToken(token, env.FIREBASE_PROJECT_ID), idToken: token };
+    return { uid: await verifyIdToken(token, env.FIREBASE_PROJECT_ID, Boolean(env.AUTH_EMULATOR_HOST)), idToken: token };
 };
 
 // --- Handlers -------------------------------------------------------------
@@ -629,7 +640,9 @@ export default {
                 project: env.PIPEDREAM_PROJECT_ID,
                 environment: env.PIPEDREAM_ENVIRONMENT,
                 secretConfigured: Boolean(env.PIPEDREAM_CLIENT_SECRET),
-                attachments: Boolean(env.FILES)
+                attachments: Boolean(env.FILES),
+                serverTasks: Boolean(env.AGENT_TASKS && env.FIREBASE_WEB_API_KEY
+                    && (env.TASK_SEALING_SECRET || env.PIPEDREAM_CLIENT_SECRET))
             }, 200, cors);
         }
 
@@ -673,6 +686,12 @@ export default {
             }
             if (url.pathname === '/pd/mcp') {
                 return await handleMcp(request, env, uid, cors);
+            }
+            if (url.pathname === '/tasks/start') {
+                return await handleTaskStart(request, env, uid, idToken, (body, status) => json(body, status, cors));
+            }
+            if (url.pathname === '/tasks/cancel') {
+                return await handleTaskCancel(request, env, uid, idToken, (body, status) => json(body, status, cors));
             }
             return json({ error: 'Not found' }, 404, cors);
         } catch (error) {

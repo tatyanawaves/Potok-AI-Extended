@@ -9,7 +9,7 @@ const roster: RosterEntry[] = [
     { name: 'Critic', persona: 'Checks conclusions', tools: [] }
 ];
 
-const plan: Plan = { goal: 'G', criteria: ['a', 'b'], steps: [{ bot: 'Analyst', instruction: 'go' }] };
+const plan: Plan = { goal: 'G', criteria: ['a', 'b'], steps: [{ id: 1, bot: 'Analyst', instruction: 'go', after: [] }] };
 
 describe('matchBot', () => {
     it('matches names case-insensitively and with @', () => {
@@ -40,7 +40,7 @@ describe('parsePlan', () => {
             ]
         });
         const parsed = parsePlan(raw, 'task', roster, 2);
-        expect(parsed.steps).toEqual([{ bot: 'Analyst', instruction: 'one' }, { bot: 'Critic', instruction: 'three' }]);
+        expect(parsed.steps.map(st => [st.id, st.bot, st.instruction])).toEqual([[1, 'Analyst', 'one'], [2, 'Critic', 'three']]);
         expect(parsed.criteria).toEqual(['c1']);
     });
 
@@ -82,7 +82,7 @@ describe('parseEvaluation', () => {
 });
 
 describe('parseFinal', () => {
-    const log = [{ bot: 'Analyst', instruction: 'go', result: 'the data', ok: true }];
+    const log = [{ stepId: 1, bot: 'Analyst', instruction: 'go', result: 'the data', ok: true }];
 
     it('reads answer, score and criteria', () => {
         const report = parseFinal('{"answer":"A","progress":75,"criteria":[{"met":true},{"met":false}]}', plan, null, log);

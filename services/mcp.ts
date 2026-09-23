@@ -37,6 +37,15 @@ interface JsonRpcResponse {
 
 let nextId = 1;
 
+type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+let mcpFetch: FetchLike = (url, init) => fetch(url, init);
+
+/**
+ * Replaces the transport. The worker uses it to reach its own Pipedream
+ * bridge in-process: a Worker cannot fetch its own workers.dev address.
+ */
+export const setMcpFetch = (fn: FetchLike): void => { mcpFetch = fn; };
+
 /**
  * Pulls the first JSON-RPC response out of an SSE body.
  *
@@ -98,7 +107,7 @@ const rpc = async (
 
     let response: Response;
     try {
-        response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+        response = await mcpFetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     } catch (error) {
         // A CORS rejection surfaces here as an opaque TypeError.
         throw new Error(
@@ -141,7 +150,7 @@ export const connect = async (url: string, token?: string): Promise<McpConnectio
 
     let response: Response;
     try {
-        response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(initBody) });
+        response = await mcpFetch(url, { method: 'POST', headers, body: JSON.stringify(initBody) });
     } catch (error) {
         throw new Error(
             `Не удалось связаться с MCP-сервером. Возможно, он не разрешает запросы из браузера (CORS): ${error instanceof Error ? error.message : String(error)}`

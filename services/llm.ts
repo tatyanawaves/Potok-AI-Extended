@@ -1,6 +1,5 @@
 import { AISettings, TokenUsage } from '../types';
 import { usageFrom } from './usage';
-import { recordSpend } from './spend';
 
 /**
  * The one way this app talks to a model: an OpenAI-compatible
@@ -11,7 +10,21 @@ import { recordSpend } from './spend';
  * an OpenAI-compatible endpoint as well, so one client with a configurable
  * base URL covers all of them, plus any other compatible provider or a local
  * server.
+ *
+ * Free of Firebase and of the browser on purpose: the same code runs agent
+ * tasks inside the Cloudflare worker. Where usage is recorded is plugged in
+ * with setUsageSink.
  */
+
+type UsageSink = (usage: TokenUsage) => Promise<void> | void;
+let usageSink: UsageSink = () => { };
+
+/** Where every request's token count goes — the browser keeps a daily tally. */
+export const setUsageSink = (sink: UsageSink): void => { usageSink = sink; };
+
+const reportUsage = async (usage: TokenUsage) => {
+    try { await usageSink(usage); } catch { /* a counter must not break a reply */ }
+};
 
 export const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 export const DEFAULT_MODEL = 'nvidia/nemotron-3.5-lightning:free';
@@ -71,7 +84,7 @@ export const modelOf = (settings?: AISettings): string =>
 export const describeHttpError = async (response: Response): Promise<string> => {
     let detail = '';
     try {
-        const body = await response.json();
+        const body: any = await response.json();
         detail = body?.error?.message || body?.message || '';
     } catch {
         // Not JSON; the status alone has to do.
@@ -123,7 +136,7 @@ export const complete = async (
     // them, but some reject unknown headers in CORS preflight, so they are
     // only sent where they mean something.
     if (baseUrl.includes('openrouter.ai')) {
-        headers['HTTP-Referer'] = typeof window !== 'undefined' ? window.location.origin : 'https://potok.app';
+        headers['HTTP-Referer'] = (globalThis as any).location?.origin || 'https://neon-extended.web.app';
         headers['X-Title'] = 'Potok';
     }
 
@@ -149,12 +162,12 @@ export const complete = async (
 
     if (!response.ok) throw new Error(await describeHttpError(response));
 
-    const data = await response.json();
+    const data: any = await response.json();
     const message = data.choices?.[0]?.message;
     if (!message) throw new Error('Модель вернула ответ без сообщения');
 
     const usage = usageFrom(data);
-    await recordSpend(usage).catch(() => { /* a counter must not break a reply */ });
+    await reportUsage(usage);
 
     return {
         content: message.content ?? null,
@@ -166,6 +179,56 @@ export const complete = async (
             args: call.function?.arguments || '{}'
         }))
     };
+};
+
+// --- Embeddings ---------------------------------------------------------------
+
+/**
+ * Vectors are asked for at this size. Stored with every note and read on every
+ * recall, a full 1536-number vector made the notes of one board megabytes;
+ * 256 keeps most of the retrieval quality at a sixth of the size. Models that
+ * cannot shorten their output get asked again without it.
+ */
+export const EMBEDDING_DIMENSIONS = 256;
+
+/**
+ * Embeddings from the same OpenAI-compatible API, on the user's own key.
+ * OpenAI, OpenRouter, Gemini's compatible endpoint and most local servers
+ * offer /embeddings; Groq does not, and callers fall back to keyword search.
+ */
+export const embed = async (texts: string[], settings?: AISettings): Promise<number[][]> => {
+    const model = settings?.embeddingModel?.trim();
+    if (!model) throw new Error('Модель эмбеддингов не задана');
+    if (texts.length === 0) return [];
+
+    const baseUrl = baseUrlOf(settings);
+    const body: Record<string, any> = { model, input: texts, dimensions: EMBEDDING_DIMENSIONS };
+    const send = () => fetch(`${baseUrl}/embeddings`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${settings?.openRouterKey || ''}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+    });
+
+    let response = await send();
+    if (response.status === 400) {
+        delete body.dimensions;
+        response = await send();
+    }
+    if (!response.ok) throw new Error(await describeHttpError(response));
+
+    const data: any = await response.json();
+    const vectors = (data.data || [])
+        .sort((a: any, b: any) => (a.index ?? 0) - (b.index ?? 0))
+        .map((item: any) => item.embedding as number[]);
+    if (vectors.length !== texts.length || vectors.some((v: unknown) => !Array.isArray(v))) {
+        throw new Error('Провайдер вернул эмбеддинги в неожиданном виде');
+    }
+
+    await reportUsage(usageFrom(data));
+    return vectors;
 };
 
 /** Plain text answer to a single prompt. */

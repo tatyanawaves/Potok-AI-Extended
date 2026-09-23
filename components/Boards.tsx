@@ -26,6 +26,10 @@ import {
 import { updateBot } from '../services/boards';
 import MemoryPanel from './MemoryPanel';
 import {
+    serverTasksAvailable, startServerTask, cancelServerTask, subscribeToTasks,
+    isActive, isLocalUrl, ServerTask, STALE_AFTER_MS
+} from '../services/serverTasks';
+import {
     isPipedreamConfigured, listConnectedAccounts, toolServerUrlFor, ConnectedAccount
 } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
@@ -134,20 +138,27 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [toolProbe, setToolProbe] = useState<{ state: 'idle' | 'loading' | 'ok' | 'error', text: string }>({ state: 'idle', text: '' });
     const [showMemory, setShowMemory] = useState(false);
 
+    // Server tasks: meetings the worker runs, which outlive this tab.
+    const [runOnServer, setRunOnServer] = useState(false);
+    const [serverTasks, setServerTasks] = useState<ServerTask[]>([]);
+
     /**
      * Pending tool approval. The promise is resolved by the dialog's buttons,
      * which suspends the bot's turn until the operator decides.
      */
-    const [pendingTool, setPendingTool] = useState<
-        { bot: string, tool: string, args: Record<string, any>, resolve: (ok: boolean) => void } | null
-    >(null);
+    // A queue, not a single slot: steps of a meeting run in parallel, and two
+    // bots may ask at the same moment — one request must not replace the other.
+    const [toolQueue, setToolQueue] = useState<
+        Array<{ bot: string, tool: string, args: Record<string, any>, resolve: (ok: boolean) => void }>
+    >([]);
+    const pendingTool = toolQueue[0] || null;
 
     const requestToolApproval = (bot: string, tool: string, args: Record<string, any>) =>
-        new Promise<boolean>(resolve => setPendingTool({ bot, tool, args, resolve }));
+        new Promise<boolean>(resolve => setToolQueue(queue => [...queue, { bot, tool, args, resolve }]));
 
     const answerToolApproval = (allowed: boolean) => {
         pendingTool?.resolve(allowed);
-        setPendingTool(null);
+        setToolQueue(queue => queue.slice(1));
     };
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -246,6 +257,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         if (!currentUid) return;
         return subscribeToReadState(currentUid, setReads);
     }, [currentUid]);
+
+    useEffect(() => {
+        if (!activeBoardId || !serverTasksAvailable()) { setServerTasks([]); return; }
+        return subscribeToTasks(activeBoardId, setServerTasks);
+    }, [activeBoardId]);
 
     useEffect(() => {
         if (!currentUid) return;
@@ -432,6 +448,22 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         });
 
         try {
+            if (meetingMode === 'orchestrator' && runOnServer) {
+                // Handed to the worker; progress arrives through the task
+                // document, the same way for every member of the board.
+                await startServerTask({
+                    boardId: activeBoard.id!,
+                    channelId: activeChannelId,
+                    channelName: activeChannel.name,
+                    task: task.trim(),
+                    maxSteps,
+                    botIds: bots.map(b => b.id),
+                    toolPolicy: toolPolicy === 'off' ? 'off' : 'auto',
+                    settings
+                });
+                return;
+            }
+
             if (meetingMode === 'orchestrator') {
                 await runOrchestration({
                     boardId: activeBoard.id!,
@@ -978,6 +1010,47 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     </div>
                                 ))}
 
+                                {serverTasks
+                                    .filter(task => task.channelId === activeChannelId
+                                        && (isActive(task) || Date.now() - (task.updatedAt || 0) < 10 * 60_000))
+                                    .map(task => {
+                                        const stale = isActive(task) && Date.now() - (task.updatedAt || 0) > STALE_AFTER_MS;
+                                        return (
+                                            <div key={task.id} className="flex items-center justify-between pl-11 pr-2 py-2 gap-3">
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-center space-x-2 text-sky-300 text-xs font-mono">
+                                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive(task) && !stale ? 'bg-sky-400 animate-pulse' : task.status === 'failed' ? 'bg-rose-500' : 'bg-slate-500'}`}></span>
+                                                        <span className="truncate" title={task.task}>
+                                                            🛰 {t.onServer || 'сервер'} ·{' '}
+                                                            {stale ? (t.taskStale || 'нет вестей больше 20 минут')
+                                                                : task.status === 'done' ? `${t.taskDone || 'готово'} · ${task.progress}%`
+                                                                    : task.status === 'stopped' ? (t.taskStopped || 'остановлено')
+                                                                        : task.status === 'failed' ? `${t.taskFailed || 'ошибка'}: ${task.error || ''}`
+                                                                            : task.phase === 'planning' ? (t.orchPlanning || 'план…')
+                                                                                : task.phase === 'checking' ? (t.orchChecking || 'проверка…')
+                                                                                    : task.phase === 'finishing' ? (t.orchFinishing || 'итог…')
+                                                                                        : `${t.step || 'шаг'} ${task.step}/${task.totalSteps} · ${task.bot || ''}`}
+                                                            {task.cancelRequested && isActive(task) ? ` · ${t.stopping || 'останавливается'}` : ''}
+                                                        </span>
+                                                    </div>
+                                                    {isActive(task) && (
+                                                        <div className="h-1 mt-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-sky-500 transition-all duration-500" style={{ width: `${task.progress || 0}%` }} />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {isActive(task) && !task.cancelRequested && (
+                                                    <button
+                                                        onClick={() => cancelServerTask(activeBoard.id!, task.id).catch(e => setError(e instanceof Error ? e.message : String(e)))}
+                                                        className="shrink-0 px-2.5 py-1 rounded-md border border-rose-500/30 bg-rose-950/20 text-rose-300 text-[10px] font-mono uppercase tracking-wider hover:bg-rose-900/30 transition-colors"
+                                                    >
+                                                        {t.stop || 'Стоп'}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+
                                 {orchestration && (
                                     <div className="flex items-center justify-between pl-11 pr-2 py-2 gap-3">
                                         <div className="min-w-0 flex-1">
@@ -1036,6 +1109,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     channelId={activeChannelId}
                                     isOwner={activeBoard.ownerId === currentUid}
                                     language={settings.language}
+                                    settings={settings}
                                     onClose={() => setShowMemory(false)}
                                 />
                             )}
@@ -1282,7 +1356,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
                     <form
                         onSubmit={(e) => { e.preventDefault(); handleModalSubmit(); }}
-                        className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-in fade-in zoom-in duration-200"
+                        className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-w-sm w-full p-6 max-h-[92vh] overflow-y-auto animate-in fade-in zoom-in duration-200"
                     >
                         <h3 className="text-lg font-bold font-display text-white mb-1">
                             {modal.kind === 'createBoard' && (t.createBoard || 'Создать доску')}
@@ -1397,6 +1471,29 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     <p className="text-[10px] text-slate-600 mt-1 font-mono leading-relaxed">
                                         {t.orchCost || 'до'} {estimateOrchestrationRequests(maxSteps, toolPolicy !== 'off' ? MAX_REQUESTS_PER_TURN : 1)} {t.requestsCeiling || 'запросов в худшем случае; обычно меньше — оркестратор заканчивает, когда цель достигнута'}
                                     </p>
+                                    {serverTasksAvailable() && (
+                                        <label className="mt-3 flex items-start gap-2 p-2 rounded-lg border border-sky-500/20 bg-sky-950/10 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={runOnServer}
+                                                onChange={(e) => {
+                                                    setRunOnServer(e.target.checked);
+                                                    // Nobody is there to approve calls on the server.
+                                                    if (e.target.checked) setToolPolicy(p => p === 'ask' ? 'auto' : p);
+                                                }}
+                                                className="mt-0.5 accent-sky-500"
+                                            />
+                                            <span className="text-[10px] leading-relaxed text-slate-400">
+                                                <span className="text-sky-300 font-bold block">{t.runOnServer || 'На сервере'}</span>
+                                                {t.runOnServerHint || 'Задача продолжится, даже если закрыть вкладку. Сервер получит ваш ключ API и право действовать от вашего имени на время задачи — в зашифрованном виде; подтверждать вызовы инструментов там некому.'}
+                                            </span>
+                                        </label>
+                                    )}
+                                    {runOnServer && activeBoard?.members.some(m => discussionBots.includes(m.id) && toolServersOf(m).some(isLocalUrl)) && (
+                                        <p className="text-[10px] text-amber-400/80 mt-2 leading-relaxed">
+                                            {t.localToolsWarning || 'Инструменты на 127.0.0.1 (мост, Docker) с сервера недоступны — боты их не увидят.'}
+                                        </p>
+                                    )}
                                 </div>
                                 ) : (
                                 <div className="mb-4">
@@ -1432,7 +1529,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 ['off', t.toolsOff || 'Выключить'],
                                                 ['ask', t.toolsAsk || 'С подтверждением'],
                                                 ['auto', t.toolsAuto || 'Полный']
-                                            ] as [ToolPolicy, string][]).map(([value, label]) => (
+                                            ] as [ToolPolicy, string][])
+                                                .filter(([value]) => !(runOnServer && meetingMode === 'orchestrator' && value === 'ask'))
+                                                .map(([value, label]) => (
                                                 <button
                                                     key={value}
                                                     type="button"

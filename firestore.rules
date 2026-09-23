@@ -154,7 +154,28 @@ service cloud.firestore {
                       && request.resource.data.text is string
                       && request.resource.data.text.size() <= 600;
         allow delete: if isBoardMember(boardId);
-        allow update: if false;
+        // Only a note's vector may change after it is filed — for semantic
+        // search, added to notes written before it was switched on.
+        allow update: if isBoardMember(boardId)
+                      && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['embedding', 'embeddingModel'])
+                      && request.resource.data.embedding is string
+                      && request.resource.data.embedding.size() <= 20000;
+      }
+
+      // TASKS: orchestrated meetings running on the server. The worker writes
+      // them as the member who started the task, so these rules bind it too.
+      // Any member may ask a task to stop, and change nothing else.
+      match /tasks/{taskId} {
+        allow read: if isBoardMember(boardId);
+        allow create: if isBoardMember(boardId)
+                      && request.resource.data.startedBy == request.auth.uid;
+        allow update: if isSignedIn()
+                      && (resource.data.startedBy == request.auth.uid
+                          || (isBoardMember(boardId)
+                              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cancelRequested'])));
+        allow delete: if isSignedIn()
+                      && (resource.data.startedBy == request.auth.uid || isBoardOwner(boardId));
       }
 
       // CHANNELS: readable by board members, managed by the board owner.

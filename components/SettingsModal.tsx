@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { AISettings, Language } from '../types';
-import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '../services/llm';
+import { DEFAULT_MODEL, DEFAULT_BASE_URL, embed } from '../services/llm';
 import { translations } from '../translations';
 import { isPipedreamConfigured, listConnectedAccounts, ConnectedAccount } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
@@ -15,6 +15,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
   const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || DEFAULT_MODEL);
   const [memoryModel, setMemoryModel] = useState(settings.memoryModel || '');
+  const [embeddingModel, setEmbeddingModel] = useState(settings.embeddingModel || '');
+  const [embeddingCheck, setEmbeddingCheck] = useState<{ ok: boolean, text: string } | null>(null);
+
+  /** One tiny request, so a wrong model name shows up here and not as silent keyword search. */
+  const checkEmbeddings = async () => {
+    setEmbeddingCheck({ ok: true, text: '…' });
+    try {
+      const [vector] = await embed(['проверка'], { ...settings, openRouterKey, apiBaseUrl, embeddingModel } as AISettings);
+      setEmbeddingCheck({ ok: true, text: `работает · ${vector.length} измерений` });
+    } catch (e) {
+      setEmbeddingCheck({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    }
+  };
   const [apiBaseUrl, setApiBaseUrl] = useState(settings.apiBaseUrl || '');
   const [language, setLanguage] = useState<Language>(settings.language || 'ru');
   const [agentName, setAgentName] = useState(settings.agentName || 'Neo');
@@ -65,6 +78,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       openRouterModel,
       aiProvider: 'openrouter',
       memoryModel: memoryModel.trim() || undefined,
+      embeddingModel: embeddingModel.trim() || undefined,
       apiBaseUrl,
       language,
       agentName,
@@ -213,6 +227,37 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                     />
                     <p className="text-[10px] text-slate-600 leading-relaxed">
                       {t.memoryModelHint || 'Сжатие памяти, план и проверки совещаний. Дешёвая быстрая модель здесь экономит токены, не трогая ответы ботов.'}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      {t.embeddingModelLabel || 'Модель эмбеддингов (поиск по смыслу)'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={embeddingModel}
+                        onChange={(e) => { setEmbeddingModel(e.target.value); setEmbeddingCheck(null); }}
+                        placeholder="openai/text-embedding-3-small"
+                        className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={checkEmbeddings}
+                        disabled={!embeddingModel.trim() || !openRouterKey}
+                        className="px-3 rounded-lg border border-emerald-500/30 text-emerald-300 text-[10px] font-mono uppercase disabled:opacity-40"
+                      >
+                        {t.check || 'Проверить'}
+                      </button>
+                    </div>
+                    {embeddingCheck && (
+                      <p className={`text-[10px] leading-relaxed ${embeddingCheck.ok ? 'text-emerald-400/90' : 'text-rose-300'}`}>
+                        {embeddingCheck.text}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-slate-600 leading-relaxed">
+                      {t.embeddingModelHint || 'Боты находят заметки по смыслу, а не только по словам. Тот же API и ключ; копейки за запрос. Пусто — поиск по словам. OpenRouter/OpenAI: text-embedding-3-small, Gemini: gemini-embedding-001. У Groq эмбеддингов нет.'}
                     </p>
                   </div>
 

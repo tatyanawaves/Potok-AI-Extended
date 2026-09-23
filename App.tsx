@@ -14,7 +14,11 @@ import { ForwardProvider } from './components/Forward';
 import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
 import { Thought, SavedSession, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
-import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL } from './services/llm';
+import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink } from './services/llm';
+import { recordSpend } from './services/spend';
+
+// Every model request made in this browser is counted in the user's daily tally.
+setUsageSink(recordSpend);
 import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, deletePost, getUserProfileByName, toggleCommentLike, logout } from './services/firebase';
 import { secureStorage } from './services/encryption';
 import { resolveFollowing, isFromFollowed, FollowedProfile } from './services/social';

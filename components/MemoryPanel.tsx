@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { translations } from '../translations';
-import { auth } from '../services/firebase';
+import { AISettings } from '../types';
 import {
     subscribeToSummary, subscribeToNotes, addNote, deleteNote, resetSummary
 } from '../services/agentMemory';
@@ -17,10 +17,11 @@ interface MemoryPanelProps {
     channelId: string;
     isOwner: boolean;
     language: string;
+    settings: AISettings;
     onClose: () => void;
 }
 
-const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, language, onClose }) => {
+const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, language, settings, onClose }) => {
     const t = translations[language as 'ru' | 'en' | 'kk'] as any;
     const [summary, setSummary] = useState<ChannelSummary>(EMPTY_SUMMARY);
     const [notes, setNotes] = useState<MemoryNote[]>([]);
@@ -38,7 +39,7 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, 
     const handleAdd = () => run(async () => {
         const text = draft.trim();
         if (!text) return;
-        await addNote(boardId, { text, author: auth.currentUser ? 'человек' : 'user', channelId });
+        await addNote(boardId, { text, author: settings.agentName || 'человек', channelId }, settings);
         setDraft('');
     });
 

@@ -186,6 +186,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         openRouterKey: 'mock-key',
         openRouterModel: 'mock/potok',
         apiBaseUrl: 'http://127.0.0.1:8787/v1',
+        embeddingModel: 'mock-embed',
         allowBoardUse: true,
         showOnlyFollowing: false
       };

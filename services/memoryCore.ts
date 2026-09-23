@@ -54,6 +54,10 @@ export interface MemoryNote {
     author: string;
     channelId?: string;
     createdAt: number;
+    /** The note's embedding, packed by packVector; see rankHybrid. */
+    embedding?: string;
+    /** Which model made it — vectors of different models do not compare. */
+    embeddingModel?: string;
 }
 
 /**
@@ -254,3 +258,76 @@ export const selectTools = <T extends { name: string, description?: string }>(
     const rest = tools.filter(t => !ranked.includes(t));
     return [...ranked, ...rest].slice(0, max);
 };
+
+// --- Semantic retrieval -----------------------------------------------------------
+
+/**
+ * Vectors are stored as base64 of Float32: a quarter of the size of a JSON
+ * array of numbers, and a single string field in Firestore.
+ */
+export const packVector = (vector: number[]): string => {
+    const bytes = new Uint8Array(new Float32Array(vector).buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+};
+
+export const unpackVector = (packed: string): number[] => {
+    const binary = atob(packed);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return Array.from(new Float32Array(bytes.buffer));
+};
+
+export const cosine = (a: number[], b: number[]): number => {
+    if (a.length !== b.length || a.length === 0) return 0;
+    let dot = 0, na = 0, nb = 0;
+    for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+    }
+    return na && nb ? dot / Math.sqrt(na * nb) : 0;
+};
+
+/**
+ * Below this similarity a note is not shown on meaning alone. Unrelated texts
+ * score roughly 0.05–0.2 with common embedding models, related ones 0.35+.
+ */
+export const MIN_SIMILARITY = 0.3;
+
+/**
+ * Ranks notes by meaning and by words together.
+ *
+ * Embeddings find "ad spend" for "рекламный бюджет"; keywords find exact
+ * names, numbers and ids that embeddings blur. The two rankings are merged by
+ * reciprocal rank fusion — the standard way to combine rankings whose scores
+ * are on different scales. A note must pass one of the two on its own merits,
+ * so an unrelated board does not fill the prompt with its nearest neighbours.
+ * Notes without a vector from the same model still compete on keywords.
+ */
+export const rankHybrid = (
+    query: string,
+    queryVector: number[],
+    notes: MemoryNote[],
+    model: string,
+    limit = AUTO_NOTES
+): MemoryNote[] => {
+    const K = 60;
+    const lexical = rankByRelevance(query, notes, n => n.text, notes.length);
+    const semantic = notes
+        .filter(n => n.embedding && n.embeddingModel === model)
+        .map(n => ({ note: n, score: cosine(queryVector, unpackVector(n.embedding!)) }))
+        .filter(s => s.score >= MIN_SIMILARITY)
+        .sort((a, b) => b.score - a.score);
+
+    const fused = new Map<MemoryNote, number>();
+    lexical.forEach((n, i) => fused.set(n, (fused.get(n) || 0) + 1 / (K + i + 1)));
+    semantic.forEach((s, i) => fused.set(s.note, (fused.get(s.note) || 0) + 1 / (K + i + 1)));
+
+    return [...fused.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([n]) => n);
+};
+
+/** Notes whose vector is missing or from another model. */
+export const needsEmbedding = (notes: MemoryNote[], model: string): MemoryNote[] =>
+    notes.filter(n => n.id && (!n.embedding || n.embeddingModel !== model));
