@@ -4,6 +4,7 @@ import { AISettings, Conversation, DirectMessage } from '../types';
 import { FollowedProfile } from '../services/social';
 import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
 import { AttachmentView, ImageLightbox } from './Attachments';
+import { ForwardButton, ForwardedLabel } from './Forward';
 import { MessageAttachment } from '../types';
 import { translations } from '../translations';
 import { subscribeToReadState, markRead, isConversationUnread, EMPTY_READ_STATE } from '../services/reads';
@@ -424,6 +425,9 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                                             : 'bg-slate-800/60 text-slate-200 border border-slate-700'
                                                         }`}
                                                 >
+                                                    {!isDeleted && message.forwardedFrom && (
+                                                        <ForwardedLabel origin={message.forwardedFrom} language={settings.language} />
+                                                    )}
                                                     {isDeleted
                                                         ? (t.messageDeleted || 'сообщение удалено')
                                                         : message.content}
@@ -448,6 +452,23 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                                     <span className="text-[9px] font-mono text-slate-600">
                                                         {t.edited || 'изменено'}
                                                     </span>
+                                                )}
+                                                {!isDeleted && !isEditing && (
+                                                    <ForwardButton
+                                                        title={t.forward || 'Переслать'}
+                                                        className="md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+                                                        payload={() => ({
+                                                            text: message.content,
+                                                            attachments: message.attachments,
+                                                            origin: message.forwardedFrom || {
+                                                                kind: 'dm',
+                                                                authorName: message.authorName,
+                                                                authorId: message.authorId,
+                                                                place: t.directMessagesShort || 'личные сообщения',
+                                                                timestamp: message.timestamp
+                                                            }
+                                                        })}
+                                                    />
                                                 )}
                                                 {mine && !isDeleted && !isEditing && (
                                                     <span className="opacity-0 group-hover:opacity-100 transition-opacity space-x-2">

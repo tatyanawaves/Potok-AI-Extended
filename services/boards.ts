@@ -1,5 +1,5 @@
 import {
-    collection, addDoc, query, where, onSnapshot, limit,
+    collection, addDoc, query, where, onSnapshot, limit, orderBy,
     doc, updateDoc, getDoc, getDocs, deleteDoc, arrayUnion, arrayRemove
 } from 'firebase/firestore';
 import { db } from './firebase';
@@ -28,6 +28,9 @@ export const messagesRefFor = (boardId: string, channelId: string) =>
     collection(db, 'boards', boardId, 'channels', channelId, 'messages');
 
 const DEFAULT_CHANNEL_NAME = 'general';
+
+/** How many of a channel's latest messages are kept on screen. */
+const MESSAGE_WINDOW = 200;
 
 // Re-exported so existing imports keep working; defined in ./mentions, which
 // stays free of the Firestore connection this module opens.
@@ -121,9 +124,12 @@ export const addBot = async (
         sourceAgentId?: string;
         sourceAgentName?: string;
         toolServerUrl?: string;
+        toolServerUrls?: string[];
     }
 ) => {
     if (!bot.name.trim()) throw new Error('A bot needs a name');
+    const urls = [bot.toolServerUrl, ...(bot.toolServerUrls || [])]
+        .map(u => u?.trim()).filter((u): u is string => Boolean(u));
 
     return addMember(boardId, {
         id: generateId(),
@@ -131,7 +137,8 @@ export const addBot = async (
         type: 'bot',
         systemPrompt: bot.systemPrompt.trim() || undefined,
         model: bot.model || undefined,
-        toolServerUrl: bot.toolServerUrl?.trim() || undefined,
+        toolServerUrl: urls[0],
+        toolServerUrls: urls.length > 1 ? urls.slice(1) : undefined,
         ownerId: bot.ownerId,
         sourceAgentId: bot.sourceAgentId,
         sourceAgentName: bot.sourceAgentName,
@@ -161,6 +168,37 @@ export const addMember = async (boardId: string, member: Omit<BoardMember, 'adde
         memberIds: arrayUnion(member.id)
     });
 };
+
+/**
+ * Changes a bot after it was created: its prompt, its tools.
+ *
+ * The roster is an array on the board, so the whole array is rewritten with
+ * the one member replaced — the security rules let only the owner do that.
+ */
+export const updateBot = async (
+    boardId: string,
+    botId: string,
+    changes: { systemPrompt?: string, toolServerUrls?: string[] }
+) => {
+    const board = await getBoard(boardId);
+    if (!board) throw new Error('Доска не найдена');
+
+    const members = board.members.map(m => {
+        if (m.id !== botId) return m;
+        const urls = (changes.toolServerUrls ?? toolUrlsOf(m)).map(u => u.trim()).filter(Boolean);
+        const next: any = { ...m, systemPrompt: changes.systemPrompt ?? m.systemPrompt };
+        // One primary URL kept for older clients, the rest alongside.
+        if (urls.length) { next.toolServerUrl = urls[0]; next.toolServerUrls = urls.slice(1); }
+        else { delete next.toolServerUrl; delete next.toolServerUrls; }
+        Object.keys(next).forEach(k => next[k] === undefined && delete next[k]);
+        return next;
+    });
+
+    await updateDoc(doc(db, 'boards', boardId), { members });
+};
+
+const toolUrlsOf = (m: BoardMember): string[] =>
+    [m.toolServerUrl, ...(m.toolServerUrls || [])].filter((u): u is string => Boolean(u));
 
 export const removeMember = async (boardId: string, memberId: string) => {
     const board = await getBoard(boardId);
@@ -218,9 +256,14 @@ export const subscribeToMessages = (
     channelId: string,
     callback: (messages: BoardMessage[]) => void
 ) => {
-    return onSnapshot(query(messagesRefFor(boardId, channelId), limit(200)), (snapshot) => {
+    // Newest first, then flipped: a bare limit() returns documents in id
+    // order, which for random ids is no order at all — past the limit a
+    // channel showed an arbitrary 200 messages and hid the latest ones.
+    const q = query(messagesRefFor(boardId, channelId), orderBy('timestamp', 'desc'), limit(MESSAGE_WINDOW));
+
+    return onSnapshot(q, (snapshot) => {
         const messages = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as BoardMessage[];
-        messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        messages.reverse();
         callback(messages);
     }, (error) => {
         console.error('[Boards] Message subscription error:', error);
@@ -257,14 +300,40 @@ export const deleteMessage = async (boardId: string, channelId: string, messageI
     await deleteDoc(doc(db, 'boards', boardId, 'channels', channelId, 'messages', messageId));
 };
 
+/**
+ * Messages newer than a moment, oldest first, at most `count` of the newest.
+ *
+ * What a bot turn reads: everything its channel summary does not cover yet.
+ * Once memory has folded the old part of a channel into its summary, this
+ * stays a handful of documents however long the channel grows.
+ */
+export const getMessagesSince = async (
+    boardId: string,
+    channelId: string,
+    since: number,
+    count: number
+): Promise<BoardMessage[]> => {
+    const snapshot = await getDocs(query(
+        messagesRefFor(boardId, channelId),
+        where('timestamp', '>', since),
+        orderBy('timestamp', 'desc'),
+        limit(count)
+    ));
+    const messages = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as BoardMessage[];
+    return messages.reverse();
+};
+
 /** Recent messages of a channel, oldest first — used to build agent context. */
 export const getRecentMessages = async (
     boardId: string,
     channelId: string,
     count: number
 ): Promise<BoardMessage[]> => {
-    const snapshot = await getDocs(query(messagesRefFor(boardId, channelId), limit(200)));
+    // Ordered on the server for the same reason as subscribeToMessages: the
+    // bots' context has to be the latest messages, not a random sample.
+    const snapshot = await getDocs(
+        query(messagesRefFor(boardId, channelId), orderBy('timestamp', 'desc'), limit(count))
+    );
     const messages = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as BoardMessage[];
-    messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-    return messages.slice(-count);
+    return messages.reverse();
 };

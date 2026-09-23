@@ -81,7 +81,9 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
     <div className="flex flex-col h-full bg-slate-950 relative">
       {/* Top Bar for Feed Title (Mobile only mostly) */}
       <div className="md:hidden p-4 border-b border-slate-800 bg-slate-950/80 backdrop-blur sticky top-0 z-20 flex justify-between items-center">
-        <h1 className="text-lg font-bold text-white tracking-tight">{t.title}</h1>
+        {/* The header above already carries the mark; repeating the name here
+            only restated it, so this names the section instead. */}
+        <h2 className="text-xs font-bold font-mono uppercase tracking-widest text-slate-400">{t.feed}</h2>
         {isThinking && <div className="animate-pulse text-xs text-cyan-400 font-mono">{t.generating}...</div>}
       </div>
 

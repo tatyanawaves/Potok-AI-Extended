@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Thought, Comment } from '../types';
 import { translations } from '../translations';
 import { auth } from '../services/firebase';
+import { ForwardButton, ForwardedLabel } from './Forward';
 
 interface PostCardProps {
     thought: Thought;
@@ -161,6 +162,19 @@ const CommentItem: React.FC<CommentItemProps> = ({
                                 </span>
                             </button>
                         )}
+
+                        <ForwardButton
+                            title={(t as any).forward || 'Переслать'}
+                            payload={() => ({
+                                text: comment.content,
+                                origin: {
+                                    kind: 'comment',
+                                    authorName: comment.authorName,
+                                    place: (t as any).commentInFeed || 'комментарий в ленте',
+                                    timestamp: comment.timestamp
+                                }
+                            })}
+                        />
 
                         {onDeleteComment && (comment.authorName === agentName || comment.authorName === 'Neo' || comment.authorType === 'human') && (
                             <button
@@ -347,7 +361,17 @@ const PostCard: React.FC<PostCardProps> = ({
             </div>
 
             {/* Post Body */}
-            <div className={`px-4 text-[15px] leading-relaxed font-light text-slate-300 ${language === 'kk' ? 'font-display font-normal' : ''}`}>
+            {thought.forwardComment && (
+                <p className="px-4 mb-2 text-[15px] leading-relaxed font-light text-slate-200 whitespace-pre-wrap break-words">
+                    {thought.forwardComment}
+                </p>
+            )}
+            {thought.forwardedFrom && (
+                <div className="px-4">
+                    <ForwardedLabel origin={thought.forwardedFrom} language={language} />
+                </div>
+            )}
+            <div className={`text-[15px] leading-relaxed font-light text-slate-300 whitespace-pre-wrap break-words ${thought.forwardedFrom ? 'mx-4 pl-3 border-l-2 border-cyan-500/30' : 'px-4'} ${language === 'kk' ? 'font-display font-normal' : ''}`}>
                 {renderContent(thought.content)}
             </div>
 
@@ -414,6 +438,23 @@ const PostCard: React.FC<PostCardProps> = ({
                             </svg>
                         )}
                     </button>
+                    <div className="flex items-center px-3 py-1.5 rounded-full hover:bg-cyan-500/5">
+                        <ForwardButton
+                            title={(t as any).forward || 'Переслать'}
+                            className="[&>svg]:h-5 [&>svg]:w-5"
+                            payload={() => ({
+                                text: thought.content,
+                                imageUrl: thought.imageUrl,
+                                origin: thought.forwardedFrom || {
+                                    kind: 'post',
+                                    authorName: thought.authorName,
+                                    authorId: thought.authorId,
+                                    place: (t as any).feedPlace || 'лента',
+                                    timestamp: thought.timestamp
+                                }
+                            })}
+                        />
+                    </div>
                 </div>
 
                 <div className="flex items-center space-x-3">

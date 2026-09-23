@@ -1,4 +1,8 @@
-export type AIProvider = 'gemini' | 'openrouter' | 'groq';
+/**
+ * Only one kind is left: an OpenAI-compatible API, OpenRouter by default. The
+ * type stays so settings saved earlier still parse; see migrateProviderSettings.
+ */
+export type AIProvider = 'openrouter';
 export type Language = 'ru' | 'en' | 'kk';
 
 export interface AgentProfile {
@@ -40,10 +44,6 @@ export interface SystemLog {
 export interface AISettings {
   openRouterKey: string;
   openRouterModel: string;
-  geminiKey?: string;
-  geminiModel?: string;
-  groqKey?: string;
-  groqModel?: string;
   apiBaseUrl?: string;
   language: Language;
   agentRole?: string;
@@ -61,6 +61,11 @@ export interface AISettings {
    * browser, like the provider API keys — never written to Firestore.
    */
   mcpTokens?: Record<string, string>;
+  /**
+   * Optional cheaper model for bookkeeping — memory summaries, meeting plans
+   * and progress checks. Falls back to openRouterModel.
+   */
+  memoryModel?: string;
   imageGenKey?: string;
   imageGenProvider?: 'flux' | 'replicate' | 'pollinations';
 }
@@ -121,12 +126,29 @@ export interface Thought {
   cognitiveState?: CognitiveState;
   generationPrompt?: string; // Original prompt used
   modelName?: string;        // Model used for generation
+  forwardedFrom?: ForwardOrigin;
+  /** The reposter's own words about a forwarded post, shown above the quote. */
+  forwardComment?: string;
   meta?: {
     thought?: string;
     feeling?: string;
     goal?: string;
     motivation?: string;
   };
+}
+
+/**
+ * Where a forwarded item came from. Stored on the copy so it can say
+ * "forwarded from …" — the copy is independent of the original, which may
+ * live somewhere the new readers cannot open.
+ */
+export interface ForwardOrigin {
+  kind: 'post' | 'comment' | 'board' | 'dm';
+  authorName: string;
+  authorId?: string;
+  /** Human-readable place, e.g. "#general · Marketing" or "Лента". */
+  place?: string;
+  timestamp?: number;
 }
 
 /** A file stored in R2 behind the worker; see services/attachments.ts. */
@@ -156,6 +178,8 @@ export interface BoardMember {
    * own settings under mcpTokens and never reaches Firestore.
    */
   toolServerUrl?: string;
+  /** Bot-only: further MCP servers, when one is not enough. */
+  toolServerUrls?: string[];
   /**
    * Bot-only: who created the bot. Attribution only — the reply is generated
    * by whoever @mentions the bot, on their key, so creating a bot never
@@ -260,6 +284,7 @@ export interface BoardMessage {
   isAgentReply?: boolean;
   /** Set while an agent reply is being generated. */
   isPending?: boolean;
+  forwardedFrom?: ForwardOrigin;
   timestamp: number;
 }
 
@@ -299,6 +324,7 @@ export interface DirectMessage {
   authorName: string;
   content: string;
   attachments?: MessageAttachment[];
+  forwardedFrom?: ForwardOrigin;
   timestamp: number;
   /** Set when the author edits, so the change is visible rather than silent. */
   editedAt?: number;

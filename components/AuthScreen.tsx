@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AISettings, Language } from '../types';
 import { translations } from '../translations';
-import { signInWithSocial, completeSocialSignIn, loginWithEmail, registerWithEmail, updateUserProfile, getUserProfile, SocialProvider } from '../services/firebase';
+import { signInWithSocial, completeSocialSignIn, loginWithEmail, registerWithEmail, updateUserProfile, getUserProfile, SocialProvider, usingEmulators } from '../services/firebase';
 import { secureStorage } from '../services/encryption';
 
 interface AuthScreenProps {
@@ -152,6 +152,61 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
     }
   };
 
+  /**
+   * One-click sign-in for the local test build.
+   *
+   * Only rendered when the app talks to the Firebase emulators, where these
+   * accounts exist in a throwaway "demo-" project and nowhere else. Two of
+   * them, so messages and forwarding between people can be tried. The model
+   * is the mock from scripts/mock-llm.mjs, so bots answer without a real key.
+   */
+  const handleTestLogin = async (slot: 'A' | 'B') => {
+    setError(null);
+    setIsLoading(true);
+
+    const email = `tester-${slot.toLowerCase()}@potok.test`;
+    const testPassword = 'potok-emulator-only';
+
+    try {
+      let user;
+      try {
+        user = await loginWithEmail(email, testPassword);
+      } catch (err: any) {
+        if (!/user-not-found|invalid-credential/.test(err?.code || '')) throw err;
+        user = await registerWithEmail(email, testPassword);
+      }
+
+      const testSettings: AISettings = {
+        ...settings,
+        userType: 'agent',
+        agentName: `Tester_${slot}`,
+        agentRole: 'QA',
+        agentPrompt: 'Ты тестовый агент. Отвечай кратко.',
+        aiProvider: 'openrouter',
+        openRouterKey: 'mock-key',
+        openRouterModel: 'mock/potok',
+        apiBaseUrl: 'http://127.0.0.1:8787/v1',
+        allowBoardUse: true,
+        showOnlyFollowing: false
+      };
+
+      await updateUserProfile(user.uid, {
+        email,
+        role: 'agent',
+        agentName: testSettings.agentName,
+        agentRole: testSettings.agentRole,
+        agentPrompt: testSettings.agentPrompt,
+        allowBoardUse: true
+      });
+
+      onAuthorize(testSettings);
+    } catch (err: any) {
+      setError(`Тестовый вход не удался: ${err?.message || err}. Запущены ли эмуляторы (npm run emulators)?`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleAgentEnter = (e: React.FormEvent) => {
     e.preventDefault();
     if (settings.openRouterKey && settings.agentName) {
@@ -205,6 +260,27 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         </div>
 
         {error && <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/50 rounded-lg text-rose-400 text-xs text-center">{error}</div>}
+
+        {usingEmulators && (
+          <div className="mb-4 p-3 rounded-xl border border-dashed border-amber-500/40 bg-amber-950/10">
+            <p className="text-[10px] font-mono uppercase tracking-widest text-amber-400 mb-2">
+              Тестовый режим · эмуляторы Firebase
+            </p>
+            <div className="flex gap-2">
+              {(['A', 'B'] as const).map(slot => (
+                <button
+                  key={slot}
+                  type="button"
+                  onClick={() => handleTestLogin(slot)}
+                  disabled={isLoading}
+                  className="flex-1 py-2 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  Войти как Tester_{slot}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Social sign-in, offered to both account types. */}
         <div className="space-y-3 mb-4">

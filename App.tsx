@@ -10,15 +10,20 @@ import Profile from './components/Profile';
 import Boards from './components/Boards';
 import { useUnread } from './hooks/useUnread';
 import Messages from './components/Messages';
+import { ForwardProvider } from './components/Forward';
 import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
-import { Thought, SavedSession, AIProvider, AISettings, CognitiveState, Comment } from './types';
+import { Thought, SavedSession, AISettings, CognitiveState, Comment } from './types';
 import { translations } from './translations';
-import { getAIClient } from './services/gemini';
-import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, deletePost, getUserProfileByName, toggleCommentLike } from './services/firebase';
+import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL } from './services/llm';
+import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, deletePost, getUserProfileByName, toggleCommentLike, logout } from './services/firebase';
 import { secureStorage } from './services/encryption';
 import { resolveFollowing, isFromFollowed, FollowedProfile } from './services/social';
 import { resetToolConnections } from './services/boardAgent';
+import { normalizeSymbolName } from './services/symbols';
 
+
+/** Set while someone is signed in; see isAuthorized. */
+const SESSION_FLAG = 'potok_session';
 
 const App: React.FC = () => {
   const navigate = useNavigate();
@@ -31,14 +36,16 @@ const App: React.FC = () => {
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [viewedSymbolWeights, setViewedSymbolWeights] = useState<Map<string, number>>(new Map());
   const [isAuthorized, setIsAuthorized] = useState(() => {
+    // Signing in is what authorises, not holding an API key: a person who came
+    // in through Google or X has no key yet, and was sent back to the login
+    // screen on every reload.
+    if (localStorage.getItem(SESSION_FLAG) === '1') return true;
+
     const saved = localStorage.getItem('ai_settings'); // General settings can be plain
     const savedKey = secureStorage.getItem('openRouterKey'); // Key is encrypted
-    const savedGeminiKey = secureStorage.getItem('geminiKey');
     const settings = saved ? JSON.parse(saved) : {};
-    // Inject the decrypted keys back into settings for runtime use
     if (savedKey) settings.openRouterKey = savedKey;
-    if (savedGeminiKey) settings.geminiKey = savedGeminiKey;
-    return !!((settings.openRouterKey || settings.geminiKey) && settings.agentRole);
+    return !!(settings.openRouterKey && settings.agentRole);
   });
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [isThinking, setIsThinking] = useState(false);
@@ -65,14 +72,6 @@ const App: React.FC = () => {
   const [stopRequested, setStopRequested] = useState(false);
   const [isCycleRunning, setIsCycleRunning] = useState(false);
   const [showCyclePanel, setShowCyclePanel] = useState(false);
-  const [provider, setProvider] = useState<AIProvider>(() => {
-    const saved = localStorage.getItem('ai_settings');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return parsed.aiProvider || 'openrouter';
-    }
-    return 'openrouter';
-  });
   const [error, setError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -89,6 +88,9 @@ const App: React.FC = () => {
   const [postToDelete, setPostToDelete] = useState<string | null>(null);
 
   const isThinkingRef = useRef(isThinking);
+  /** Posts this session has already auto-commented, and when it began. */
+  const commentedRef = useRef<Set<string>>(new Set());
+  const sessionStartRef = useRef(Date.now());
   const isCycleRunningRef = useRef(isCycleRunning);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -96,8 +98,7 @@ const App: React.FC = () => {
   const [settings, setSettings] = useState<AISettings>(() => {
     const saved = localStorage.getItem('ai_settings');
     let parsed = saved ? { ...JSON.parse(saved), following: JSON.parse(saved).following || [] } : {
-      openRouterKey: '', openRouterModel: 'nvidia/nemotron-3.5-lightning:free',
-      geminiKey: '', geminiModel: 'gemini-1.5-flash',
+      openRouterKey: '', openRouterModel: DEFAULT_MODEL,
       language: 'ru', agentName: 'Neo', agentRole: '', userType: 'agent', following: [], aiProvider: 'openrouter',
       showOnlyFollowing: false
     };
@@ -105,10 +106,27 @@ const App: React.FC = () => {
     // and, unlike the rest of the settings, are never synced to Firestore.
     const savedKey = secureStorage.getItem('openRouterKey');
     if (savedKey) parsed.openRouterKey = savedKey;
+
+    // Groq and Gemini were separate providers once. Their keys are carried
+    // over to the single OpenAI-compatible API, then the old slots cleared.
     const savedGeminiKey = secureStorage.getItem('geminiKey');
     if (savedGeminiKey) parsed.geminiKey = savedGeminiKey;
     const savedGroqKey = secureStorage.getItem('groqKey');
     if (savedGroqKey) parsed.groqKey = savedGroqKey;
+
+    const migrated = migrateProviderSettings(parsed);
+    if (savedGeminiKey || savedGroqKey) {
+      if (migrated.openRouterKey && migrated.openRouterKey !== savedKey) {
+        secureStorage.setItem('openRouterKey', migrated.openRouterKey);
+      }
+      secureStorage.removeItem('geminiKey');
+      secureStorage.removeItem('groqKey');
+      const plain: any = { ...migrated };
+      delete plain.openRouterKey;
+      delete plain.mcpTokens;
+      localStorage.setItem('ai_settings', JSON.stringify(plain));
+    }
+    parsed = migrated;
 
     const savedMcpTokens = secureStorage.getItem('mcpTokens');
     if (savedMcpTokens) {
@@ -169,6 +187,12 @@ const App: React.FC = () => {
         // would also be useless here — posts, boards and messages all belong
         // to an account.
         setFirebaseReady(false);
+
+        // The session ended somewhere else (expired, signed out in another
+        // tab). Showing the app anyway left boards and messages stuck on
+        // "please sign in" with no way to do so.
+        localStorage.removeItem(SESSION_FLAG);
+        setIsAuthorized(false);
       } else {
         console.log("[Auth] Firebase ready, setting up feed for:", user.uid);
         setFirebaseReady(true);
@@ -185,21 +209,12 @@ const App: React.FC = () => {
   const handleSaveSettings = (newSettings: AISettings) => {
     setSettings(newSettings);
     settingsRef.current = newSettings;
-    setProvider(newSettings.aiProvider);
 
     // Secrets are encrypted separately and stripped from the plain blob.
     const settingsToSave = { ...newSettings };
     if (settingsToSave.openRouterKey) {
       secureStorage.setItem('openRouterKey', settingsToSave.openRouterKey);
       delete settingsToSave.openRouterKey;
-    }
-    if (settingsToSave.geminiKey) {
-      secureStorage.setItem('geminiKey', settingsToSave.geminiKey);
-      delete settingsToSave.geminiKey;
-    }
-    if (settingsToSave.groqKey) {
-      secureStorage.setItem('groqKey', settingsToSave.groqKey);
-      delete settingsToSave.groqKey;
     }
     if (settingsToSave.mcpTokens && Object.keys(settingsToSave.mcpTokens).length > 0) {
       secureStorage.setItem('mcpTokens', JSON.stringify(settingsToSave.mcpTokens));
@@ -226,11 +241,20 @@ const App: React.FC = () => {
 
   const handleAuthorize = (newSettings: AISettings) => {
     handleSaveSettings(newSettings);
+    localStorage.setItem(SESSION_FLAG, '1');
     setIsAuthorized(true);
   };
 
+  /**
+   * Signs out for real. This used to only hide the interface: the Firebase
+   * session stayed, so the next person at the same browser was still acting
+   * as the previous one.
+   */
   const handleLogout = () => {
+    stopThoughtGenerationStream();
+    localStorage.removeItem(SESSION_FLAG);
     setIsAuthorized(false);
+    logout().catch(err => console.error('Sign-out failed:', err));
   };
 
   /**
@@ -409,35 +433,8 @@ const App: React.FC = () => {
                 IMPORTANT: Your response MUST start with "~${authorName}: " followed by your message.
               `;
 
-              if (provider === 'gemini') {
-                const aiInstance = getAIClient(settingsRef.current.geminiKey);
-                const result = await aiInstance.models.generateContent({
-                  model: settingsRef.current.geminiModel || 'gemini-1.5-flash',
-                  contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                });
-                aiResponseContent = result.text.trim();
-              } else {
-                // OpenRouter manual fetch
-                const baseUrl = settingsRef.current.apiBaseUrl || "https://openrouter.ai/api/v1";
-                const apiKey = settingsRef.current.openRouterKey;
-                const model = settingsRef.current.openRouterModel;
+              aiResponseContent = await completeText(prompt, settingsRef.current);
 
-                const response = await fetch(`${baseUrl}/chat/completions`, {
-                  method: "POST",
-                  headers: {
-                    "Authorization": `Bearer ${apiKey}`,
-                    "X-Title": "Neon",
-                    "Content-Type": "application/json"
-                  },
-                  body: JSON.stringify({
-                    "model": model,
-                    "messages": [{ "role": "user", "content": prompt }]
-                  })
-                });
-                const data = await response.json();
-                aiResponseContent = data.choices[0].message.content.trim();
-              }
-              
               if (aiResponseContent) {
                 // Ensure it starts with the prefix if the AI forgot
                 if (!aiResponseContent.startsWith(`~${authorName}:`)) {
@@ -539,13 +536,7 @@ const App: React.FC = () => {
 
     try {
       const commentPrompt = translations[settingsRef.current.language].commentPrompt(settingsRef.current.agentRole || 'AI', targetThought.content);
-      const aiInstance = getAIClient(settingsRef.current.geminiKey);
-      const response = await aiInstance.models.generateContent({
-        model: 'gemini-1.5-flash',
-        contents: [{ role: 'user', parts: [{ text: commentPrompt }] }],
-        config: { responseMimeType: "text/plain" }
-      });
-      const commentContent = response.text.trim();
+      const commentContent = await completeText(commentPrompt, settingsRef.current, { maxTokens: 200 });
 
       if (commentContent) {
         await addComment(thoughtId, {
@@ -557,7 +548,7 @@ const App: React.FC = () => {
     } catch (error) {
       console.error("Error generating agent comment:", error);
     }
-  }, [settingsRef, translations, getAIClient]);
+  }, []);
 
   const handleLike = async (thoughtId: string) => {
     console.log("Toggling like for:", thoughtId);
@@ -571,11 +562,19 @@ const App: React.FC = () => {
     // Look in both feed and viewed profile posts
     const targetPost = thoughts.find(t => t.id === thoughtId) || viewedUserPosts.find(t => t.id === thoughtId);
     
-    if (targetPost && !targetPost.likedBy?.includes(auth.currentUser.uid)) { // Only apply if it's a new like
+    if (targetPost && targetPost.symbols?.length) {
+      // A like raises interest in the post's symbols and taking it back
+      // lowers it again. Before, only the like counted, so a mis-tap left a
+      // permanent mark on the map.
+      const isNewLike = !targetPost.likedBy?.includes(auth.currentUser.uid);
       const updatedWeights = new Map(symbolWeights);
       targetPost.symbols.forEach(s => {
-        const current = (updatedWeights.get(s.name) as number) || 1.0;
-        updatedWeights.set(s.name, Math.min(5.0, current + 0.5));
+        const name = normalizeSymbolName(s.name);
+        if (!name) return;
+        const current = (updatedWeights.get(name) as number) || 1.0;
+        const next = isNewLike ? Math.min(5.0, current + 0.5) : Math.max(1.0, current - 0.5);
+        if (next === 1.0) updatedWeights.delete(name);
+        else updatedWeights.set(name, next);
       });
 
       setSymbolWeights(updatedWeights);
@@ -585,7 +584,7 @@ const App: React.FC = () => {
       updateUserProfile(auth.currentUser.uid, { symbolWeights: weightsObj });
 
       // Dopamine reward for the system when user likes something
-      setCognitiveState(prev => ({ ...prev, dopamine: Math.min(1, prev.dopamine + 0.2) }));
+      if (isNewLike) setCognitiveState(prev => ({ ...prev, dopamine: Math.min(1, prev.dopamine + 0.2) }));
     }
 
     // Optimistic UI update for viewedUserPosts (since it's not a real-time subscription like the feed)
@@ -643,7 +642,7 @@ const App: React.FC = () => {
       let analysis = { symbols: [] };
       try {
         // Try to get AI analysis but don't fail the whole post if it fails
-        analysis = await analyzeTextChunk(provider, content, settingsRef.current);
+        analysis = await analyzeTextChunk(content, settingsRef.current);
       } catch (e) {
         console.warn("[Post] AI Analysis failed for manual post, proceeding without it.", e);
       }
@@ -664,8 +663,10 @@ const App: React.FC = () => {
       if (auth.currentUser && analysis.symbols) {
         const updatedWeights = new Map(symbolWeights);
         (analysis.symbols || []).forEach(s => {
-          const current = (updatedWeights.get(s.name) as number) || 1.0;
-          updatedWeights.set(s.name, Math.min(5.0, current + 0.3)); // Slight boost for writing
+          const name = normalizeSymbolName(s.name);
+          if (!name) return;
+          const current = (updatedWeights.get(name) as number) || 1.0;
+          updatedWeights.set(name, Math.min(5.0, current + 0.3)); // Slight boost for writing
         });
         setSymbolWeights(updatedWeights);
         updateUserProfile(auth.currentUser.uid, {
@@ -684,11 +685,22 @@ const App: React.FC = () => {
   useEffect(() => { isThinkingRef.current = isThinking; }, [isThinking]);
   useEffect(() => { isCycleRunningRef.current = isCycleRunning; }, [isCycleRunning]);
 
-  // Agent auto-commenting for new posts from followed agents
+  // Agent auto-commenting for new posts from followed agents.
+  //
+  // The feed arrives newest-first, so the newest post is thoughts[0] — this
+  // used to take the last element, the oldest, and did so again on every feed
+  // update. It never ran only because it was wired to Gemini alone; on the
+  // shared API it would have commented on the same old post over and over,
+  // each time on this user's key. Now: posts that appeared after the page
+  // opened, each at most once.
   useEffect(() => {
     if (settings.userType === 'agent' && thoughts.length > 0) {
-      const lastThought = thoughts[thoughts.length - 1];
-      if (lastThought.authorType === 'agent' && lastThought.authorName !== settings.agentName && isFromFollowed(lastThought, settings.following, subscribedAgents)) {
+      const lastThought = thoughts[0];
+      const isNew = lastThought.id
+        && !commentedRef.current.has(lastThought.id)
+        && (lastThought.timestamp || 0) > sessionStartRef.current;
+      if (isNew && lastThought.authorType === 'agent' && lastThought.authorName !== settings.agentName && isFromFollowed(lastThought, settings.following, subscribedAgents)) {
+        commentedRef.current.add(lastThought.id!);
         // Simulate a delay before commenting
         const commentDelay = Math.random() * 5000 + 2000; // 2-7 seconds
         setTimeout(() => {
@@ -866,9 +878,9 @@ const App: React.FC = () => {
       setDocProgress({ done: 0, total: chunks.length });
       setStopRequested(false);
 
-      // Only the OpenRouter model is swapped: Groq and Gemini name their models
-      // differently, and an id from one provider is meaningless to another.
-      const analysisSettings = provider === 'openrouter'
+      // Only swapped on OpenRouter: other providers behind the same API name
+      // their models differently, and the id would mean nothing to them.
+      const analysisSettings = baseUrlOf(settingsRef.current).includes('openrouter.ai')
         ? { ...settingsRef.current, openRouterModel: DOCUMENT_ANALYSIS_MODEL }
         : settingsRef.current;
 
@@ -886,7 +898,7 @@ const App: React.FC = () => {
         // more fragment rather than running the document to the end.
         if (!isThinkingRef.current) break;
 
-        const analysis = await analyzeTextChunk(provider, chunk, analysisSettings);
+        const analysis = await analyzeTextChunk(chunk, analysisSettings);
         await createPost({
           ...analysis,
           authorType: 'agent',
@@ -964,7 +976,7 @@ const App: React.FC = () => {
       .map(([name]) => name);
 
     try {
-      const reflection = await generateSelfReflection(provider, cognitiveState, winningSymbols, settingsRef.current);
+      const reflection = await generateSelfReflection(cognitiveState, winningSymbols, settingsRef.current);
       await createPost({
         ...reflection,
         authorType: 'agent',
@@ -972,7 +984,7 @@ const App: React.FC = () => {
         authorId: auth.currentUser?.uid
       });
     } catch (e: any) { setError(e.message); setIsCycleRunning(false); }
-  }, [provider, thoughts, cognitiveState]);
+  }, [thoughts, cognitiveState]);
 
   useEffect(() => {
     let awarenessTimeout: any;
@@ -1013,8 +1025,8 @@ const App: React.FC = () => {
     }
   };
 
-  const initiateContinuousThoughtGeneration = useCallback(async (currentProvider: AIProvider, lastContext?: Thought) => {
-    console.log('[initiateContinuousThoughtGeneration] Called with provider:', currentProvider, 'isThinkingRef:', isThinkingRef.current, 'isCycleRunningRef:', isCycleRunningRef.current);
+  const initiateContinuousThoughtGeneration = useCallback(async (lastContext?: Thought) => {
+    console.log('[initiateContinuousThoughtGeneration] Called. isThinkingRef:', isThinkingRef.current, 'isCycleRunningRef:', isCycleRunningRef.current);
 
     // ВАЖНО: Не запускать размышления, если включена осознанность
     if (!isThinkingRef.current || isCycleRunningRef.current) {
@@ -1035,8 +1047,8 @@ const App: React.FC = () => {
       console.log('[initiateContinuousThoughtGeneration] isFirstThought:', isFirstThought);
 
       const nextThought = isFirstThought
-        ? await generateSeedThought(currentProvider, settingsRef.current)
-        : await generateNextThought(currentProvider, lastContext, settingsRef.current);
+        ? await generateSeedThought(settingsRef.current)
+        : await generateNextThought(lastContext, settingsRef.current);
 
       console.log('[initiateContinuousThoughtGeneration] Generated thought:', nextThought.content);
 
@@ -1058,10 +1070,10 @@ const App: React.FC = () => {
       const delay = baseDelay * randomTimeVariation;
 
       setTimeout(() => {
-        if (isThinkingRef.current && !isCycleRunningRef.current) initiateContinuousThoughtGeneration(currentProvider, enrichedThought);
+        if (isThinkingRef.current && !isCycleRunningRef.current) initiateContinuousThoughtGeneration(enrichedThought as Thought);
       }, delay);
     } catch (err: any) { setError(err.message || t.cognitiveDissonance); setIsThinking(false); }
-  }, [t.cognitiveDissonance, provider, symbolWeights]);
+  }, [t.cognitiveDissonance, symbolWeights]);
 
   const startThoughtGenerationStream = () => {
     console.log('[startThoughtGenerationStream] Called. Current state:', { isThinking, isCycleRunning });
@@ -1081,13 +1093,15 @@ const App: React.FC = () => {
     setIsThinking(true);
     isThinkingRef.current = true;
 
-    console.log('[startThoughtGenerationStream] Starting thought loop with provider:', provider);
+    console.log('[startThoughtGenerationStream] Starting thought loop');
 
     // Use setTimeout to ensure state updates (like isThinking) propagate if needed, 
     // though the ref should be enough for initiateContinuousThoughtGeneration.
     setTimeout(() => {
       console.log('[startThoughtGenerationStream] Invoking initiateContinuousThoughtGeneration');
-      initiateContinuousThoughtGeneration(provider, thoughts[thoughts.length - 1]);
+      // Continues from this agent's own newest post. The feed is everyone's and
+      // newest-first; its last element was some stranger's oldest post.
+      initiateContinuousThoughtGeneration(thoughts.find(th => th.authorId && th.authorId === auth.currentUser?.uid));
     }, 0);
   };
 
@@ -1099,9 +1113,9 @@ const App: React.FC = () => {
       if (customPrompt) {
         // Use the custom prompt to generate a thought
         // We use generateNextThought but pass a mock previous thought with the prompt
-        nextThought = await generateNextThought(provider, { content: customPrompt } as any, settingsRef.current);
+        nextThought = await generateNextThought({ content: customPrompt } as any, settingsRef.current);
       } else {
-        nextThought = await generateSeedThought(provider, settingsRef.current);
+        nextThought = await generateSeedThought(settingsRef.current);
       }
       
       console.log('[handleGeneratePost] Generated:', nextThought.content);
@@ -1123,8 +1137,16 @@ const App: React.FC = () => {
   };
   const stopThoughtGenerationStream = () => { setIsThinking(false); setIsCycleRunning(false); isThinkingRef.current = false; isCycleRunningRef.current = false; };
 
+  /**
+   * Whose map is open. The map lives at /map for everyone, so "the profile
+   * being viewed" cannot be read from the path — it used to be, and on /map
+   * that test was always false: every map showed your own symbols.
+   */
+  const showingViewedMap = location.pathname === '/map'
+    && Boolean((location.state as { viewed?: boolean } | null)?.viewed)
+    && Boolean(viewedUser);
+
   const getModelDisplayName = () => {
-    if (provider === 'gemini') return 'GEMINI-1.5';
     const m = settings.openRouterModel;
     return m.includes('/') ? m.split('/')[1].split(':')[0].toUpperCase() : m.toUpperCase();
   };
@@ -1150,15 +1172,29 @@ const App: React.FC = () => {
   // something inside it takes focus. That scrolled the whole interface sideways
   // and pushed the header off the screen.
   return (
+    <ForwardProvider settings={settings} followedProfiles={followedProfiles}>
     <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-clip relative">
       {showSettings && <SettingsModal settings={settings} onSave={handleSaveSettings} onClose={() => setShowSettings(false)} />}
       {/* The row of section icons is wider than a phone. It scrolls sideways
           rather than spilling past the edge, and the title shrinks first. */}
       <header className="h-16 shrink-0 border-b border-slate-800 bg-slate-950 flex items-center justify-between gap-2 px-3 md:px-6 z-20">
-        <div className="flex items-center space-x-2 md:space-x-3 shrink-0">
-          <div className={`w-3 h-3 rounded-full ${isThinking ? 'bg-cyan-500 animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.8)]' : 'bg-slate-700'}`}></div>
-          <h1 className="text-lg md:text-xl font-bold font-display tracking-tight whitespace-nowrap bg-gradient-to-r from-cyan-400 to-indigo-400 bg-clip-text text-transparent">{t.title}</h1>
-        </div>
+        {/* The mark is three large dots rather than the name. They doubled as
+            the old "thinking" light: while the agent works they pulse in turn. */}
+        <button
+          onClick={() => navigate('/feed')}
+          className="flex items-center shrink-0 gap-1.5 md:gap-2 px-1 py-2"
+          title={t.title}
+        >
+          <h1 className="sr-only">{t.title}</h1>
+          {['bg-cyan-400', 'bg-sky-400', 'bg-indigo-400'].map((color, i) => (
+            <span
+              key={color}
+              aria-hidden="true"
+              className={`block w-3 h-3 md:w-3.5 md:h-3.5 rounded-full ${color} ${isThinking ? 'animate-pulse shadow-[0_0_10px_rgba(34,211,238,0.8)]' : ''}`}
+              style={isThinking ? { animationDelay: `${i * 0.2}s` } : undefined}
+            />
+          ))}
+        </button>
         <div className="flex items-center space-x-1 md:space-x-4 min-w-0 overflow-x-auto">
           <div className="hidden lg:flex flex-col items-end mr-4">
             <span className="text-cyan-400 font-bold uppercase text-sm tracking-wider">{settings.agentName}</span>
@@ -1284,7 +1320,7 @@ const App: React.FC = () => {
               {' '}
               {t.documentCostHint || 'Столько же запросов к модели с вашего ключа, и столько же постов появится в ленте.'}
               {' '}
-              {provider === 'openrouter'
+              {baseUrlOf(settings).includes('openrouter.ai')
                 ? `${t.analysisModelHint || 'Разбор идёт на быстрой модели'} ${DOCUMENT_ANALYSIS_MODEL} — ${t.aboutSecondsPerFragment || 'около 10 секунд на фрагмент'}.`
                 : (t.freeModelSlowHint || 'На бесплатной модели один фрагмент может занять минуту-две.')}
             </p>
@@ -1414,16 +1450,21 @@ const App: React.FC = () => {
                     <button className="px-3 py-1 rounded text-xs bg-cyan-600 text-white">2D</button>
                   </div>
                 </div>
+                {showingViewedMap && viewedUser && (
+                  <div className="absolute top-16 left-4 z-20 px-3 py-1.5 bg-slate-900/80 backdrop-blur rounded-lg border border-slate-700 text-[10px] font-mono uppercase tracking-widest text-slate-400">
+                    {t.mapOf || 'Карта'}: <span className="text-cyan-400">{viewedUser.name}</span>
+                  </div>
+                )}
                 <React.Suspense fallback={
                   <div className="absolute inset-0 flex items-center justify-center text-slate-600 font-mono text-xs uppercase tracking-widest">
                     {t.loading || 'Загрузка…'}
                   </div>
                 }>
                   <ThoughtSymbolMap2D
-                    thoughts={viewedUser && location.pathname.startsWith('/user') ? viewedUserPosts : mapThoughts}
+                    thoughts={showingViewedMap ? viewedUserPosts : mapThoughts}
                     language={settings.language}
                     cognitiveState={cognitiveState}
-                    symbolWeights={viewedUser && location.pathname.startsWith('/user') ? viewedSymbolWeights : symbolWeights}
+                    symbolWeights={showingViewedMap ? viewedSymbolWeights : symbolWeights}
                   />
                 </React.Suspense>
               </div>
@@ -1503,7 +1544,7 @@ const App: React.FC = () => {
                   userType: viewedUserProfile?.role || 'agent'
                 }}
                 cognitiveState={cognitiveState}
-                onEnterMap={() => navigate('/map')}
+                onEnterMap={() => navigate('/map', { state: { viewed: true } })}
                 onLogout={handleLogout}
                 onSettings={() => setShowSettings(true)}
                 isActive={false}
@@ -1531,6 +1572,7 @@ const App: React.FC = () => {
         </Routes>
       </main >
     </div >
+    </ForwardProvider>
   );
 };
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AISettings, Language, AIProvider } from '../types';
+import { AISettings, Language } from '../types';
+import { DEFAULT_MODEL, DEFAULT_BASE_URL } from '../services/llm';
 import { translations } from '../translations';
 import { isPipedreamConfigured, listConnectedAccounts, ConnectedAccount } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
@@ -12,12 +13,8 @@ interface SettingsModalProps {
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose }) => {
   const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
-  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || 'nvidia/nemotron-3.5-lightning:free');
-  const [geminiKey, setGeminiKey] = useState(settings.geminiKey || '');
-  const [geminiModel, setGeminiModel] = useState(settings.geminiModel || 'gemini-1.5-flash');
-  const [groqKey, setGroqKey] = useState(settings.groqKey || '');
-  const [groqModel, setGroqModel] = useState(settings.groqModel || 'llama-3.3-70b-versatile');
-  const [aiProvider, setAiProvider] = useState<AIProvider>(settings.aiProvider || 'openrouter');
+  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || DEFAULT_MODEL);
+  const [memoryModel, setMemoryModel] = useState(settings.memoryModel || '');
   const [apiBaseUrl, setApiBaseUrl] = useState(settings.apiBaseUrl || '');
   const [language, setLanguage] = useState<Language>(settings.language || 'ru');
   const [agentName, setAgentName] = useState(settings.agentName || 'Neo');
@@ -66,11 +63,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
     onSave({
       openRouterKey,
       openRouterModel,
-      geminiKey,
-      geminiModel,
-      groqKey,
-      groqModel,
-      aiProvider,
+      aiProvider: 'openrouter',
+      memoryModel: memoryModel.trim() || undefined,
       apiBaseUrl,
       language,
       agentName,
@@ -173,46 +167,20 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-              {t.aiProviderLabel || 'AI Provider'}
-            </label>
-            <div className="flex space-x-2">
-              <button
-                type="button"
-                onClick={() => setAiProvider('openrouter')}
-                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'openrouter' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
-              >
-                OPENROUTER
-              </button>
-              <button
-                type="button"
-                onClick={() => setAiProvider('groq')}
-                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'groq' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
-              >
-                GROQ
-              </button>
-              <button
-                type="button"
-                onClick={() => setAiProvider('gemini')}
-                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'gemini' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
-              >
-                GOOGLE GEMINI
-              </button>
-            </div>
-          </div>
-
-          {settings.userType === 'agent' && (
-            <>
-              {aiProvider === 'openrouter' ? (
-                <>
+          {/* One OpenAI-compatible API for everything. Shown to every account,
+              not only to AI users: whoever @mentions a board bot pays for its
+              answer, and a human had nowhere to put a key. */}
+          <>
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                {t.apiHint || 'Любой OpenAI-совместимый API: OpenRouter по умолчанию, либо Groq, Gemini, OpenAI, локальная модель — укажите их адрес ниже.'}
+              </p>
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      OpenRouter {t.apiKeyLabel}
+                      API {t.apiKeyLabel}
                     </label>
                     <input
                       type="password"
-                      value={openRouterKey}
+                      value={openRouterKey === 'google-auth' ? '' : openRouterKey}
                       onChange={(e) => setOpenRouterKey(e.target.value)}
                       placeholder="sk-or-v1-..."
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
@@ -221,7 +189,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      OpenRouter Model
+                      {t.modelLabel || 'Модель'}
                     </label>
                     <input
                       type="text"
@@ -231,79 +199,36 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
                     />
                   </div>
-                </>
-              ) : aiProvider === 'groq' ? (
-                <>
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Groq {t.apiKeyLabel}
-                    </label>
-                    <input
-                      type="password"
-                      value={groqKey}
-                      onChange={(e) => setGroqKey(e.target.value)}
-                      placeholder="gsk_..."
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                  </div>
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Groq Model
+                      {t.memoryModelLabel || 'Модель для служебных задач'} ({t.optional || 'необязательно'})
                     </label>
                     <input
                       type="text"
-                      value={groqModel}
-                      onChange={(e) => setGroqModel(e.target.value)}
-                      placeholder="llama-3.3-70b-versatile"
+                      value={memoryModel}
+                      onChange={(e) => setMemoryModel(e.target.value)}
+                      placeholder={t.memoryModelPlaceholder || 'та же, что выше'}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
                     />
+                    <p className="text-[10px] text-slate-600 leading-relaxed">
+                      {t.memoryModelHint || 'Сжатие памяти, план и проверки совещаний. Дешёвая быстрая модель здесь экономит токены, не трогая ответы ботов.'}
+                    </p>
                   </div>
-                </>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Gemini {t.apiKeyLabel}
-                    </label>
-                    <input
-                      type="password"
-                      value={geminiKey}
-                      onChange={(e) => setGeminiKey(e.target.value)}
-                      placeholder="AIza..."
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Gemini Model
-                    </label>
-                    <input
-                      type="text"
-                      value={geminiModel}
-                      onChange={(e) => setGeminiModel(e.target.value)}
-                      placeholder="gemini-1.5-flash"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                  </div>
-                </>
-              )}
 
               <div className="space-y-2">
                 <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                  Custom API Address (Optional)
+                  {t.apiAddressLabel || 'Адрес API'} ({t.optional || 'необязательно'})
                 </label>
                 <input
                   type="text"
                   value={apiBaseUrl}
                   onChange={(e) => setApiBaseUrl(e.target.value)}
-                  placeholder="https://api.your-proxy.com/v1"
+                  placeholder={DEFAULT_BASE_URL}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
                 />
               </div>
-            </>
-          )}
+          </>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">

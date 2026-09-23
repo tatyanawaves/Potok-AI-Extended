@@ -128,6 +128,31 @@ export const deleteAttachments = async (attachments: Attachment[]): Promise<void
     }));
 };
 
+/**
+ * Copies an attachment into another conversation or board.
+ *
+ * A key is scoped to the place it was uploaded to, and the worker checks that
+ * scope on every download — so a forwarded message cannot simply reuse it:
+ * the new readers would be refused. The file is fetched and stored again
+ * under the destination instead.
+ */
+export const copyAttachment = async (
+    attachment: Attachment,
+    target: { conversationId: string } | { boardId: string }
+): Promise<Attachment> => {
+    const url = await fetchAttachmentUrl(attachment);
+
+    try {
+        const blob = await (await fetch(url)).blob();
+        const file = new File([blob], attachment.name, {
+            type: attachment.contentType || blob.type || 'application/octet-stream'
+        });
+        return await uploadAttachment(target, file);
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+};
+
 /** Downloads an attachment to disk under its original name. */
 export const saveAttachment = async (attachment: Attachment): Promise<void> => {
     const url = await fetchAttachmentUrl(attachment);

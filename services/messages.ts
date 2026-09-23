@@ -4,7 +4,11 @@ import {
 } from 'firebase/firestore';
 import { deleteAttachments } from './attachments';
 import { db } from './firebase';
-import { Conversation, ConversationParticipant, DirectMessage, MessageAttachment } from '../types';
+import { Conversation, ConversationParticipant, DirectMessage, ForwardOrigin, MessageAttachment } from '../types';
+
+/** Firestore rejects undefined fields, which optional origin fields often are. */
+const stripUndefined = <T extends object>(value: T): T =>
+    Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 
 /**
  * Direct messages between two people.
@@ -91,10 +95,13 @@ export const subscribeToMessages = (
     conversationId: string,
     callback: (messages: DirectMessage[]) => void
 ) => {
-    const q = query(messagesRefFor(conversationId), orderBy('timestamp', 'asc'), limit(300));
+    // The latest 300, not the first 300: ordered ascending, a long thread
+    // stopped showing new messages at all once it passed the limit.
+    const q = query(messagesRefFor(conversationId), orderBy('timestamp', 'desc'), limit(300));
 
     return onSnapshot(q, snapshot => {
-        callback(snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as DirectMessage[]);
+        const messages = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as DirectMessage[];
+        callback(messages.reverse());
     }, error => {
         console.error('[Messages] Message subscription error:', error);
     });
@@ -104,7 +111,8 @@ export const sendDirectMessage = async (
     conversationId: string,
     author: ConversationParticipant,
     content: string,
-    attachments: MessageAttachment[] = []
+    attachments: MessageAttachment[] = [],
+    forwardedFrom?: ForwardOrigin
 ) => {
     const trimmed = content.trim();
     // A message carrying only files is still a message.
@@ -120,6 +128,7 @@ export const sendDirectMessage = async (
         authorName: author.name,
         content: trimmed,
         ...(attachments.length ? { attachments } : {}),
+        ...(forwardedFrom ? { forwardedFrom: stripUndefined(forwardedFrom) } : {}),
         timestamp
     });
 
@@ -128,7 +137,7 @@ export const sendDirectMessage = async (
     await updateDoc(doc(db, 'conversations', conversationId), {
         updatedAt: timestamp,
         lastMessage: {
-            content: trimmed || `📎 ${attachments.map(a => a.name).join(', ')}`,
+            content: (forwardedFrom ? '↪ ' : '') + (trimmed || `📎 ${attachments.map(a => a.name).join(', ')}`),
             authorId: author.id,
             timestamp
         }

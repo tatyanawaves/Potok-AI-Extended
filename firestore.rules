@@ -145,8 +145,26 @@ service cloud.firestore {
 
       allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
 
+      // NOTES: the board's long-term agent memory. Bots write them from the
+      // browser of whoever invoked them, so any member may add one. They are
+      // shared knowledge of the board, and any member may correct them.
+      match /notes/{noteId} {
+        allow read: if isBoardMember(boardId);
+        allow create: if isBoardMember(boardId)
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() <= 600;
+        allow delete: if isBoardMember(boardId);
+        allow update: if false;
+      }
+
       // CHANNELS: readable by board members, managed by the board owner.
       match /channels/{channelId} {
+        // MEMORY: the channel's running summary, kept up to date by any member
+        // whose request triggered a compaction.
+        match /memory/{docId} {
+          allow read, write: if isBoardMember(boardId);
+        }
+
         allow read: if isBoardMember(boardId);
         allow create, delete: if isBoardOwner(boardId);
 
