@@ -99,6 +99,8 @@ uniform vec3 uColC;
 uniform vec3 uAtmo;
 uniform float uAtmoStrength;
 uniform vec4 uRing; // inner, outer radius (world), enabled, unused
+uniform mat3 uRot;   // object → world rotation (no scale)
+uniform float uBump; // relief strength; 0 for gas and cloud-covered worlds
 uniform vec3 uRingNormal;
 uniform vec3 uCenter;
 varying vec3 vObj;
@@ -117,6 +119,7 @@ void main() {
     vec3 emissive = vec3(0.0);
     float spec = 0.0;
     float terminator = 0.08;
+    float landMask = 1.0;
 
     if (uKind == 0 || uKind == 8) { // airless rock: Mercury, the Moon
         float f = fbm(sp * 3.0);
@@ -143,6 +146,7 @@ void main() {
         float clouds = smoothstep(0.12, 0.6, fbm(sp * 3.5 + vec3(uTime * 0.03, 0.0, uTime * 0.01)));
         base = mix(base, vec3(0.8), clouds * 0.75);
         spec = (1.0 - land) * (1.0 - clouds) * (1.0 - ice);
+        landMask = land * (1.0 - clouds);
         // City lights on the night side.
         float night = 1.0 - smoothstep(-0.12, 0.05, ndl);
         float cities = step(0.9, hash13(floor(p * 420.0))) * smoothstep(0.25, 0.6, snoise(sp * 6.0));
@@ -180,6 +184,22 @@ void main() {
         base = mix(vec3(0.62, 0.72, 0.8), vec3(0.95, 0.97, 1.0), f * 0.5 + 0.5);
         float lines = 1.0 - smoothstep(0.0, 0.03, abs(snoise(sp * 7.0)));
         base = mix(base, vec3(0.5, 0.3, 0.22), lines * 0.5);
+    }
+
+    // Relief: tilt the normal by the gradient of a height field on the sphere, taken by finite
+    // differences in object space (stable, unlike screen-space derivatives of fine noise).
+    if (uBump > 0.0) {
+        vec3 t1 = normalize(cross(p, abs(p.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+        vec3 t2 = cross(p, t1);
+        float e = 0.004;
+        vec3 off = sp - p;
+        float h0 = fbm((p + off) * 5.0);
+        float h1 = fbm((normalize(p + t1 * e) + off) * 5.0);
+        float h2 = fbm((normalize(p + t2 * e) + off) * 5.0);
+        vec3 grad = ((h1 - h0) * t1 + (h2 - h0) * t2) / e;
+        vec3 No = normalize(p - uBump * 0.08 * landMask * grad);
+        N = normalize(uRot * No);
+        ndl = dot(N, L);
     }
 
     float diff = smoothstep(-terminator, terminator, ndl) * max(ndl, 0.0);
@@ -608,5 +628,22 @@ void main() {
         col += trans * sky(normalize(vel));
     }
     gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+// ---------------------------------------------------------------------------
+// A planet's atmosphere seen from space: the same single-scattering integral
+// as on the surface, run from the camera through the shell around the planet.
+// ---------------------------------------------------------------------------
+
+export const ATMO_SHELL_VERT = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+varying vec3 vWorld;
+void main() {
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorld = wp.xyz;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+    #include <logdepthbuf_vertex>
 }
 `;

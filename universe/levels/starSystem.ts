@@ -14,10 +14,11 @@ import { BodyData, SOLAR_SYSTEM, SUN } from '../solarSystem';
 import { FLY_HELP, FlyController } from '../flight';
 import { ShipGame } from '../game/shipGame';
 import { generatedMissions, solarMissions } from '../game/missions';
-import { landable } from '../atmosphere';
+import { AtmosphereParams, landable, surfaceFor } from '../atmosphere';
+import { ATMO_SHELL_FRAG } from '../planetShaders';
 import type { CameraState } from '../common';
 import {
-    PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG, WELL_FRAG, WELL_VERT,
+    ATMO_SHELL_VERT, PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG, WELL_FRAG, WELL_VERT,
 } from '../shaders';
 
 type Kind = PlanetKind | 'moon' | 'star';
@@ -39,6 +40,9 @@ interface Body {
     mesh: THREE.Mesh;
     material: THREE.ShaderMaterial;
     ring?: THREE.Mesh;
+    /** Scattering shell for bodies with air; its integral runs from the camera through the atmosphere. */
+    shell?: THREE.Mesh;
+    atmo?: AtmosphereParams;
     pos: THREE.Vector3;
     prev: THREE.Vector3;
     vel: THREE.Vector3; // scene units per real second
@@ -264,6 +268,9 @@ export class StarSystemLevel implements Level {
         tiltHolder.rotation.z = (d.tilt * Math.PI) / 180;
         group.add(tiltHolder);
         const hasRing = !!d.rings;
+        const atmo = landable(kind) ? surfaceFor(d.name, kind as PlanetKind | 'moon', d.radiusKm, 9.8).atmosphere ?? undefined : undefined;
+        // Relief for solid, mostly clear worlds; clouds and gas stay smooth.
+        const bump = kind === 'gas' || kind === 'ice-giant' || kind === 'venus' ? 0 : kind === 'earth' ? 0.35 : 0.6;
         const material = new THREE.ShaderMaterial({
             vertexShader: PLANET_VERT, fragmentShader: PLANET_FRAG,
             uniforms: {
@@ -277,7 +284,10 @@ export class StarSystemLevel implements Level {
                 uColB: { value: new THREE.Vector3(...look.b) },
                 uColC: { value: new THREE.Vector3(...look.c) },
                 uAtmo: { value: new THREE.Vector3(...look.atmo) },
-                uAtmoStrength: { value: look.atmoStrength },
+                // A real scattering shell replaces the painted rim where the body has air.
+                uAtmoStrength: { value: atmo ? look.atmoStrength * 0.25 : look.atmoStrength },
+                uRot: { value: new THREE.Matrix3() },
+                uBump: { value: bump },
                 uRing: { value: new THREE.Vector4(0, 0, 0, 0) },
                 uRingNormal: { value: new THREE.Vector3(0, 1, 0) },
                 uCenter: { value: new THREE.Vector3() },
@@ -286,6 +296,24 @@ export class StarSystemLevel implements Level {
         const mesh = new THREE.Mesh(this.sphere, material);
         mesh.scale.setScalar(radius);
         tiltHolder.add(mesh);
+
+        let shell: THREE.Mesh | undefined;
+        if (atmo) {
+            shell = new THREE.Mesh(this.sphere, new THREE.ShaderMaterial({
+                vertexShader: ATMO_SHELL_VERT, fragmentShader: ATMO_SHELL_FRAG,
+                uniforms: {
+                    uHasAtmo: { value: 1 }, uTop: { value: atmo.top }, uBetaR: { value: new THREE.Vector3(...atmo.betaR) },
+                    uBetaM: { value: new THREE.Vector3(...atmo.betaM) }, uHR: { value: atmo.hR }, uHM: { value: atmo.hM },
+                    uG: { value: atmo.g }, uForwardTint: { value: new THREE.Vector3(...atmo.forwardTint) }, uMulti: { value: atmo.multi },
+                    uAbsorbM: { value: new THREE.Vector3(...atmo.absorbM) }, uSunIntensity: { value: atmo.sunIntensity },
+                    uSunDir: { value: new THREE.Vector3() }, uPlanetR: { value: 1 }, uCamAlt: { value: 0 },
+                    uCamLocal: { value: new THREE.Vector3() }, uExposure: { value: 0.1 },
+                },
+                transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+            }));
+            shell.scale.setScalar(radius * atmo.top);
+            group.add(shell);
+        }
 
         let ring: THREE.Mesh | undefined;
         if (hasRing) {
@@ -314,7 +342,7 @@ export class StarSystemLevel implements Level {
         };
         const body: Body = {
             name: d.name, kind, radius, radiusKm: d.radiusKm, massEarth: d.massEarth, parent, el, aKm: d.aKm,
-            albedo: d.albedo, tilt: d.tilt, dayDays: d.dayDays, group, tiltHolder, mesh, material, ring,
+            albedo: d.albedo, tilt: d.tilt, dayDays: d.dayDays, group, tiltHolder, mesh, material, ring, shell, atmo,
             pos: new THREE.Vector3(), prev: new THREE.Vector3(), vel: new THREE.Vector3(),
             label: this.labels.add(d.name, kind === 'moon' ? 'moon' : 'planet', () => this.select(body)),
             color: look.b,
@@ -721,6 +749,20 @@ export class StarSystemLevel implements Level {
                 const intensity = 1.05 * Math.pow(this.starL / (dAU * dAU), 0.3);
                 u.uStarIntensity.value = intensity;
                 u.uCenter.value.copy(b.pos);
+                // Object-to-world rotation for the relief normals (the mesh's scale removed).
+                b.mesh.updateWorldMatrix(true, false);
+                (u.uRot.value as THREE.Matrix3).setFromMatrix4(b.mesh.matrixWorld).multiplyScalar(1 / b.radius);
+                if (b.shell && b.atmo) {
+                    const su = (b.shell.material as THREE.ShaderMaterial).uniforms;
+                    // In planet radii, from doubles: float32 could not resolve a thin shell far from the origin.
+                    const local = su.uCamLocal.value as THREE.Vector3;
+                    local.subVectors(this.camera.position, b.pos).divideScalar(b.radius);
+                    su.uSunDir.value.subVectors(star.pos, b.pos).normalize();
+                    su.uExposure.value = intensity * 0.09;
+                    // Front faces from outside (so the glow lies over the disk), back faces once inside the air.
+                    (b.shell.material as THREE.Material).side = local.length() > b.atmo.top ? THREE.FrontSide : THREE.BackSide;
+                    b.shell.visible = local.length() < 5000;
+                }
                 if (b.ring) {
                     const ru = (b.ring.material as THREE.ShaderMaterial).uniforms;
                     ru.uSun.value.copy(star.pos);

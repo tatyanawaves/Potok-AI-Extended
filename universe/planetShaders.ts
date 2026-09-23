@@ -291,3 +291,20 @@ void main() {
     gl_FragColor = vec4(col * trans + inscatter, 1.0);
 }
 `;
+
+export const ATMO_SHELL_FRAG = /* glsl */ `
+#include <logdepthbuf_pars_fragment>
+#define STEPS 12
+#define LIGHT_STEPS 6
+${ATMOSPHERE_GLSL}
+uniform vec3 uCamLocal;   // camera relative to the planet centre, planet radii (computed in double precision)
+uniform float uExposure;
+varying vec3 vWorld;
+void main() {
+    #include <logdepthbuf_fragment>
+    vec3 rd = normalize(vWorld - cameraPosition);
+    vec3 trans;
+    vec3 col = scatter(uCamLocal, rd, 1e9, trans);
+    gl_FragColor = vec4(col * uExposure, 1.0);
+}
+`;
