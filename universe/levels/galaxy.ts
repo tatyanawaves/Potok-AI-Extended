@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-    Action, disposeObject, Label, Labels, Level, LevelHost, particleMaterial, pickPoint, pixelScale, row, spriteMaterial,
+    Action, disposeObject, Label, Labels, Level, LevelHost, particleMaterial, pickPoint, pixelScale, ProximityTrigger, row,
+    spriteMaterial,
 } from '../common';
+import { FLY_HELP, Navigator } from '../flight';
 import { gaussian, GalaxySpec, galaxyTypeName, hash32, juliaEscape, kroupaMass, mulberry32, starName } from '../mandelbrot';
 import {
     blackbodyFast, fmtNum, KM_S_IN_LY_PER_MYR, mainSequence, rotationCurve, spectralClass,
@@ -131,8 +132,13 @@ export class GalaxyLevel implements Level {
     readonly camera = new THREE.PerspectiveCamera(55, 1, 10, 5e6);
     readonly title: string;
     readonly bloom = { strength: 0.9, radius: 0.55, threshold: 0.0 };
-    readonly help = 'Мышь — вращать · колесо — приблизить · клик по звезде — выбрать · двойной клик/Enter — лететь к звезде';
-    private controls: OrbitControls;
+    readonly help = `${FLY_HELP} · подлетите к звезде — войдёте в её систему · клик — выбрать · двойной клик/Enter — сразу в систему`;
+    private nav: Navigator;
+    private flySpeed = 0;
+    // Close enough to a star to drop into its system, or to the centre to meet the black hole.
+    private starTrigger = new ProximityTrigger(40, 0.1);
+    private coreTrigger = new ProximityTrigger(350);
+    private leaveTrigger: ProximityTrigger;
     private stars: Population;
     private starMat = particleMaterial({ minPx: 1.2 });
     private dustMat = particleMaterial({ additive: false, minPx: 2, opacity: 0.5, soft: 1 });
@@ -144,7 +150,7 @@ export class GalaxyLevel implements Level {
     private marker: THREE.Points;
     private selected = -1; // star index, -2 = the Sun
     private timeMyr = 0;
-    private speed = 1; // Myr per second
+    private speed = 0; // Myr per second; paused by default so stars hold still while flying among them
     private darkMatter = true;
     private width = 1;
     private height = 1;
@@ -207,10 +213,10 @@ export class GalaxyLevel implements Level {
 
         const R = spec.radiusLy;
         this.camera.position.set(R * 0.2, R * 0.9, R * 1.5);
-        this.controls = new OrbitControls(this.camera, host.canvas);
-        this.controls.enableDamping = true;
-        this.controls.minDistance = 200;
-        this.controls.maxDistance = R * 6;
+        this.nav = new Navigator(this.camera, host.canvas, { speed: 3000, minSpeed: 0.5, maxSpeed: 5e5 }, { min: 200, max: R * 6 });
+        this.nav.lookAt(new THREE.Vector3());
+        // Flying out beyond 5 disk radii returns to the cosmic web (the trigger measures the margin left).
+        this.leaveTrigger = new ProximityTrigger(R);
         window.addEventListener('keydown', this.onKey);
         host.canvas.addEventListener('dblclick', this.onDbl);
     }
@@ -230,12 +236,42 @@ export class GalaxyLevel implements Level {
 
     private enter() {
         if (this.selected === -2) this.openSun();
-        else if (this.selected >= 0) {
-            this.host.open({
-                kind: 'system', galaxy: this.spec,
-                star: { seed: hash32(this.spec.seed, this.selected), mass: this.stars.masses[this.selected] },
-            });
+        else if (this.selected >= 0) this.openStar(this.selected);
+    }
+
+    private openStar(i: number) {
+        this.saveCamera();
+        this.host.open({ kind: 'system', galaxy: this.spec, star: { seed: hash32(this.spec.seed, i), mass: this.stars.masses[i] } });
+    }
+
+    /** Coming back up should put us where we were, a little way back from the star we entered. */
+    private saveCamera() {
+        const back = new THREE.Vector3(0, 0, 1).applyQuaternion(this.camera.quaternion).multiplyScalar(150);
+        this.host.saveCamera(this.camera.position.clone().add(back), this.camera.quaternion);
+    }
+
+    resumed() {
+        this.nav.fly.sync();
+    }
+
+    private sunPosition(out = new THREE.Vector3()) {
+        return this.rotated(this.sunPos0.x, this.sunPos0.y, this.sunPos0.z, out);
+    }
+
+    /** Nearest star to the camera (only brighter ones count, so there is always something to aim for). */
+    private nearestStar(): { i: number; d: number } {
+        const p = this.stars.positions, cam = this.camera.position, v = new THREE.Vector3();
+        const rc = Math.hypot(cam.x, cam.z);
+        let best = -1, bestD = Infinity;
+        for (let k = 0; k < STARS; k++) {
+            // Cheap reject before rotating: rotation keeps the radius, so |r_star − r_cam| bounds the distance.
+            const rs = Math.hypot(p[k * 3], p[k * 3 + 2]);
+            if (Math.abs(rs - rc) > bestD || Math.abs(p[k * 3 + 1] - cam.y) > bestD) continue;
+            this.rotated(p[k * 3], p[k * 3 + 1], p[k * 3 + 2], v);
+            const d = v.distanceTo(cam);
+            if (d < bestD) { bestD = d; best = k; }
         }
+        return { i: best, d: bestD };
     }
 
     click(x: number, y: number) {
@@ -246,14 +282,29 @@ export class GalaxyLevel implements Level {
         this.marker.visible = this.selLabel.visible = i >= 0;
         if (i >= 0) {
             this.selLabel.el.textContent = `${starName(hash32(this.spec.seed, i))} ▶`;
-            this.controls.target.copy(this.rotated(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], new THREE.Vector3()));
+            if (this.nav.mode === 'orbit') this.nav.orbit.target.copy(this.rotated(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], new THREE.Vector3()));
         }
     }
 
     actions(): Action[] {
         const list: Action[] = [];
-        if (this.selected !== -1) list.push({ label: '▶ Лететь к звезде', run: () => this.enter() });
-        if (this.spec.isMilkyWay) list.push({ label: '☀ Солнечная система', run: () => this.openSun() });
+        const p = this.stars.positions;
+        if (this.selected >= 0) {
+            const i = this.selected;
+            list.push({ label: '➜ Подлететь', title: 'Долететь до звезды; вблизи откроется её система',
+                run: () => this.nav.flyTo(() => this.rotated(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], new THREE.Vector3()), 25) });
+            list.push({ label: '▶ Сразу в систему', run: () => this.enter() });
+        }
+        if (this.spec.isMilkyWay) {
+            list.push({ label: '➜ К Солнцу', run: () => this.nav.flyTo(() => this.sunPosition(), 25) });
+            list.push({ label: '☀ Солнечная система', run: () => this.openSun() });
+        }
+        list.push(this.nav.mode === 'free'
+            ? { label: '◎ Орбита', title: 'Вращать камеру вокруг центра или выбранной звезды', run: () => {
+                const t = this.selected >= 0 ? this.rotated(p[this.selected * 3], p[this.selected * 3 + 1], p[this.selected * 3 + 2], new THREE.Vector3()) : new THREE.Vector3();
+                this.nav.setOrbit(t);
+            } }
+            : { label: '✈ Свободный полёт', title: FLY_HELP, run: () => this.nav.setFree() });
         list.push({ label: '● Чёрная дыра в центре', run: () => this.host.open({ kind: 'blackhole', galaxy: this.spec }) });
         list.push({
             label: 'Тёмная материя', title: 'Без неё внешние части вращаются по закону Кеплера и спирали закручиваются',
@@ -310,8 +361,47 @@ export class GalaxyLevel implements Level {
             const v = this.rotated(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], this.selLabel.position);
             (this.marker.geometry.attributes.position as THREE.BufferAttribute).copyArray([v.x, v.y, v.z]).needsUpdate = true;
         }
-        this.controls.update(dt);
+        this.flySpeed = this.nav.update(dt);
+        this.checkTransitions(dt);
         this.labels.update(this.camera, this.width, this.height);
+    }
+
+    private checkTransitions(dt: number) {
+        if (this.nav.mode !== 'free') return;
+        const cam = this.camera.position;
+        // Only a pilot who has slowed down near a star drops into its system; cruising through the disk does not.
+        if (this.flySpeed < 150) {
+            let near = { i: -1, d: Infinity };
+            if (this.starTrigger.check(dt, () => {
+                near = this.nearestStar();
+                if (this.spec.isMilkyWay) {
+                    const d = this.sunPosition().distanceTo(cam);
+                    if (d < near.d) near = { i: -2, d };
+                }
+                return near.d;
+            })) {
+                this.saveCamera();
+                if (near.i === -2) { this.openSun(); return; }
+                this.host.toast(`Входим в систему ${starName(hash32(this.spec.seed, near.i))}`);
+                this.openStar(near.i);
+                return;
+            }
+        }
+        if (this.coreTrigger.check(dt, () => cam.length())) {
+            this.saveCamera();
+            this.host.open({ kind: 'blackhole', galaxy: this.spec });
+            return;
+        }
+        if (this.leaveTrigger.check(dt, () => this.spec.radiusLy * 6 - cam.length())) {
+            this.host.toast('Покидаем галактику');
+            this.host.back();
+        }
+    }
+
+    status(): string {
+        const ly = this.flySpeed;
+        const mode = this.nav.mode === 'free' ? `свободный полёт, газ ${fmtNum(this.nav.fly.speed)} св. лет/с (колесо)` : 'орбита';
+        return `Скорость: ${fmtNum(ly)} св. лет/с ≈ ${fmtNum(ly * 3.156e7)} c · ${mode} · до центра ${fmtNum(this.camera.position.length())} св. лет`;
     }
 
     resize(w: number, h: number) {
@@ -321,7 +411,7 @@ export class GalaxyLevel implements Level {
     }
 
     dispose() {
-        this.controls.dispose();
+        this.nav.dispose();
         this.labels.dispose();
         window.removeEventListener('keydown', this.onKey);
         this.host.canvas.removeEventListener('dblclick', this.onDbl);

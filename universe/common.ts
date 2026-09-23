@@ -10,14 +10,21 @@ export interface LevelHost {
     labelLayer: HTMLElement;
     /** Replace the current level by a child one (pushes onto the breadcrumb path). */
     open(request: LevelRequest): void;
+    /** Go up one level, as if the pilot flew out of this one. */
+    back(): void;
+    /** Remember where the camera is, so coming back up returns here instead of to the overview. */
+    saveCamera(position: THREE.Vector3, quaternion: THREE.Quaternion): void;
     toast(text: string): void;
 }
 
-export type LevelRequest =
+export interface CameraState { position: number[]; quaternion: number[] }
+
+export type LevelRequest = (
     | { kind: 'web' }
     | { kind: 'galaxy'; galaxy: import('./mandelbrot').GalaxySpec }
     | { kind: 'system'; galaxy: import('./mandelbrot').GalaxySpec; star: { seed: number; mass: number } | 'sun' }
-    | { kind: 'blackhole'; galaxy: import('./mandelbrot').GalaxySpec };
+    | { kind: 'blackhole'; galaxy: import('./mandelbrot').GalaxySpec }
+) & { resume?: CameraState };
 
 export interface Action {
     label: string;
@@ -45,6 +52,8 @@ export interface Level {
     /** Size of the drawing buffer in device pixels, for full-screen shaders. */
     setBufferSize?(width: number, height: number): void;
     click?(x: number, y: number): void;
+    /** The camera was put back where the pilot left it; controllers should take it over. */
+    resumed?(): void;
     dispose(): void;
 }
 
@@ -232,4 +241,30 @@ export function row(label: string, value: string): string {
 
 export function escapeHtml(s: string): string {
     return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
+/**
+ * Arms an automatic transition only once the camera has been clear of the
+ * trigger zone, so arriving at (or returning to) a spot inside it does not
+ * immediately fire it again.
+ */
+export class ProximityTrigger {
+    private armed = false;
+    private clock = 0;
+
+    constructor(private radius: number, private interval = 0.3) {}
+
+    /** Call every frame with the distance to the nearest candidate (computed only when due). */
+    check(dt: number, nearest: () => number): boolean {
+        this.clock -= dt;
+        if (this.clock > 0) return false;
+        this.clock = this.interval;
+        const d = nearest();
+        if (d > this.radius * 1.5) this.armed = true;
+        if (this.armed && d < this.radius) {
+            this.armed = false;
+            return true;
+        }
+        return false;
+    }
 }

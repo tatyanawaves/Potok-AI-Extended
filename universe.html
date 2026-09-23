@@ -75,6 +75,12 @@
       color: var(--muted); font: 14px 'JetBrains Mono', monospace; opacity: 0; pointer-events: none; transition: opacity .35s; }
     #fade.on { opacity: 1; pointer-events: auto; }
     body.hud-off .hud, body.hud-off #labels { display: none; }
+    #pad { left: 12px; bottom: 60px; display: none; grid-template-columns: repeat(3, 52px); grid-auto-rows: 52px; gap: 6px; }
+    #pad button { font-size: 20px; padding: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
+    #pad button.held { background: rgba(60, 120, 220, 0.6); }
+    #pad-side { right: 12px; bottom: 60px; display: none; flex-direction: column; gap: 6px; }
+    #pad-side button { width: 64px; height: 52px; font-size: 14px; touch-action: none; }
+    @media (pointer: coarse) { #pad { display: grid; } #pad-side { display: flex; } #panel { bottom: auto; } }
 
     @media (max-width: 760px) {
       #panel { top: auto; bottom: 64px; left: 8px; right: 8px; width: auto; max-height: 40vh; }
@@ -107,6 +113,13 @@
   <div id="status" class="hud glass"></div>
   <div id="help" class="hud"></div>
   <div id="toast" class="hud glass"></div>
+  <div id="pad" class="hud" aria-label="Управление полётом">
+    <button data-key="KeyE" aria-label="Вверх">⤒</button><button data-key="KeyW" aria-label="Вперёд">▲</button><button data-key="KeyQ" aria-label="Вниз">⤓</button>
+    <button data-key="KeyA" aria-label="Влево">◀</button><button data-key="KeyS" aria-label="Назад">▼</button><button data-key="KeyD" aria-label="Вправо">▶</button>
+  </div>
+  <div id="pad-side" class="hud">
+    <button data-key="ShiftLeft">×10</button>
+  </div>
   <div id="fade" class="on">Генерация…</div>
 
   <script type="module" src="/universe/main.ts"></script>

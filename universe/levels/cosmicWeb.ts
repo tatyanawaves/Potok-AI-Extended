@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-    Action, disposeObject, Label, Labels, Level, LevelHost, particleMaterial, pickPoint, pixelScale, row, spriteMaterial,
+    Action, disposeObject, Label, Labels, Level, LevelHost, particleMaterial, pickPoint, pixelScale, ProximityTrigger, row,
+    spriteMaterial,
 } from '../common';
+import { FLY_HELP, Navigator } from '../flight';
 import { CosmicWeb, cosmicWeb, galaxyFromWeb, GalaxySpec, galaxyTypeName, mandelbrot, mulberry32, MILKY_WAY } from '../mandelbrot';
 import { blackbodyFast, fmtNum } from '../physics';
 
@@ -40,8 +41,11 @@ export class CosmicWebLevel implements Level {
     readonly camera = new THREE.PerspectiveCamera(55, 1, 0.1, 1e5);
     readonly title = 'Космическая паутина';
     readonly bloom = { strength: 1.1, radius: 0.6, threshold: 0.0 };
-    readonly help = 'Мышь — вращать · колесо — приблизить · клик по галактике — выбрать · двойной клик или Enter — войти';
-    private controls: OrbitControls;
+    readonly help = `${FLY_HELP} · сбросьте скорость у галактики — войдёте в неё · клик — выбрать · двойной клик/Enter — войти`;
+    private nav: Navigator;
+    private flySpeed = 0;
+    private pos: Float32Array;
+    private galaxyTrigger = new ProximityTrigger(1.5, 0.1);
     private material = particleMaterial({ minPx: 1.4 });
     private data = build();
     private labels: Labels;
@@ -59,6 +63,7 @@ export class CosmicWebLevel implements Level {
         const g = new THREE.BufferGeometry();
         const pos = new Float32Array(web.positions.length);
         for (let i = 0; i < pos.length; i++) pos[i] = web.positions[i] * SCALE;
+        this.pos = pos;
         g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         g.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
         g.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
@@ -83,12 +88,9 @@ export class CosmicWebLevel implements Level {
         this.selLabel.visible = false;
 
         this.camera.position.set(0, 180, 620);
-        this.controls = new OrbitControls(this.camera, host.canvas);
-        this.controls.enableDamping = true;
-        this.controls.autoRotate = true;
-        this.controls.autoRotateSpeed = 0.25;
-        this.controls.minDistance = 5;
-        this.controls.maxDistance = 2000;
+        this.nav = new Navigator(this.camera, host.canvas, { speed: 20, minSpeed: 0.02, maxSpeed: 3000 }, { min: 5, max: 2000 });
+        this.nav.orbit.autoRotateSpeed = 0.25;
+        this.nav.lookAt(new THREE.Vector3());
         window.addEventListener('keydown', this.onKey);
         host.canvas.addEventListener('dblclick', this.onDbl);
     }
@@ -100,7 +102,32 @@ export class CosmicWebLevel implements Level {
     }
 
     private enter() {
-        if (this.selected >= 0) this.host.open({ kind: 'galaxy', galaxy: this.spec(this.selected) });
+        if (this.selected >= 0) this.openGalaxy(this.selected);
+    }
+
+    private galaxyPos(i: number, out = new THREE.Vector3()) {
+        return out.fromArray(this.pos, i * 3);
+    }
+
+    private openGalaxy(i: number) {
+        const back = new THREE.Vector3(0, 0, 1).applyQuaternion(this.camera.quaternion).multiplyScalar(6);
+        this.host.saveCamera(this.camera.position.clone().add(back), this.camera.quaternion);
+        this.host.open({ kind: 'galaxy', galaxy: this.spec(i) });
+    }
+
+    resumed() {
+        this.nav.fly.sync();
+    }
+
+    private nearestGalaxy(): { i: number; d: number } {
+        const p = this.pos, c = this.camera.position;
+        let best = -1, bestD2 = Infinity;
+        for (let k = 0; k < this.data.web.count; k++) {
+            const dx = p[k * 3] - c.x, dy = p[k * 3 + 1] - c.y, dz = p[k * 3 + 2] - c.z;
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < bestD2) { bestD2 = d2; best = k; }
+        }
+        return { i: best, d: Math.sqrt(bestD2) };
     }
 
     click(x: number, y: number) {
@@ -115,18 +142,24 @@ export class CosmicWebLevel implements Level {
         (this.marker.geometry.attributes.position as THREE.BufferAttribute).copyArray([pos.x, pos.y, pos.z]).needsUpdate = true;
         this.selLabel.position.copy(pos);
         this.selLabel.el.textContent = `${this.spec(i).name} ▶`;
-        this.controls.autoRotate = false;
+        if (this.nav.mode === 'orbit') this.nav.orbit.target.copy(pos);
     }
 
     actions(): Action[] {
+        const home = this.data.home;
         const list: Action[] = [
-            { label: '🏠 Млечный Путь', run: () => this.host.open({ kind: 'galaxy', galaxy: MILKY_WAY }) },
-            {
-                label: '⟳ Вращение', run: () => { this.controls.autoRotate = !this.controls.autoRotate; },
-                active: () => this.controls.autoRotate,
-            },
+            { label: '➜ К Млечному Пути', run: () => this.nav.flyTo(() => this.galaxyPos(home), 1) },
+            { label: '🏠 Сразу в Млечный Путь', run: () => this.host.open({ kind: 'galaxy', galaxy: MILKY_WAY }) },
+            this.nav.mode === 'free'
+                ? { label: '⟳ Облёт', title: 'Камера вращается вокруг центра или выбранной галактики',
+                    run: () => this.nav.setOrbit(this.selected >= 0 ? this.galaxyPos(this.selected) : new THREE.Vector3(), true) }
+                : { label: '✈ Свободный полёт', title: FLY_HELP, run: () => this.nav.setFree() },
         ];
-        if (this.selected >= 0) list.unshift({ label: '▶ Войти в галактику', run: () => this.enter() });
+        if (this.selected >= 0) {
+            const i = this.selected;
+            list.unshift({ label: '▶ Войти', run: () => this.enter() });
+            list.unshift({ label: '➜ Подлететь', title: 'Долететь до галактики; вблизи откроется она сама', run: () => this.nav.flyTo(() => this.galaxyPos(i), 1) });
+        }
         return list;
     }
 
@@ -148,8 +181,20 @@ export class CosmicWebLevel implements Level {
         return html;
     }
 
+    status(): string {
+        const mode = this.nav.mode === 'free' ? `свободный полёт, газ ${fmtNum(this.nav.fly.speed)} Мпк/с (колесо)` : 'облёт';
+        return `Скорость: ${fmtNum(this.flySpeed)} Мпк/с · ${mode}`;
+    }
+
     update(dt: number) {
-        this.controls.update(dt);
+        this.flySpeed = this.nav.update(dt);
+        if (this.nav.mode === 'free' && this.flySpeed < 10) {
+            let near = { i: -1, d: Infinity };
+            if (this.galaxyTrigger.check(dt, () => (near = this.nearestGalaxy()).d)) {
+                this.host.toast(`Входим в галактику ${this.spec(near.i).name}`);
+                this.openGalaxy(near.i);
+            }
+        }
         this.material.uniforms.uPx.value = pixelScale(this.camera, this.height);
         (this.marker.material as THREE.ShaderMaterial).uniforms.uPx.value = pixelScale(this.camera, this.height);
         this.labels.update(this.camera, this.width, this.height);
@@ -162,7 +207,7 @@ export class CosmicWebLevel implements Level {
     }
 
     dispose() {
-        this.controls.dispose();
+        this.nav.dispose();
         this.labels.dispose();
         window.removeEventListener('keydown', this.onKey);
         this.host.canvas.removeEventListener('dblclick', this.onDbl);

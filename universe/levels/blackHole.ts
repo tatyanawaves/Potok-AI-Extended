@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Action, blackbodyTexture, Level, LevelHost, row } from '../common';
+import { FLY_HELP, Navigator } from '../flight';
+import { Action, blackbodyTexture, Level, LevelHost, ProximityTrigger, row } from '../common';
 import { GalaxySpec } from '../mandelbrot';
 import {
     fmtDistanceKm, fmtDuration, fmtNum, gravitationalTimeDilation, hawkingTemperatureK, horizonAreaM2, horizonAreaQuanta,
@@ -18,15 +18,16 @@ export class BlackHoleLevel implements Level {
     readonly title: string;
     readonly bloom = { strength: 0.6, radius: 0.6, threshold: 0.7 };
     readonly maxPixelRatio = 1;
-    readonly help = 'Мышь — облететь · колесо — ближе/дальше (до 1,6 rₛ) · «Квантовое ядро» — показать, что может быть вместо сингулярности';
-    private controls: OrbitControls;
+    readonly help = `${FLY_HELP} · улетите дальше 150 rₛ — вернётесь в галактику · «Квантовое ядро» — что может быть вместо сингулярности`;
+    private nav: Navigator;
+    private leave = new ProximityTrigger(30);
     private material: THREE.ShaderMaterial;
     private time = 0;
     private core = 0;
     private coreTarget = 0;
     private doppler = true;
 
-    constructor(host: LevelHost, private galaxy: GalaxySpec) {
+    constructor(private host: LevelHost, private galaxy: GalaxySpec) {
         this.title = galaxy.isMilkyWay ? 'Стрелец A*' : `Чёрная дыра ${galaxy.name}`;
         this.material = new THREE.ShaderMaterial({
             vertexShader: BLACKHOLE_VERT,
@@ -54,13 +55,10 @@ export class BlackHoleLevel implements Level {
         this.scene.add(quad);
 
         this.camera.position.set(0, 2.2, 22);
-        this.controls = new OrbitControls(this.camera, host.canvas);
-        this.controls.enableDamping = true;
-        this.controls.enablePan = false;
-        this.controls.minDistance = 1.6;
-        this.controls.maxDistance = 90;
-        this.controls.autoRotate = true;
-        this.controls.autoRotateSpeed = 0.3;
+        this.nav = new Navigator(this.camera, host.canvas, { speed: 2, minSpeed: 0.02, maxSpeed: 60 }, { min: 1.6, max: 140 });
+        this.nav.orbit.enablePan = false;
+        this.nav.orbit.autoRotateSpeed = 0.3;
+        this.nav.setOrbit(new THREE.Vector3(), true);
     }
 
     actions(): Action[] {
@@ -73,9 +71,11 @@ export class BlackHoleLevel implements Level {
                 label: 'Эффект Доплера', title: 'Релятивистское усиление света со стороны, летящей к нам',
                 run: () => { this.doppler = !this.doppler; }, active: () => this.doppler,
             },
-            { label: '⟳ Облёт', run: () => { this.controls.autoRotate = !this.controls.autoRotate; }, active: () => this.controls.autoRotate },
-            { label: 'Вид с ребра', run: () => this.camera.position.set(0, 0.35, 20) },
-            { label: 'Вид сверху', run: () => this.camera.position.set(0, 24, 0.5) },
+            this.nav.mode === 'free'
+                ? { label: '⟳ Облёт', run: () => this.nav.setOrbit(new THREE.Vector3(), true) }
+                : { label: '✈ Свободный полёт', title: FLY_HELP, run: () => this.nav.setFree() },
+            { label: 'Вид с ребра', run: () => this.view(0, 0.35, 20) },
+            { label: 'Вид сверху', run: () => this.view(0, 24, 0.5) },
         ];
     }
 
@@ -109,6 +109,15 @@ export class BlackHoleLevel implements Level {
         return html;
     }
 
+    private view(x: number, y: number, z: number) {
+        this.camera.position.set(x, y, z);
+        if (this.nav.mode === 'free') this.nav.lookAt(new THREE.Vector3());
+    }
+
+    resumed() {
+        this.nav.setFree();
+    }
+
     status(): string {
         const r = this.camera.position.length();
         return `r = ${r.toFixed(2)} rₛ · замедление времени ${(1 / Math.max(gravitationalTimeDilation(r), 1e-9)).toFixed(3)}× · ` +
@@ -117,7 +126,13 @@ export class BlackHoleLevel implements Level {
 
     update(dt: number) {
         this.time += dt;
-        this.controls.update(dt);
+        this.nav.update(dt);
+        // Free flight may not cross the horizon: nothing would come back out to show.
+        if (this.camera.position.length() < 1.3) this.camera.position.setLength(1.3);
+        if (this.nav.mode === 'free' && this.leave.check(dt, () => 180 - this.camera.position.length())) {
+            this.host.toast('Покидаем окрестности чёрной дыры');
+            this.host.back();
+        }
         this.core += (this.coreTarget - this.core) * (1 - Math.exp(-3 * dt));
         const u = this.material.uniforms;
         u.uTime.value = this.time;
@@ -139,7 +154,7 @@ export class BlackHoleLevel implements Level {
     }
 
     dispose() {
-        this.controls.dispose();
+        this.nav.dispose();
         this.scene.traverse(o => {
             const m = o as THREE.Mesh;
             m.geometry?.dispose();

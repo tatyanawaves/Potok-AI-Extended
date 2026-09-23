@@ -5,6 +5,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { Action, Level, LevelHost, LevelRequest } from './common';
 import { MILKY_WAY } from './mandelbrot';
+import { virtualKeys } from './flight';
 import { CosmicWebLevel } from './levels/cosmicWeb';
 import { GalaxyLevel } from './levels/galaxy';
 import { StarSystemLevel } from './levels/starSystem';
@@ -42,6 +43,10 @@ const host: LevelHost = {
     canvas,
     labelLayer: ui.labels,
     open: req => navigate([...path, req]),
+    back: () => { if (path.length > 1) navigate(path.slice(0, -1)); },
+    saveCamera: (position, quaternion) => {
+        path[path.length - 1].resume = { position: position.toArray(), quaternion: quaternion.toArray() };
+    },
     toast: text => {
         ui.toast.textContent = text;
         ui.toast.classList.add('show');
@@ -89,7 +94,13 @@ async function navigate(next: LevelRequest[]) {
     level = null;
     path = next;
     try {
-        level = create(path[path.length - 1]);
+        const req = path[path.length - 1];
+        level = create(req);
+        if (req.resume) {
+            level.camera.position.fromArray(req.resume.position);
+            level.camera.quaternion.fromArray(req.resume.quaternion);
+            level.resumed?.();
+        }
     } catch (err) {
         console.error(err);
         ui.fade.textContent = 'Не удалось построить сцену';
@@ -185,6 +196,18 @@ window.addEventListener('keydown', e => {
     if (e.code === 'Escape' && path.length > 1) navigate(path.slice(0, -1));
 });
 $('toggle-panel').addEventListener('click', () => ui.panel.classList.toggle('collapsed'));
+// On a phone the physics panel starts folded so it does not cover the flight pad.
+if (window.matchMedia('(max-width: 760px)').matches) ui.panel.classList.add('collapsed');
+
+// The on-screen pad for touch screens holds virtual keys while a finger is on a button.
+document.querySelectorAll<HTMLButtonElement>('[data-key]').forEach(b => {
+    const key = b.dataset.key!;
+    const release = () => { virtualKeys.delete(key); b.classList.remove('held'); };
+    b.addEventListener('pointerdown', e => { e.preventDefault(); b.setPointerCapture(e.pointerId); virtualKeys.add(key); b.classList.add('held'); });
+    b.addEventListener('pointerup', release);
+    b.addEventListener('pointercancel', release);
+    b.addEventListener('lostpointercapture', release);
+});
 
 const clock = new THREE.Clock();
 let hudTimer = 0;

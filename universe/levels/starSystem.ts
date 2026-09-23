@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
-    Action, disposeObject, escapeHtml, Label, Labels, Level, LevelHost, pickPoint, pixelScale, row, spriteMaterial, starfield,
+    Action, disposeObject, escapeHtml, Label, Labels, Level, LevelHost, pickPoint, pixelScale, ProximityTrigger, row,
+    spriteMaterial, starfield,
 } from '../common';
 import { GalaxySpec, generateSystem, mulberry32, PlanetKind, SystemSpec } from '../mandelbrot';
 import {
@@ -10,6 +11,7 @@ import {
     surfaceGravity, UNIT_KM, visViva,
 } from '../physics';
 import { BodyData, SOLAR_SYSTEM, SUN } from '../solarSystem';
+import { FLY_HELP, FlyController } from '../flight';
 import {
     PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG, WELL_FRAG, WELL_VERT,
 } from '../shaders';
@@ -87,7 +89,7 @@ export class StarSystemLevel implements Level {
     readonly camera = new THREE.PerspectiveCamera(60, 1, 1e-7, 1e7);
     readonly title: string;
     readonly bloom = { strength: 0.7, radius: 0.5, threshold: 0.8 };
-    readonly help = 'W/S — вперёд/назад · A/D — вбок · R/F — вверх/вниз · Q/E — крен · Shift — ×10 · Пробел — стоп · мышь — обзор · клик по планете — выбрать · двойной клик — лететь';
+    readonly help = `${FLY_HELP} · Пробел — стоп · клик по планете — выбрать · двойной клик/Enter — автопилот к ней`;
 
     private system: SystemSpec | null = null;
     private starMassSun: number;
@@ -111,9 +113,8 @@ export class StarSystemLevel implements Level {
     private mode: 'free' | 'auto' | 'orbit' = 'orbit';
     private target: Body | null = null;
     private orbitOffset = new THREE.Vector3();
-    private velocity = new THREE.Vector3();
+    private ctl: FlyController;
     private speed = 0;
-    private keys = new Set<string>();
     private dragging = false;
     private lastPointer = { x: 0, y: 0 };
     private flightStart = 0;
@@ -123,32 +124,27 @@ export class StarSystemLevel implements Level {
     /** The scale: seconds to cross the 78 million km between Earth and Mars at an average opposition. */
     private flightSeconds = EARTH_MARS_FLIGHT_S;
     private get cruise() { return EARTH_MARS_GAP_KM / UNIT_KM / this.flightSeconds; }
+    /** Radius of the outermost orbit; flying three times farther leaves for the galaxy. */
+    private outer = 1;
+    private leave = new ProximityTrigger(1);
 
     private onKeyDown = (e: KeyboardEvent) => {
         if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-        this.keys.add(e.code);
-        if (e.code === 'Space') { this.mode = 'free'; this.velocity.set(0, 0, 0); this.speed = 0; }
+        if (e.code === 'Space') { e.preventDefault(); this.goFree(); this.ctl.stop(); this.speed = 0; }
         if (e.code === 'Enter' && this.target) this.flyTo(this.target);
-        if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF'].includes(e.code) && this.mode !== 'free') this.mode = 'free';
     };
-    private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
     private onDown = (e: PointerEvent) => { this.dragging = true; this.lastPointer = { x: e.clientX, y: e.clientY }; };
     private onUp = () => { this.dragging = false; };
     private onMove = (e: PointerEvent) => {
         if (!this.dragging) return;
         const dx = e.clientX - this.lastPointer.x, dy = e.clientY - this.lastPointer.y;
         this.lastPointer = { x: e.clientX, y: e.clientY };
+        // In free flight the FlyController turns the view; here only the orbit camera is dragged around.
         if (this.mode === 'orbit' && this.target) {
             const s = new THREE.Spherical().setFromVector3(this.orbitOffset);
             s.theta -= dx * 0.005;
             s.phi = Math.min(Math.PI - 0.05, Math.max(0.05, s.phi - dy * 0.005));
             this.orbitOffset.setFromSpherical(s);
-        } else {
-            const q = new THREE.Quaternion();
-            q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -dx * 0.003);
-            this.camera.quaternion.multiply(q);
-            q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -dy * 0.003);
-            this.camera.quaternion.multiply(q);
         }
     };
     private onWheel = (e: WheelEvent) => {
@@ -194,6 +190,8 @@ export class StarSystemLevel implements Level {
         this.scene.add(this.sky);
 
         const outer = Math.max(...this.bodies.filter(b => b.parent === this.bodies[0]).map(b => b.el!.a));
+        this.outer = outer;
+        this.leave = new ProximityTrigger(outer * 0.5);
         this.well = this.buildWell(outer * 1.3);
         this.well.visible = false;
         this.scene.add(this.well);
@@ -208,8 +206,9 @@ export class StarSystemLevel implements Level {
             .applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.75);
         this.mode = 'orbit';
 
+        this.ctl = new FlyController(this.camera, host.canvas, { speed: this.cruise, minSpeed: 1e-6, maxSpeed: this.cruise * 30 });
+        this.ctl.enabled = false;
         window.addEventListener('keydown', this.onKeyDown);
-        window.addEventListener('keyup', this.onKeyUp);
         host.canvas.addEventListener('pointerdown', this.onDown);
         window.addEventListener('pointerup', this.onUp);
         window.addEventListener('pointermove', this.onMove);
@@ -447,6 +446,7 @@ export class StarSystemLevel implements Level {
             return;
         }
         this.mode = 'auto';
+        this.ctl.enabled = false;
         this.flightStart = this.realTime;
         const near = this.nearestSurface(this.camera.position);
         this.flightFrom = near.body.name;
@@ -458,7 +458,21 @@ export class StarSystemLevel implements Level {
         this.target = b;
         this.orbitOffset.subVectors(this.camera.position, b.pos);
         this.speed = 0;
-        this.velocity.set(0, 0, 0);
+        this.ctl.stop();
+        this.ctl.enabled = false;
+    }
+
+    resumed() {
+        this.mode = 'orbit';
+        this.goFree();
+    }
+
+    /** Hand the camera to the pilot, keeping where it looks. */
+    private goFree() {
+        if (this.mode === 'free') return;
+        this.mode = 'free';
+        this.ctl.enabled = true;
+        this.ctl.sync();
     }
 
     /** Jump to the next closest approach of Earth and Mars (an opposition). */
@@ -494,7 +508,8 @@ export class StarSystemLevel implements Level {
     actions(): Action[] {
         const list: Action[] = [];
         if (this.target && this.mode !== 'auto') list.push({ label: `▶ Лететь: ${this.target.name}`, run: () => this.flyTo(this.target!) });
-        if (this.target && this.mode === 'auto') list.push({ label: '■ Стоп', run: () => { this.mode = 'free'; this.speed = 0; } });
+        if (this.target && this.mode === 'auto') list.push({ label: '■ Стоп', run: () => { this.goFree(); this.ctl.stop(); this.speed = 0; } });
+        if (this.mode !== 'free') list.push({ label: '✈ Свободный полёт', title: FLY_HELP, run: () => this.goFree() });
         if (!this.system) {
             list.push({ label: '🚀 Земля → Марс', title: 'Масштаб подобран так, что перелёт между орбитами занимает 30 секунд', run: () => this.earthToMars() });
             list.push({ label: '⏩ К противостоянию', title: 'Перемотать время к ближайшему сближению Земли и Марса', run: () => this.toOpposition() });
@@ -502,7 +517,7 @@ export class StarSystemLevel implements Level {
         for (const sec of [30, 90]) {
             list.push({
                 label: `Масштаб: ${sec} с до Марса`, title: 'Сколько секунд лететь 78 млн км между Землёй и Марсом',
-                run: () => { this.flightSeconds = sec; }, active: () => this.flightSeconds === sec,
+                run: () => { this.flightSeconds = sec; this.ctl.speed = this.cruise; }, active: () => this.flightSeconds === sec,
             });
         }
         list.push({ label: '⊙ Вид сверху', run: () => this.topView() });
@@ -530,6 +545,7 @@ export class StarSystemLevel implements Level {
         const inner = Math.min(outer, 2.2 * AU_KM / UNIT_KM);
         this.target = this.bodies[0];
         this.mode = 'orbit';
+        this.ctl.enabled = false;
         this.orbitOffset.set(0, inner * 2.2, inner * 0.6);
     }
 
@@ -609,7 +625,8 @@ export class StarSystemLevel implements Level {
         } else if (this.mode === 'orbit' && this.target) {
             s += ` · на орбите: ${this.target.name}`;
         } else {
-            s += ' · свободный полёт';
+            const t = this.ctl.speed * UNIT_KM;
+            s += ` · свободный полёт, газ ${t >= 1e6 ? `${fmtNum(t / 1e6)} млн` : fmtNum(t)} км/с (колесо)`;
         }
         if (this.lastFlight) s += ` · ${this.lastFlight}`;
         return s;
@@ -620,6 +637,10 @@ export class StarSystemLevel implements Level {
         this.tDays += (dt * this.timeScale) / DAY_S;
         this.updatePositions(dt);
         this.fly(dt);
+        if (this.mode === 'free' && this.leave.check(dt, () => this.outer * 3.5 - this.camera.position.distanceTo(this.bodies[0].pos))) {
+            this.host.toast('Покидаем систему — выходим в галактику');
+            this.host.back();
+        }
 
         const star = this.bodies[0];
         const px = pixelScale(this.camera, this.height);
@@ -679,6 +700,8 @@ export class StarSystemLevel implements Level {
 
     private fly(dt: number) {
         const cam = this.camera;
+        // Any movement key takes the controls back from the orbit camera or the autopilot.
+        if (this.mode !== 'free' && this.ctl.steering) this.goFree();
         if (this.mode === 'orbit' && this.target) {
             cam.position.copy(this.target.pos).add(this.orbitOffset);
             const m = new THREE.Matrix4().lookAt(cam.position, this.target.pos, new THREE.Vector3(0, 1, 0));
@@ -707,21 +730,7 @@ export class StarSystemLevel implements Level {
         }
         // Free flight. Near a surface the ship slows down, the way SpaceEngine does.
         const near = this.nearestSurface(cam.position);
-        const boost = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') ? 10 : 1;
-        const limit = Math.min(this.cruise * boost, Math.max(near.dist * 0.8, 1e-6));
-        const dir = new THREE.Vector3(
-            (this.keys.has('KeyD') ? 1 : 0) - (this.keys.has('KeyA') ? 1 : 0),
-            (this.keys.has('KeyR') ? 1 : 0) - (this.keys.has('KeyF') ? 1 : 0),
-            (this.keys.has('KeyS') ? 1 : 0) - (this.keys.has('KeyW') ? 1 : 0),
-        );
-        if (dir.lengthSq() > 0) dir.normalize().applyQuaternion(cam.quaternion);
-        const wanted = dir.multiplyScalar(limit);
-        this.velocity.lerp(wanted, 1 - Math.exp(-3 * dt));
-        if (this.velocity.length() > limit) this.velocity.setLength(limit);
-        this.speed = this.velocity.length();
-        cam.position.addScaledVector(this.velocity, dt);
-        const roll = (this.keys.has('KeyQ') ? 1 : 0) - (this.keys.has('KeyE') ? 1 : 0);
-        if (roll) cam.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), roll * dt));
+        this.speed = this.ctl.update(dt, Math.max(near.dist * 0.8, 1e-6));
         // Never inside a body.
         if (near.dist < near.body.radius * 0.02) {
             const out = new THREE.Vector3().subVectors(cam.position, near.body.pos).setLength(near.body.radius * 1.02);
@@ -743,7 +752,7 @@ export class StarSystemLevel implements Level {
 
     dispose() {
         window.removeEventListener('keydown', this.onKeyDown);
-        window.removeEventListener('keyup', this.onKeyUp);
+        this.ctl.dispose();
         this.host.canvas.removeEventListener('pointerdown', this.onDown);
         window.removeEventListener('pointerup', this.onUp);
         window.removeEventListener('pointermove', this.onMove);
