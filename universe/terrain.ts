@@ -1,6 +1,11 @@
 // Terrain height, written twice: in TypeScript for collisions and in GLSL
-// for the mesh. Both use the same float operations on small coordinates
-// (km × frequency), so their results agree to well under a metre.
+// for the mesh. Both use the same float operations on small coordinates, so
+// their results agree to well under a metre.
+//
+// Mountains use "erosion" fBm (Quílez): value noise with analytic
+// derivatives, where each octave is damped by the slope accumulated so far.
+// Steep flanks stay smooth and gullies branch like water-carved relief,
+// instead of the blobby dunes plain fBm gives.
 
 export interface TerrainParams {
     /** Relief amplitude, m. */
@@ -8,7 +13,7 @@ export interface TerrainParams {
     craters: boolean;
     /** Shifts the noise so every world has its own landscape. */
     seed: number;
-    /** Share of the surface below sea level, via a bias on the continents. */
+    /** Raises or lowers the continents against sea level. */
     seaBias: number;
 }
 
@@ -21,18 +26,27 @@ function hash(x: number, y: number): number {
     return fract((p3x + p3y) * p3z);
 }
 
-function vnoise(x: number, y: number): number {
+/** Value noise in [-1, 1] and its gradient. */
+function noised(x: number, y: number, out: number[]): number[] {
     const ix = Math.floor(x), iy = Math.floor(y);
-    const fx = x - ix, fy = y - iy;
-    const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    const wx = x - ix, wy = y - iy;
+    const ux = wx * wx * wx * (wx * (wx * 6 - 15) + 10), uy = wy * wy * wy * (wy * (wy * 6 - 15) + 10);
+    const dux = 30 * wx * wx * (wx * (wx - 2) + 1), duy = 30 * wy * wy * (wy * (wy - 2) + 1);
     const a = hash(ix, iy), b = hash(ix + 1, iy), c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
-    return ((a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy) * 2 - 1;
+    const k1 = b - a, k2 = c - a, k4 = a - b - c + d;
+    out[0] = -1 + 2 * (a + k1 * ux + k2 * uy + k4 * ux * uy);
+    out[1] = 2 * dux * (k1 + k4 * uy);
+    out[2] = 2 * duy * (k2 + k4 * ux);
+    return out;
 }
 
+const nd = [0, 0, 0];
+
+/** Plain fBm of value noise, for the continents. */
 function fbm(x: number, y: number, octaves: number): number {
     let s = 0, a = 0.5;
     for (let i = 0; i < octaves; i++) {
-        s += a * vnoise(x, y);
+        s += a * noised(x, y, nd)[0];
         const nx = 0.8 * x - 0.6 * y, ny = 0.6 * x + 0.8 * y;
         x = nx * 2.03 + 1.7; y = ny * 2.03 + 9.2;
         a *= 0.5;
@@ -40,16 +54,16 @@ function fbm(x: number, y: number, octaves: number): number {
     return s;
 }
 
-function ridged(x: number, y: number, octaves: number): number {
-    let s = 0, a = 0.5, w = 1;
+/** Erosion fBm: each octave is divided by (1 + |∑∇|²), so slopes stay clean and valleys branch. */
+function erosion(x: number, y: number, octaves: number): number {
+    let s = 0, b = 0.5, dx = 0, dy = 0;
     for (let i = 0; i < octaves; i++) {
-        let n = 1 - Math.abs(vnoise(x, y));
-        n *= n * w;
-        w = Math.min(1, Math.max(0, n * 2));
-        s += a * n;
+        noised(x, y, nd);
+        dx += nd[1]; dy += nd[2];
+        s += (b * nd[0]) / (1 + dx * dx + dy * dy);
         const nx = 0.8 * x - 0.6 * y, ny = 0.6 * x + 0.8 * y;
-        x = nx * 2.1 + 3.1; y = ny * 2.1 + 5.3;
-        a *= 0.5;
+        x = nx * 2.0 + 3.1; y = ny * 2.0 + 5.3;
+        b *= 0.5;
     }
     return s;
 }
@@ -73,49 +87,55 @@ function craters(x: number, y: number): number {
     return h;
 }
 
+export const TERRAIN_OCTAVES = 8;
+
 /** Height (m) of the ground at (x, z) m. */
-export function terrainHeight(p: TerrainParams, xM: number, zM: number): number {
-    const x = xM * 0.0001 + p.seed, y = zM * 0.0001 + p.seed * 0.7;
-    const base = fbm(x * 0.35, y * 0.35, 4) + p.seaBias;
-    const mountains = ridged(x, y, 6) * Math.min(1, Math.max(0, (base + 0.1) * 2.5));
-    let h = p.relief * (0.8 * base + 0.9 * mountains);
-    if (p.craters) h += p.relief * 0.6 * craters(x * 1.3, y * 1.3);
+export function terrainHeight(p: TerrainParams, xM: number, zM: number, octaves = TERRAIN_OCTAVES): number {
+    const x = xM * 0.00008 + p.seed, y = zM * 0.00008 + p.seed * 0.7;
+    const base = fbm(x * 0.3, y * 0.3, 4) + p.seaBias;
+    const land = Math.min(1, Math.max(0, (base + 0.05) / 0.4));
+    const mask = land * land * (3 - 2 * land);
+    let h = p.relief * (0.55 * base + 0.9 * mask * erosion(x, y, octaves));
+    if (p.craters) h += p.relief * 0.6 * craters(x * 1.6, y * 1.6);
     return h;
 }
 
-/** The same function in GLSL; `#define`s carry the parameters. */
+/** The same functions in GLSL. */
 export const TERRAIN_GLSL = /* glsl */ `
 float thash(vec2 q) {
     vec3 p3 = fract(vec3(q.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
 }
-float tnoise(vec2 q) {
-    vec2 i = floor(q), f = q - i;
-    vec2 u = f * f * (3.0 - 2.0 * f);
+vec3 tnoised(vec2 q) {
+    vec2 i = floor(q), w = q - i;
+    vec2 u = w * w * w * (w * (w * 6.0 - 15.0) + 10.0);
+    vec2 du = 30.0 * w * w * (w * (w - 2.0) + 1.0);
     float a = thash(i), b = thash(i + vec2(1.0, 0.0)), c = thash(i + vec2(0.0, 1.0)), d = thash(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+    float k1 = b - a, k2 = c - a, k4 = a - b - c + d;
+    return vec3(-1.0 + 2.0 * (a + k1 * u.x + k2 * u.y + k4 * u.x * u.y), 2.0 * du * vec2(k1 + k4 * u.y, k2 + k4 * u.x));
 }
+float tnoise(vec2 q) { return tnoised(q).x; }
 float tfbm(vec2 q, int octaves) {
     float s = 0.0, a = 0.5;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 12; i++) {
         if (i >= octaves) break;
-        s += a * tnoise(q);
+        s += a * tnoised(q).x;
         q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.03 + vec2(1.7, 9.2);
         a *= 0.5;
     }
     return s;
 }
-float tridged(vec2 q, int octaves) {
-    float s = 0.0, a = 0.5, w = 1.0;
-    for (int i = 0; i < 8; i++) {
+float terosion(vec2 q, int octaves) {
+    float s = 0.0, b = 0.5;
+    vec2 d = vec2(0.0);
+    for (int i = 0; i < 14; i++) {
         if (i >= octaves) break;
-        float n = 1.0 - abs(tnoise(q));
-        n *= n * w;
-        w = clamp(n * 2.0, 0.0, 1.0);
-        s += a * n;
-        q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.1 + vec2(3.1, 5.3);
-        a *= 0.5;
+        vec3 n = tnoised(q);
+        d += n.yz;
+        s += b * n.x / (1.0 + dot(d, d));
+        q = vec2(0.8 * q.x - 0.6 * q.y, 0.6 * q.x + 0.8 * q.y) * 2.0 + vec2(3.1, 5.3);
+        b *= 0.5;
     }
     return s;
 }
@@ -139,12 +159,13 @@ uniform float uRelief;
 uniform float uSeed;
 uniform float uSeaBias;
 uniform float uCraters;
-float terrainHeight(vec2 xz, int detail) {
-    vec2 q = xz * 0.0001 + vec2(uSeed, uSeed * 0.7);
-    float base = tfbm(q * 0.35, 4) + uSeaBias;
-    float mountains = tridged(q, detail) * clamp((base + 0.1) * 2.5, 0.0, 1.0);
-    float h = uRelief * (0.8 * base + 0.9 * mountains);
-    if (uCraters > 0.5) h += uRelief * 0.6 * tcraters(q * 1.3);
+float terrainHeight(vec2 xz, int octaves) {
+    vec2 q = xz * 0.00008 + vec2(uSeed, uSeed * 0.7);
+    float base = tfbm(q * 0.3, 4) + uSeaBias;
+    float land = clamp((base + 0.05) / 0.4, 0.0, 1.0);
+    float mask = land * land * (3.0 - 2.0 * land);
+    float h = uRelief * (0.55 * base + 0.9 * mask * terosion(q, octaves));
+    if (uCraters > 0.5) h += uRelief * 0.6 * tcraters(q * 1.6);
     return h;
 }
 `;

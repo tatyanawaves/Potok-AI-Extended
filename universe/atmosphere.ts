@@ -86,7 +86,9 @@ export function surfaceFor(name: string, kind: PlanetKind | 'moon', radiusKm: nu
                 ...base, relief: 1800, palette: 'venus',
                 atmosphere: {
                     top: 1 + 90_000 / R, betaR: per(R, [1.2e-4, 1.6e-4, 2.4e-4]), betaM: per(R, [9e-5, 7e-5, 3e-5]),
-                    hR: 15_900 / R, hM: 9000 / R, g: 0.7, forwardTint: [1, 0.85, 0.6], multi: 0.8, absorbM: per(R, [0.2e-5, 1e-5, 4e-5]), sunIntensity: 18,
+                    hR: 15_900 / R, hM: 9000 / R, g: 0.7, forwardTint: [1, 0.85, 0.6], multi: 0.8, absorbM: per(R, [0.2e-5, 1e-5, 4e-5]),
+                    // Only a few per cent of sunlight reaches the ground; the eye adapts, so the exposure is raised.
+                    sunIntensity: 70,
                 },
             };
         case 'Титан':
@@ -140,7 +142,7 @@ export function scatter(a: AtmosphereParams, ro: V3, rd: V3, sun: V3, steps = 16
     let tEnd = t1;
     if (ground[0] > 0) tEnd = Math.min(tEnd, ground[0]);
     const tStart = Math.max(t0, 0);
-    const seg = (tEnd - tStart) / steps;
+    const span = tEnd - tStart;
     const mu = dot(rd, sun);
     const phaseR = (3 / (16 * Math.PI)) * (1 + mu * mu);
     const g = a.g;
@@ -149,8 +151,11 @@ export function scatter(a: AtmosphereParams, ro: V3, rd: V3, sun: V3, steps = 16
     const forward = Math.pow(Math.max(mu, 0), 16);
     const sum: V3 = [0, 0, 0];
     let odR = 0, odM = 0;
+    // Samples crowd towards the observer (t ∝ (i/N)²): in thick air all the light comes from close by.
     for (let i = 0; i < steps; i++) {
-        const t = tStart + seg * (i + 0.5);
+        const u0 = i / steps, u1 = (i + 1) / steps;
+        const seg = span * (u1 * u1 - u0 * u0);
+        const t = tStart + span * ((u0 + u1) / 2) ** 2;
         const p: V3 = [ro[0] + rd[0] * t, ro[1] + rd[1] * t, ro[2] + rd[2] * t];
         const h = Math.hypot(...p) - 1;
         const dR = Math.exp(-h / a.hR) * seg, dM = Math.exp(-h / a.hM) * seg;

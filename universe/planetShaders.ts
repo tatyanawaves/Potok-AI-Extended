@@ -41,7 +41,7 @@ vec3 scatter(vec3 ro, vec3 rd, float maxT, out vec3 transmittance) {
     if (gr.x > 0.0) tEnd = min(tEnd, gr.x);
     float tStart = max(a.x, 0.0);
     if (tEnd <= tStart) return vec3(0.0);
-    float seg = (tEnd - tStart) / float(STEPS);
+    float span = tEnd - tStart;
     float mu = dot(rd, uSunDir);
     float phaseR = 3.0 / (16.0 * 3.14159265) * (1.0 + mu * mu);
     float g = uG;
@@ -50,8 +50,12 @@ vec3 scatter(vec3 ro, vec3 rd, float maxT, out vec3 transmittance) {
     vec3 tint = mix(vec3(1.0), uForwardTint, pow(max(mu, 0.0), 16.0));
     vec3 sumR = vec3(0.0), sumM = vec3(0.0);
     float odR = 0.0, odM = 0.0;
+    // Samples crowd towards the observer (t ∝ (i/N)²): in thick air all the light comes from close by.
     for (int i = 0; i < STEPS; i++) {
-        vec3 p = ro + rd * (tStart + seg * (float(i) + 0.5));
+        float u0 = float(i) / float(STEPS), u1 = float(i + 1) / float(STEPS);
+        float seg = span * (u1 * u1 - u0 * u0);
+        float um = (u0 + u1) * 0.5;
+        vec3 p = ro + rd * (tStart + span * um * um);
         float h = length(p) - 1.0;
         float dR = exp(-h / uHR) * seg, dM = exp(-h / uHM) * seg;
         odR += dR; odM += dM;
@@ -139,7 +143,7 @@ varying vec3 vWorld;
 varying float vDrop;
 void main() {
     vec2 xz = position.xz + uOffset;
-    float h = terrainHeight(xz, 6);
+    float h = terrainHeight(xz, 8);
     // The ground curves away with the planet: drop = d² / 2R.
     vec2 rel = xz - cameraPosition.xz;
     float drop = dot(rel, rel) / (2.0 * uPlanetRV);
@@ -152,7 +156,7 @@ void main() {
 
 export const TERRAIN_FRAG = /* glsl */ `
 #include <logdepthbuf_pars_fragment>
-#define STEPS 8
+#define STEPS 10
 #define LIGHT_STEPS 4
 ${TERRAIN_GLSL}
 ${ATMOSPHERE_GLSL}
@@ -164,66 +168,116 @@ uniform float uTime;
 varying vec3 vWorld;
 varying float vDrop;
 
-vec3 palette(float h, float slope, vec2 xz, float n) {
-    float rel = h / max(uRelief, 1.0);
-    if (uPalette == 0) { // Earth-like
-        vec3 sand = vec3(0.62, 0.55, 0.4), grass = vec3(0.13, 0.22, 0.06), forest = vec3(0.05, 0.12, 0.04);
-        vec3 dry = vec3(0.35, 0.3, 0.18), rock = vec3(0.33, 0.3, 0.27), snow = vec3(0.92, 0.94, 0.97);
-        vec3 c = mix(grass, forest, smoothstep(-0.2, 0.4, n));
-        c = mix(c, dry, smoothstep(0.55, 0.85, rel + n * 0.1));
-        c = mix(sand, c, smoothstep(uSea + 8.0, uSea + 40.0, h));
-        c = mix(c, rock, smoothstep(0.35, 0.55, slope));
-        c = mix(c, snow, smoothstep(1.02, 1.1, rel + n * 0.08) * (1.0 - smoothstep(0.55, 0.75, slope)));
-        return c;
-    } else if (uPalette == 1) { // Mars: iron-oxide dust over dark basalt
-        vec3 dust = vec3(0.55, 0.28, 0.13), light = vec3(0.7, 0.45, 0.28), basalt = vec3(0.2, 0.13, 0.1);
-        vec3 c = mix(dust, light, smoothstep(-0.3, 0.5, n));
-        return mix(c, basalt, smoothstep(0.3, 0.6, slope) * 0.8);
-    } else if (uPalette == 2) { // airless regolith
-        vec3 c = mix(vec3(0.28, 0.27, 0.26), vec3(0.5, 0.49, 0.47), smoothstep(-0.5, 0.6, n));
-        return mix(c, vec3(0.18, 0.17, 0.16), smoothstep(0.35, 0.7, slope));
-    } else if (uPalette == 3) { // ice
-        vec3 c = mix(vec3(0.72, 0.8, 0.88), vec3(0.95, 0.97, 1.0), smoothstep(-0.4, 0.5, n));
-        return mix(c, vec3(0.45, 0.55, 0.65), smoothstep(0.4, 0.7, slope));
-    } else if (uPalette == 4) { // lava world
-        return mix(vec3(0.08, 0.07, 0.06), vec3(0.2, 0.16, 0.13), smoothstep(-0.4, 0.5, n));
-    } else if (uPalette == 5) { // Venus: basaltic plains baked under a thick sky
-        return mix(vec3(0.35, 0.25, 0.15), vec3(0.5, 0.38, 0.22), smoothstep(-0.4, 0.5, n));
+// Soft shadow: march towards the Sun over a coarse copy of the height field and keep
+// the narrowest clearance angle (penumbra ∝ clearance / distance).
+float terrainShadow(vec3 p, vec3 L) {
+    if (L.y <= -0.02) return 0.0;
+    float res = 1.0;
+    float t = 15.0;
+    for (int i = 0; i < 28; i++) {
+        vec3 q = p + L * t;
+        float h = q.y - terrainHeight(q.xz, 5);
+        res = min(res, 10.0 * h / t);
+        if (res < 0.001 || q.y > uRelief * 1.6) break;
+        t *= 1.32;
     }
-    // Titan: organic dunes and water-ice bedrock
-    return mix(vec3(0.3, 0.2, 0.1), vec3(0.45, 0.35, 0.22), smoothstep(-0.4, 0.5, n));
+    return clamp(res, 0.0, 1.0);
+}
+
+struct Mat { vec3 albedo; float rough; };
+
+Mat material(float h, vec3 N, vec2 xz, float cavity, float dist) {
+    float rel = h / max(uRelief, 1.0);
+    float level = smoothstep(0.55, 0.85, N.y);             // 1 on level ground, 0 on cliffs
+    float n1 = tfbm(xz * 0.0021, 4);                        // large patches
+    float n2 = tnoise(xz * 0.021);                          // meadows, scree
+    float n3 = tnoise(xz * 0.21) * smoothstep(2500.0, 200.0, dist); // close-up grain
+    // Sedimentary strata in exposed rock, warped so the bands follow the terrain.
+    float strata = 0.5 + 0.5 * sin(h * 0.045 + n1 * 6.0 + n2 * 1.5);
+    Mat m;
+    m.rough = 0.9;
+    if (uPalette == 0) { // Earth-like
+        vec3 rock = mix(vec3(0.24, 0.22, 0.2), vec3(0.42, 0.38, 0.33), strata) * (0.85 + 0.15 * n2);
+        vec3 grass = mix(vec3(0.07, 0.13, 0.035), vec3(0.16, 0.2, 0.06), smoothstep(-0.4, 0.5, n1 + n2 * 0.3));
+        vec3 forest = vec3(0.025, 0.06, 0.02);
+        vec3 alpine = vec3(0.3, 0.28, 0.2);
+        vec3 sand = vec3(0.64, 0.57, 0.42);
+        vec3 veg = mix(grass, forest, smoothstep(0.0, 0.5, n1) * smoothstep(0.75, 0.3, rel));
+        veg = mix(veg, alpine, smoothstep(0.55, 0.85, rel + n2 * 0.08));
+        vec3 c = mix(rock, veg, level);
+        // Beaches, and wet dark sand right at the waterline.
+        float beach = smoothstep(uSea + 25.0, uSea + 6.0, h) * smoothstep(0.4, 0.8, N.y);
+        c = mix(c, sand, beach);
+        c *= mix(1.0, 0.55, smoothstep(uSea + 3.0, uSea + 0.5, h));
+        // Snow settles on level ground above the snow line, thinner on sun-facing slopes.
+        float snow = smoothstep(0.92, 1.05, rel + n1 * 0.12 + n3 * 0.02) * smoothstep(0.45, 0.75, N.y + n2 * 0.1);
+        c = mix(c, vec3(0.86, 0.89, 0.93), snow);
+        m.rough = mix(0.95, 0.35, snow);
+        m.albedo = c * (0.9 + 0.2 * n3);
+    } else if (uPalette == 1) { // Mars: iron-oxide dust on basalt, darker dunes in the lows
+        vec3 rock = mix(vec3(0.2, 0.12, 0.08), vec3(0.38, 0.23, 0.14), strata);
+        vec3 dust = mix(vec3(0.52, 0.29, 0.15), vec3(0.66, 0.42, 0.26), smoothstep(-0.4, 0.5, n1 + n2 * 0.3));
+        vec3 c = mix(rock, dust, level);
+        c = mix(c, vec3(0.28, 0.17, 0.12), smoothstep(-0.1, -0.35, rel) * 0.6);
+        m.albedo = c * (0.9 + 0.2 * n3);
+    } else if (uPalette == 2) { // airless regolith: fresh ejecta bright, old maria dark
+        vec3 c = mix(vec3(0.2, 0.2, 0.19), vec3(0.45, 0.44, 0.42), smoothstep(-0.5, 0.6, n1 + 0.3 * n2));
+        c = mix(c * 0.8, c, level);
+        m.albedo = c * (0.9 + 0.2 * n3);
+    } else if (uPalette == 3) { // ice
+        vec3 c = mix(vec3(0.6, 0.7, 0.8), vec3(0.93, 0.96, 1.0), smoothstep(-0.4, 0.5, n1));
+        c = mix(vec3(0.4, 0.5, 0.6), c, level);
+        m.albedo = c; m.rough = 0.4;
+    } else if (uPalette == 4) { // lava world
+        m.albedo = mix(vec3(0.05, 0.045, 0.04), vec3(0.16, 0.13, 0.11), smoothstep(-0.4, 0.5, n1 + n2 * 0.3));
+    } else if (uPalette == 5) { // Venus: basaltic plains under a crushing sky
+        vec3 rock = mix(vec3(0.22, 0.16, 0.1), vec3(0.36, 0.27, 0.17), strata);
+        m.albedo = mix(rock, vec3(0.42, 0.32, 0.2), level) * (0.9 + 0.2 * n2);
+    } else { // Titan: organic dunes over water-ice bedrock
+        m.albedo = mix(vec3(0.3, 0.2, 0.1), vec3(0.46, 0.36, 0.22), smoothstep(-0.4, 0.5, n1 + n2 * 0.4));
+    }
+    // Crevices collect shadow; ridges catch the light.
+    m.albedo *= mix(0.55, 1.08, cavity);
+    return m;
 }
 
 void main() {
     #include <logdepthbuf_fragment>
-    vec3 camToP = vec3(vWorld.x, vWorld.y - vDrop, vWorld.z) - cameraPosition;
+    vec3 P = vec3(vWorld.x, vWorld.y - vDrop, vWorld.z);
+    vec3 camToP = P - cameraPosition;
     float dist = length(camToP);
-    // Per-pixel normal from the height field, finer detail close up.
-    float e = clamp(dist * 0.002, 1.0, 60.0);
-    int detail = dist < 6000.0 ? 8 : 6;
-    float h0 = terrainHeight(vWorld.xz, detail);
-    float hx = terrainHeight(vWorld.xz + vec2(e, 0.0), detail);
-    float hz = terrainHeight(vWorld.xz + vec2(0.0, e), detail);
+    vec3 V = -camToP / dist;
+    // Normals from the full-detail height field; far away fewer octaves, so it does not shimmer.
+    int oct = dist < 1500.0 ? 13 : dist < 8000.0 ? 11 : 9;
+    float e = clamp(dist * 0.0015, 0.5, 40.0);
+    float h0 = terrainHeight(vWorld.xz, oct);
+    float hx = terrainHeight(vWorld.xz + vec2(e, 0.0), oct);
+    float hz = terrainHeight(vWorld.xz + vec2(0.0, e), oct);
     vec3 N = normalize(vec3(h0 - hx, e, h0 - hz));
-    float slope = 1.0 - N.y;
-    float n = tfbm(vWorld.xz * 0.004, 4);
-    vec3 albedo = palette(h0, slope, vWorld.xz, n);
-    // Fine grain so the ground does not look like plastic up close.
-    albedo *= 0.85 + 0.3 * tnoise(vWorld.xz * 0.35) * smoothstep(3000.0, 200.0, dist);
+    // Cavity: how far this point sits above or below the smoothed terrain around it.
+    float coarse = terrainHeight(vWorld.xz, 5);
+    float cavity = clamp(0.6 + (h0 - coarse) / (uRelief * 0.06), 0.0, 1.0);
+    Mat m = material(h0, N, vWorld.xz, cavity, dist);
 
-    float ndl = max(dot(N, uSunDir), 0.0);
-    vec3 lit = albedo * (uSunColor * ndl + uAmbient * (0.6 + 0.4 * N.y));
+    vec3 L = uSunDir;
+    float ndl = max(dot(N, L), 0.0);
+    // Start the shadow ray above both the detailed and the coarse surface, so fine bumps do not shadow themselves.
+    float shadow = ndl > 0.0 ? terrainShadow(vec3(vWorld.x, max(h0, coarse) + 4.0, vWorld.z), L) : 0.0;
+    // Sunlight, a little specular sheen, the sky's light from above, and light bounced off the ground.
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.0), mix(8.0, 60.0, 1.0 - m.rough)) * (1.0 - m.rough) * 0.4;
+    vec3 sun = uSunColor * shadow * (m.albedo * ndl + spec * ndl);
+    vec3 sky = uAmbient * m.albedo * (0.35 + 0.65 * (0.5 + 0.5 * N.y)) * mix(0.4, 1.0, cavity);
+    vec3 bounce = uSunColor * m.albedo * m.albedo * 0.15 * clamp(-N.y * 0.5 + 0.5, 0.0, 1.0) * max(L.y, 0.0);
+    vec3 lit = sun + sky + bounce;
     if (uPalette == 4) {
         // Molten rock glows in the lowlands.
-        float lava = smoothstep(-0.15, -0.35, h0 / uRelief) * (0.7 + 0.3 * sin(uTime + n * 8.0));
+        float lava = smoothstep(-0.12, -0.32, h0 / uRelief) * (0.7 + 0.3 * sin(uTime + h0 * 0.01));
         lit += vec3(1.0, 0.3, 0.05) * lava * 3.0;
     }
-
-    // Aerial perspective: the air between us and the ground scatters light in and dims what is behind.
-    vec3 ro = observer();
-    vec3 rd = camToP / dist;
+    // Aerial perspective: the air between us and the ground scatters light in and dims what lies behind.
     vec3 trans;
-    vec3 inscatter = scatter(ro, rd, dist / uPlanetR, trans);
+    vec3 inscatter = scatter(observer(), -V, dist / uPlanetR, trans);
     gl_FragColor = vec4(lit * trans + inscatter, 1.0);
 }
 `;
@@ -283,9 +337,12 @@ void main() {
     vec3 sky = mix(uHorizon, uZenith, pow(clamp(R.y, 0.0, 1.0), 0.5));
     float glint = pow(max(dot(R, uSunDir), 0.0), 900.0) * 60.0;
     // Shallow water shows the sea floor.
-    float depth = uSea - terrainHeight(vWorld.xz, 4);
+    float depth = uSea - terrainHeight(vWorld.xz, 8);
     vec3 body = mix(uDeep * 3.0, uDeep, smoothstep(0.0, 40.0, depth)) * (uAmbient + uSunColor * max(uSunDir.y, 0.0) * 0.5);
     vec3 col = mix(body, sky, fresnel) + uSunColor * glint;
+    // Surf where the sea meets the shore.
+    float foam = smoothstep(2.5, 0.0, depth) * (0.5 + 0.5 * tnoise(p * 0.15 + uTime * 0.3)) * fade;
+    col = mix(col, (uSunColor * max(uSunDir.y, 0.0) + uAmbient) * 0.8, foam * 0.7);
     vec3 trans;
     vec3 inscatter = scatter(observer(), -V, dist / uPlanetR, trans);
     gl_FragColor = vec4(col * trans + inscatter, 1.0);

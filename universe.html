@@ -47,7 +47,8 @@
     button:hover:not(:disabled) { border-color: var(--accent); color: #fff; }
     button:disabled { opacity: 1; cursor: default; background: transparent; border-color: transparent; color: #fff; font-weight: 600; }
     button.active { background: rgba(60, 120, 220, 0.45); border-color: var(--accent); }
-    #actions { display: flex; flex-wrap: wrap; gap: 5px; max-width: min(720px, 100%); }
+    /* Never let the buttons run under the physics panel on the right. */
+    #actions { display: flex; flex-wrap: wrap; gap: 5px; max-width: min(720px, calc(100% - 360px)); }
 
     #panel { top: 12px; right: 12px; width: 330px; max-height: calc(100% - 90px); display: flex; flex-direction: column; }
     #panel header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); }
@@ -115,6 +116,7 @@
 
     @media (max-width: 760px) {
       #panel { top: auto; bottom: 64px; left: 8px; right: 8px; width: auto; max-height: 40vh; }
+      #actions { max-width: 100%; }
       #panel.collapsed { max-height: none; }
       #targets { display: none !important; }
       #status { bottom: 8px; font-size: 10px; }

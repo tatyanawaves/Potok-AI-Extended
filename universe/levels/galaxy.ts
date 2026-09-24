@@ -306,13 +306,6 @@ export class GalaxyLevel implements Level {
             } }
             : { label: '✈ Свободный полёт', title: FLY_HELP, run: () => this.nav.setFree() });
         list.push({ label: '● Чёрная дыра в центре', run: () => this.host.open({ kind: 'blackhole', galaxy: this.spec }) });
-        list.push({
-            label: 'Тёмная материя', title: 'Без неё внешние части вращаются по закону Кеплера и спирали закручиваются',
-            run: () => { this.darkMatter = !this.darkMatter; this.timeMyr = 0; }, active: () => this.darkMatter,
-        });
-        for (const s of [0, 1, 10, 50]) {
-            list.push({ label: s === 0 ? '⏸' : `${s} млн лет/с`, run: () => { this.speed = s; }, active: () => this.speed === s });
-        }
         return list;
     }
 

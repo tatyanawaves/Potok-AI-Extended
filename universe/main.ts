@@ -199,8 +199,8 @@ window.addEventListener('keydown', e => {
     if (e.code === 'Escape' && path.length > 1) navigate(path.slice(0, -1));
 });
 $('toggle-panel').addEventListener('click', () => ui.panel.classList.toggle('collapsed'));
-// On a phone the physics panel starts folded so it does not cover the flight pad.
-if (window.matchMedia('(max-width: 760px)').matches) ui.panel.classList.add('collapsed');
+// The physics notes start folded, so the view is the game; ▾ opens them.
+ui.panel.classList.add('collapsed');
 
 // The on-screen pad for touch screens holds virtual keys while a finger is on a button.
 document.querySelectorAll<HTMLButtonElement>('[data-key]').forEach(b => {

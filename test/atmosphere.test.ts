@@ -44,3 +44,21 @@ describe('atmospheric scattering', () => {
         expect(surfaceFor('Луна', 'moon', 1737, 1.62).atmosphere).toBeNull();
     });
 });
+
+import { terrainHeight } from '../universe/terrain';
+
+describe('terrain', () => {
+    const p = { relief: 2200, craters: false, seed: 17.3, seaBias: 0.08 };
+    it('is deterministic, bounded and continuous', () => {
+        let max = -Infinity, min = Infinity;
+        for (let i = 0; i < 400; i++) {
+            const x = (i % 20) * 3100 - 30_000, z = Math.floor(i / 20) * 2900 - 30_000;
+            const h = terrainHeight(p, x, z);
+            expect(h).toBe(terrainHeight(p, x, z));
+            expect(Math.abs(terrainHeight(p, x + 1, z) - h)).toBeLessThan(20); // no cliffs taller than 20 m per metre
+            max = Math.max(max, h); min = Math.min(min, h);
+        }
+        expect(max).toBeLessThan(2200 * 2);
+        expect(max - min).toBeGreaterThan(500); // there is real relief
+    });
+});

@@ -18,7 +18,7 @@ import { AtmosphereParams, landable, surfaceFor } from '../atmosphere';
 import { ATMO_SHELL_FRAG } from '../planetShaders';
 import type { CameraState } from '../common';
 import {
-    ATMO_SHELL_VERT, PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG, WELL_FRAG, WELL_VERT,
+    ATMO_SHELL_VERT, PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG,
 } from '../shaders';
 
 type Kind = PlanetKind | 'moon' | 'star';
@@ -101,7 +101,7 @@ export class StarSystemLevel implements Level {
     private game: ShipGame;
     readonly title: string;
     readonly bloom = { strength: 0.7, radius: 0.5, threshold: 0.8 };
-    readonly help = `${FLY_HELP} · Пробел — огонь · X — стоп · V — вид · M — миссии · клик по планете — выбрать · двойной клик/Enter — автопилот`;
+    readonly help = `${FLY_HELP} · Пробел — огонь · X — стоп · V — вид · L — посадка · M — миссии · клик по планете — цель · Enter — автопилот`;
 
     private system: SystemSpec | null = null;
     private starMassSun: number;
@@ -112,8 +112,6 @@ export class StarSystemLevel implements Level {
     private sprites!: THREE.Points;
     private labels: Labels;
     private sky: THREE.Points;
-    private well: THREE.Mesh;
-    private kepler: THREE.Group = new THREE.Group();
     private sphere = new THREE.SphereGeometry(1, 96, 64);
     private tDays: number;
     private timeScale = 3600;
@@ -132,10 +130,8 @@ export class StarSystemLevel implements Level {
     private flightStart = 0;
     private flightFrom = '';
     private lastFlight = '';
-    private showOrbits = true;
-    /** The scale: seconds to cross the 78 million km between Earth and Mars at an average opposition. */
-    private flightSeconds = EARTH_MARS_FLIGHT_S;
-    private get cruise() { return EARTH_MARS_GAP_KM / UNIT_KM / this.flightSeconds; }
+    /** The scale: the 78 million km between Earth and Mars at an average opposition take 30 s. */
+    private readonly cruise = EARTH_MARS_GAP_KM / UNIT_KM / EARTH_MARS_FLIGHT_S;
     /** Radius of the outermost orbit; flying three times farther leaves for the galaxy. */
     private outer = 1;
     private leave = new ProximityTrigger(1);
@@ -146,6 +142,11 @@ export class StarSystemLevel implements Level {
         if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
         if (e.code === 'KeyX') { this.goFree(); this.ctl.stop(); this.speed = 0; }
         if (e.code === 'Enter' && this.target) this.flyTo(this.target);
+        if (e.code === 'KeyL') {
+            const b = this.landingCandidate();
+            if (b) this.landOn(b);
+            else this.host.toast('Рядом нет планеты для посадки — выберите цель или подлетите ближе');
+        }
     };
     private onDown = (e: PointerEvent) => { this.dragging = true; this.lastPointer = { x: e.clientX, y: e.clientY }; };
     private onUp = () => { this.dragging = false; };
@@ -206,10 +207,6 @@ export class StarSystemLevel implements Level {
         const outer = Math.max(...this.bodies.filter(b => b.parent === this.bodies[0]).map(b => b.el!.a));
         this.outer = outer;
         this.leave = new ProximityTrigger(outer * 0.5);
-        this.well = this.buildWell(outer * 1.3);
-        this.well.visible = false;
-        this.scene.add(this.well);
-        this.scene.add(this.kepler);
 
         this.updatePositions(0);
         // Start parked next to Earth, or next to the first planet of a new system.
@@ -392,55 +389,6 @@ export class StarSystemLevel implements Level {
         this.scene.add(this.sprites);
     }
 
-    /** The Newtonian potential Φ = −Σ GMᵢ/rᵢ drawn as a rubber sheet under the orbits. */
-    private buildWell(size: number): THREE.Mesh {
-        const g = new THREE.PlaneGeometry(size * 2, size * 2, 320, 320);
-        g.rotateX(-Math.PI / 2);
-        const soft = size * 0.02;
-        const m = new THREE.ShaderMaterial({
-            vertexShader: WELL_VERT, fragmentShader: WELL_FRAG,
-            uniforms: {
-                uMasses: { value: Array.from({ length: 12 }, () => new THREE.Vector4()) },
-                uDepth: { value: 0.18 * size * soft },
-                uSoft: { value: soft },
-                uCell: { value: size / 40 },
-            },
-            transparent: true, depthWrite: false, side: THREE.DoubleSide,
-        });
-        const mesh = new THREE.Mesh(g, m);
-        mesh.frustumCulled = false;
-        mesh.position.y = -size * 0.002;
-        return mesh;
-    }
-
-    private showKepler(body: Body) {
-        disposeObject(this.kepler);
-        this.kepler.clear();
-        if (!body.el || body.parent?.kind !== 'star') return;
-        const sectors = 12;
-        const e = [0, 0, 0];
-        const v = new THREE.Vector3();
-        for (let s = 0; s < sectors; s++) {
-            const pts: number[] = [0, 0, 0];
-            const steps = 24;
-            for (let k = 0; k <= steps; k++) {
-                const M = ((s + k / steps) / sectors) * Math.PI * 2;
-                orbitPointAtE(body.el, solveKepler(M, body.el.e), e);
-                toThree(e, v);
-                pts.push(v.x, v.y, v.z);
-            }
-            const idx: number[] = [];
-            for (let k = 1; k <= steps; k++) idx.push(0, k, k + 1);
-            const g = new THREE.BufferGeometry();
-            g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-            g.setIndex(idx);
-            const color = s % 2 ? 0x3a7bff : 0xff7a3a;
-            this.kepler.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-                color, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false,
-            })));
-        }
-    }
-
     // -----------------------------------------------------------------------
     // Simulation
     // -----------------------------------------------------------------------
@@ -476,13 +424,11 @@ export class StarSystemLevel implements Level {
 
     select(b: Body) {
         this.target = b;
-        if (this.keplerOn) this.showKepler(b);
         this.host.toast(`Цель: ${b.name}. Двойной клик или Enter — лететь`);
     }
 
     flyTo(b: Body) {
         this.target = b;
-        if (this.keplerOn) this.showKepler(b);
         if (this.pilot.position.distanceTo(b.pos) - this.parkDistance(b) < b.radius * 0.5) {
             this.enterOrbit(b);
             return;
@@ -525,6 +471,13 @@ export class StarSystemLevel implements Level {
         this.goFree();
     }
 
+    /** The body L would land on: the selected one, or the nearest solid world within 40 of its radii. */
+    private landingCandidate(): Body | null {
+        if (this.target && landable(this.target.kind)) return this.target;
+        const near = this.nearestSurface(this.pilot.position);
+        return near.body.kind !== 'star' && landable(near.body.kind) && near.dist < near.body.radius * 40 ? near.body : null;
+    }
+
     /** Go down to a body's surface (the planet level). */
     private landOn(b: Body) {
         if (!landable(b.kind)) {
@@ -550,62 +503,12 @@ export class StarSystemLevel implements Level {
         this.ctl.sync();
     }
 
-    /** Jump to the next closest approach of Earth and Mars (an opposition). */
-    private toOpposition() {
-        const earth = this.bodies.find(b => b.name === 'Земля')!, mars = this.bodies.find(b => b.name === 'Марс')!;
-        const a = [0, 0, 0], c = [0, 0, 0];
-        const dist = (t: number) => {
-            orbitalPosition(earth.el!, t, a); orbitalPosition(mars.el!, t, c);
-            return Math.hypot(a[0] - c[0], a[1] - c[1], a[2] - c[2]);
-        };
-        let bestT = this.tDays + 1, bestD = Infinity;
-        for (let t = this.tDays + 1; t < this.tDays + 800; t += 1) {
-            const d = dist(t);
-            if (d < bestD) { bestD = d; bestT = t; }
-        }
-        this.tDays = bestT;
-        this.updatePositions(0);
-        this.host.toast(`Противостояние: ${this.dateString()}, Земля–Марс ${fmtDistanceKm(bestD * UNIT_KM)}`);
-    }
-
-    private earthToMars() {
-        const earth = this.bodies.find(b => b.name === 'Земля')!, mars = this.bodies.find(b => b.name === 'Марс')!;
-        const dir = new THREE.Vector3().subVectors(mars.pos, earth.pos).normalize();
-        const side = new THREE.Vector3(0, 1, 0).cross(dir).normalize();
-        this.pilot.position.copy(earth.pos).addScaledVector(dir, -earth.radius * 4).addScaledVector(side, earth.radius * 1.5);
-        this.pilot.lookAt(mars.pos);
-        this.speed = 0;
-        this.flyTo(mars);
-    }
-
-    private keplerOn = false;
-
     actions(): Action[] {
         const list: Action[] = [...this.game.actions()];
         if (this.target && this.mode !== 'auto') list.push({ label: `▶ Лететь: ${this.target.name}`, run: () => this.flyTo(this.target!) });
-        if (this.target && landable(this.target.kind)) list.push({ label: `🪂 Сесть: ${this.target.name}`, title: 'Спуститься на поверхность', run: () => this.landOn(this.target!) });
+        if (this.target && landable(this.target.kind)) list.push({ label: `🪂 Сесть: ${this.target.name} (L)`, title: 'Спуститься на поверхность', run: () => this.landOn(this.target!) });
         if (this.target && this.mode === 'auto') list.push({ label: '■ Стоп', run: () => { this.goFree(); this.ctl.stop(); this.speed = 0; } });
         if (this.mode !== 'free') list.push({ label: '✈ Свободный полёт', title: FLY_HELP, run: () => this.goFree() });
-        if (!this.system) {
-            list.push({ label: '🚀 Земля → Марс', title: 'Масштаб подобран так, что перелёт между орбитами занимает 30 секунд', run: () => this.earthToMars() });
-            list.push({ label: '⏩ К противостоянию', title: 'Перемотать время к ближайшему сближению Земли и Марса', run: () => this.toOpposition() });
-        }
-        for (const sec of [30, 90]) {
-            list.push({
-                label: `Масштаб: ${sec} с до Марса`, title: 'Сколько секунд лететь 78 млн км между Землёй и Марсом',
-                run: () => { this.flightSeconds = sec; this.ctl.speed = this.cruise; }, active: () => this.flightSeconds === sec,
-            });
-        }
-        list.push({ label: '⊙ Вид сверху', run: () => this.topView() });
-        list.push({ label: 'Орбиты', run: () => { this.showOrbits = !this.showOrbits; }, active: () => this.showOrbits });
-        list.push({ label: 'Гравитация', title: 'Потенциал Ньютона −GM/r как прогиб «резинового листа»', run: () => { this.well.visible = !this.well.visible; }, active: () => this.well.visible });
-        list.push({
-            label: '2-й закон Кеплера', title: 'Секторы, заметаемые за равные промежутки времени',
-            run: () => { this.keplerOn = !this.keplerOn; if (this.keplerOn && this.target) this.showKepler(this.target); else { disposeObject(this.kepler); this.kepler.clear(); } },
-            active: () => this.keplerOn,
-        });
-        const scales: [number, string][] = [[0, '⏸'], [1, '1 с/с'], [3600, '1 ч/с'], [86_400, '1 сут/с'], [864_000, '10 сут/с']];
-        for (const [s, l] of scales) list.push({ label: l, title: 'Скорость течения времени', run: () => { this.timeScale = s; }, active: () => this.timeScale === s });
         return list;
     }
 
@@ -614,15 +517,6 @@ export class StarSystemLevel implements Level {
             label: `${b.kind === 'moon' ? '  · ' : ''}${b.name}`,
             run: () => { this.select(b); this.flyTo(b); },
         }));
-    }
-
-    private topView() {
-        const outer = Math.max(...this.bodies.filter(b => b.parent?.kind === 'star').map(b => b.el!.a));
-        const inner = Math.min(outer, 2.2 * AU_KM / UNIT_KM);
-        this.target = this.bodies[0];
-        this.mode = 'orbit';
-        this.ctl.enabled = false;
-        this.orbitOffset.set(0, inner * 2.2, inner * 0.6);
     }
 
     private dateString() {
@@ -640,7 +534,7 @@ export class StarSystemLevel implements Level {
         html += `<h3>Масштаб</h3>`;
         const cruiseKms = this.cruise * UNIT_KM;
         html += row('Крейсерская скорость', `${fmtNum(cruiseKms / 1e6)} млн км/с ≈ ${fmtNum(cruiseKms / C_KM_S)} c`);
-        html += row('Земля → Марс (среднее противостояние, 78 млн км)', `${this.flightSeconds} с полёта`);
+        html += row('Земля → Марс (среднее противостояние, 78 млн км)', `${EARTH_MARS_FLIGHT_S} с полёта`);
         html += row('Размеры планет', 'реальные');
         if (this.system) {
             html += `<p>Система выведена из орбиты z → z² + c точки c = ${this.system.c[0].toFixed(3)} ${this.system.c[1] >= 0 ? '+' : '−'} ${Math.abs(this.system.c[1]).toFixed(3)}i
@@ -677,11 +571,7 @@ export class StarSystemLevel implements Level {
                 html += row('Равновесная температура', `${fmtNum(equilibriumTemperature(L, dAU, t.albedo))} K`);
                 html += row('Сутки', fmtDuration(Math.abs(t.dayDays) * DAY_S) + (t.dayDays < 0 ? ' (ретроградно)' : ''));
             }
-            if (this.keplerOn && t.el && t.parent?.kind === 'star') {
-                html += `<p>Каждый сектор заметается за P/12 = ${fmtDuration(t.el.period * DAY_S / 12)}: площади равны, поэтому у перигелия планета быстрее.</p>`;
-            }
         }
-        if (this.well.visible) html += `<p>Лист прогнут на −GM/r. Массы планет на нём увеличены в 1000 раз, иначе их ямки не видно.</p>`;
         return html;
     }
 
@@ -705,6 +595,8 @@ export class StarSystemLevel implements Level {
             s += ` · свободный полёт, газ ${t >= 1e6 ? `${fmtNum(t / 1e6)} млн` : fmtNum(t)} км/с (колесо)`;
         }
         if (this.lastFlight) s += ` · ${this.lastFlight}`;
+        const land = this.landingCandidate();
+        if (land) s += ` · L — посадка: ${land.name}`;
         return s;
     }
 
@@ -775,11 +667,11 @@ export class StarSystemLevel implements Level {
             const camDist = this.camera.position.distanceTo(b.pos);
             if (b.kind === 'moon' && b.parent) {
                 b.label.visible = this.camera.position.distanceTo(b.parent.pos) < b.el!.a * 40;
-                if (b.orbitLine) b.orbitLine.visible = this.showOrbits && b.label.visible;
+                if (b.orbitLine) b.orbitLine.visible = b.label.visible;
             } else {
                 b.label.visible = b.radius / camDist * px < 60;
                 // Up close a planet's own orbit is a line through the camera; hide it.
-                if (b.orbitLine) b.orbitLine.visible = this.showOrbits && (!b.el || camDist > b.el.a * 0.02);
+                if (b.orbitLine) b.orbitLine.visible = !b.el || camDist > b.el.a * 0.02;
             }
             b.label.position.copy(b.pos);
             b.label.el.classList.toggle('target', b === this.target);
@@ -790,16 +682,6 @@ export class StarSystemLevel implements Level {
         (this.sky.material as THREE.ShaderMaterial).uniforms.uPx.value = px;
         this.sky.position.copy(this.camera.position);
 
-        if (this.well.visible) {
-            const masses = (this.well.material as THREE.ShaderMaterial).uniforms.uMasses.value as THREE.Vector4[];
-            const planets = this.bodies.filter(b => b.parent === star);
-            masses[0].set(star.pos.x, star.pos.y, star.pos.z, 1);
-            for (let k = 1; k < 12; k++) {
-                const p = planets[k - 1];
-                if (p) masses[k].set(p.pos.x, p.pos.y, p.pos.z, (1000 * p.massEarth) / star.massEarth);
-                else masses[k].set(0, 0, 0, 0);
-            }
-        }
         this.labels.update(this.camera, this.width, this.height);
     }
 

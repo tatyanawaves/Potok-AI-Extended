@@ -67,15 +67,9 @@ export class BlackHoleLevel implements Level {
                 label: '⚛ Квантовое ядро', title: 'Петлевая квантовая гравитация: вместо сингулярности — ядро из плоских квантов пространства',
                 run: () => { this.coreTarget = this.coreTarget > 0 ? 0 : 1; }, active: () => this.coreTarget > 0,
             },
-            {
-                label: 'Эффект Доплера', title: 'Релятивистское усиление света со стороны, летящей к нам',
-                run: () => { this.doppler = !this.doppler; }, active: () => this.doppler,
-            },
             this.nav.mode === 'free'
                 ? { label: '⟳ Облёт', run: () => this.nav.setOrbit(new THREE.Vector3(), true) }
                 : { label: '✈ Свободный полёт', title: FLY_HELP, run: () => this.nav.setFree() },
-            { label: 'Вид с ребра', run: () => this.view(0, 0.35, 20) },
-            { label: 'Вид сверху', run: () => this.view(0, 24, 0.5) },
         ];
     }
 
@@ -107,11 +101,6 @@ export class BlackHoleLevel implements Level {
         горизонт разбит на кванты площади. Настоящий размер ядра — ${fmtNum(planckStarCoreRadiusM(M))} м, на экране он увеличен:
         это гипотеза, а не наблюдение.</p>`;
         return html;
-    }
-
-    private view(x: number, y: number, z: number) {
-        this.camera.position.set(x, y, z);
-        if (this.nav.mode === 'free') this.nav.lookAt(new THREE.Vector3());
     }
 
     resumed() {

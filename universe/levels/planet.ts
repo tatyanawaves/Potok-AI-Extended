@@ -180,17 +180,14 @@ export class PlanetLevel implements Level {
         return new THREE.Vector3(Math.sin(H), Math.cos(H) * Math.cos(lat), Math.cos(H) * Math.sin(lat)).normalize();
     }
 
+    private static readonly TIMES: [string, number][] = [['🌅 Утро', -1.35], ['☀ Полдень', 0], ['🌇 Закат', 1.45], ['🌙 Ночь', Math.PI]];
+
     actions(): Action[] {
-        const set = (h: number) => () => { this.hourAngle = h; };
+        // One button steps through the times of day; the day itself keeps turning.
+        const next = PlanetLevel.TIMES.find(([, h]) => h > this.hourAngle + 0.05) ?? PlanetLevel.TIMES[0];
         return [
             ...this.game.actions(),
-            { label: '🌅 Утро', run: set(-1.35) },
-            { label: '☀ Полдень', run: set(0) },
-            { label: '🌇 Закат', run: set(1.45) },
-            { label: '🌙 Ночь', run: set(Math.PI) },
-            ...([[0, '⏸'], [120, 'сутки ×120'], [1200, '×1200']] as [number, string][]).map(([v, l]) => ({
-                label: l, title: 'Скорость смены дня и ночи', run: () => { this.daySpeed = v; }, active: () => this.daySpeed === v,
-            })),
+            { label: next[0], title: 'Перейти к этому времени суток', run: () => { this.hourAngle = next[1]; } },
             { label: '⬆ В космос', run: () => this.leave() },
         ];
     }
@@ -240,7 +237,8 @@ export class PlanetLevel implements Level {
         const alt = p.y - floor;
         const limit = Math.min(Math.max(40, alt * 2.5), this.game.speedLimit(p, this.ctl.boosted));
         this.speed = this.ctl.update(dt, limit);
-        const newFloor = Math.max(this.groundAt(p.x, p.z), this.surface.sea ?? -1e9) + 12;
+        // The GPU adds finer octaves than the collision height; keep clear of them.
+        const newFloor = Math.max(this.groundAt(p.x, p.z), this.surface.sea ?? -1e9) + 25;
         if (p.y < newFloor) p.y = newFloor;
         if (this.game.wantsFree) this.game.wantsFree = false;
 

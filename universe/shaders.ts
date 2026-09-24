@@ -404,48 +404,6 @@ void main() {
 `;
 
 // ---------------------------------------------------------------------------
-// Gravity well: the Newtonian potential of the system as an embedding surface
-// ---------------------------------------------------------------------------
-
-export const WELL_VERT = /* glsl */ `
-#include <common>
-#include <logdepthbuf_pars_vertex>
-uniform vec4 uMasses[12]; // xyz position (world), w = mass
-uniform float uDepth;
-uniform float uSoft;
-varying vec2 vGrid;
-varying float vPhi;
-void main() {
-    vec3 p = position;
-    float phi = 0.0;
-    for (int i = 0; i < 12; i++) {
-        vec2 d = p.xz - uMasses[i].xz;
-        phi += uMasses[i].w / sqrt(dot(d, d) + uSoft * uSoft);
-    }
-    p.y = -uDepth * phi;
-    vGrid = position.xz;
-    vPhi = phi;
-    vec4 wp = modelMatrix * vec4(p, 1.0);
-    gl_Position = projectionMatrix * viewMatrix * wp;
-    #include <logdepthbuf_vertex>
-}
-`;
-
-export const WELL_FRAG = /* glsl */ `
-#include <logdepthbuf_pars_fragment>
-uniform float uCell;
-varying vec2 vGrid;
-varying float vPhi;
-void main() {
-    #include <logdepthbuf_fragment>
-    vec2 g = abs(fract(vGrid / uCell - 0.5) - 0.5) / fwidth(vGrid / uCell);
-    float line = 1.0 - min(min(g.x, g.y), 1.0);
-    vec3 col = mix(vec3(0.1, 0.35, 0.9), vec3(0.9, 0.4, 1.0), clamp(vPhi * 0.02, 0.0, 1.0));
-    gl_FragColor = vec4(col * line * 0.6, line * 0.5);
-}
-`;
-
-// ---------------------------------------------------------------------------
 // Black hole: null geodesics in Schwarzschild spacetime, a Shakura–Sunyaev
 // accretion disk with Doppler beaming and gravitational redshift, and — as an
 // option — the singularity replaced by a loop-quantum-gravity core.
