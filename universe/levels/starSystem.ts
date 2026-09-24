@@ -24,7 +24,7 @@ import { AtmosphereParams, landable, surfaceFor } from '../atmosphere';
 import { ATMO_SHELL_FRAG } from '../planetShaders';
 import type { CameraState } from '../common';
 import {
-    ATMO_SHELL_VERT, CORONA_FRAG, CORONA_VERT, PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG,
+    ATMO_SHELL_VERT, CORONA_FRAG, CORONA_VERT, PLANET_BAKE_FRAG, PLANET_BAKE_VERT, PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG,
 } from '../shaders';
 
 type Kind = PlanetKind | 'moon' | 'star';
@@ -55,6 +55,8 @@ interface Body {
     label: Label;
     orbitLine?: THREE.LineLoop;
     color: [number, number, number];
+    /** The surface painted into textures once the body is big on screen (see bakeSurfaces). */
+    baked?: { albedo: THREE.WebGLRenderTarget; detail: THREE.WebGLRenderTarget; usedAt: number };
 }
 
 const KIND_ID: Record<Kind, number> = {
@@ -325,7 +327,7 @@ export class StarSystemLevel implements Level {
         const hasRing = !!d.rings;
         const atmo = landable(kind) ? surfaceFor(d.name, kind as PlanetKind | 'moon', d.radiusKm, 9.8).atmosphere ?? undefined : undefined;
         // Relief for solid, mostly clear worlds; clouds and gas stay smooth.
-        const bump = kind === 'gas' || kind === 'ice-giant' || kind === 'venus' ? 0 : kind === 'earth' ? 0.35 : 0.6;
+        const bump = kind === 'gas' || kind === 'ice-giant' || kind === 'venus' ? 0 : kind === 'earth' ? 0.3 : 0.35;
         const material = new THREE.ShaderMaterial({
             vertexShader: PLANET_VERT, fragmentShader: PLANET_FRAG,
             uniforms: {
@@ -346,6 +348,7 @@ export class StarSystemLevel implements Level {
                 uRing: { value: new THREE.Vector4(0, 0, 0, 0) },
                 uRingNormal: { value: new THREE.Vector3(0, 1, 0) },
                 uCenter: { value: new THREE.Vector3() },
+                uAlbedo: { value: null }, uDetail: { value: null }, uBaked: { value: 0 }, uTexel: { value: new THREE.Vector2(1, 1) },
             },
         });
         const mesh = new THREE.Mesh(this.sphere, material);
@@ -451,6 +454,81 @@ export class StarSystemLevel implements Level {
     // -----------------------------------------------------------------------
     // Simulation
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Baked surfaces
+    //
+    // The surface shader evaluates a couple of dozen noise octaves per pixel. That is nothing
+    // for a dot, but a world filling the screen costs millions of them every frame. So once a
+    // body is big on screen its surface is painted into two textures (albedo + land; relief,
+    // clouds, sea glint, lights) and the shader just reads them. Clouds drift over the baked
+    // ground; everything else on a surface changes too slowly to see.
+    // -----------------------------------------------------------------------
+
+    private bakeMaterial = new THREE.ShaderMaterial({
+        vertexShader: PLANET_BAKE_VERT, fragmentShader: PLANET_BAKE_FRAG,
+        uniforms: {
+            uLayer: { value: 0 }, uKind: { value: 0 }, uSeed: { value: 0 },
+            uColA: { value: new THREE.Vector3() }, uColB: { value: new THREE.Vector3() }, uColC: { value: new THREE.Vector3() },
+        },
+        depthTest: false, depthWrite: false,
+    });
+    private bakeScene = new THREE.Scene().add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.bakeMaterial));
+    private bakeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    /** Seconds of simulated time since start, for keeping recently used textures. */
+    private bakeClock = 0;
+
+    private bake(b: Body) {
+        const w = b.kind === 'moon' ? 1024 : 2048;
+        const target = (width: number, height: number, type: THREE.TextureDataType) => new THREE.WebGLRenderTarget(width, height, {
+            type, depthBuffer: false, generateMipmaps: true,
+            minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
+            wrapS: THREE.RepeatWrapping, wrapT: THREE.ClampToEdgeWrapping,
+        });
+        const albedo = target(w, w / 2, THREE.UnsignedByteType);
+        const detail = target(w / 2, w / 4, THREE.HalfFloatType);
+        const src = b.material.uniforms, u = this.bakeMaterial.uniforms;
+        for (const k of ['uKind', 'uSeed']) u[k].value = src[k].value;
+        for (const k of ['uColA', 'uColB', 'uColC']) u[k].value.copy(src[k].value);
+        const r = this.host.renderer;
+        const prev = r.getRenderTarget();
+        for (const [layer, rt] of [[0, albedo], [1, detail]] as const) {
+            u.uLayer.value = layer;
+            r.setRenderTarget(rt);
+            r.render(this.bakeScene, this.bakeCamera);
+        }
+        r.setRenderTarget(prev);
+        src.uAlbedo.value = albedo.texture;
+        src.uDetail.value = detail.texture;
+        src.uTexel.value.set(1 / (w / 2), 1 / (w / 4));
+        src.uBaked.value = 1;
+        b.baked = { albedo, detail, usedAt: this.bakeClock };
+    }
+
+    private unbake(b: Body) {
+        if (!b.baked) return;
+        b.baked.albedo.dispose();
+        b.baked.detail.dispose();
+        b.baked = undefined;
+        b.material.uniforms.uBaked.value = 0;
+        b.material.uniforms.uAlbedo.value = b.material.uniforms.uDetail.value = null;
+    }
+
+    /** Bake at most one surface a frame, for bodies over ~40 px across; free those long out of view. */
+    private bakeSurfaces(dt: number, px: number) {
+        this.bakeClock += dt;
+        let baked = false;
+        for (const b of this.bodies) {
+            if (b.kind === 'star') continue;
+            const size = (b.radius / Math.max(this.camera.position.distanceTo(b.pos), 1e-12)) * px;
+            if (size > 20) {
+                if (b.baked) b.baked.usedAt = this.bakeClock;
+                else if (!baked && size > 40) { this.bake(b); baked = true; }
+            } else if (b.baked && this.bakeClock - b.baked.usedAt > 120) {
+                this.unbake(b);
+            }
+        }
+    }
 
     private updatePositions(dt: number) {
         const e = [0, 0, 0];
@@ -772,6 +850,7 @@ export class StarSystemLevel implements Level {
         const spritePos = this.sprites.geometry.attributes.position as THREE.BufferAttribute;
         const tmp = new THREE.Vector3();
         const overview = this.nearestSurface(this.camera.position).dist > 0.3 * SCENE_AU;
+        this.bakeSurfaces(dt, px);
         this.bodies.forEach((b, i) => {
             spritePos.setXYZ(i, b.pos.x, b.pos.y, b.pos.z);
             if (b.kind === 'star') {
@@ -809,22 +888,15 @@ export class StarSystemLevel implements Level {
                     u.uRingNormal.value.copy(tmp.set(0, 1, 0).applyQuaternion(b.tiltHolder.getWorldQuaternion(new THREE.Quaternion())));
                 }
             }
-            // Moon labels only near their planet; planet labels hide once the planet fills the view.
-            const camDist = this.camera.position.distanceTo(b.pos);
+            // No name tags over the worlds (the target list names them); orbits only in the overview.
+            b.label.visible = false;
             if (b.kind === 'moon' && b.parent) {
                 const fromParent = this.camera.position.distanceTo(b.parent.pos);
-                b.label.visible = fromParent < b.el!.a * 40;
                 // Only from outside the orbit: from inside, the ring is a line slicing across the view.
-                if (b.orbitLine) b.orbitLine.visible = b.label.visible && fromParent > b.el!.a * 1.3;
+                if (b.orbitLine) b.orbitLine.visible = fromParent < b.el!.a * 40 && fromParent > b.el!.a * 1.3;
             } else {
-                b.label.visible = b.radius / camDist * px < 60;
-                // Up close a planet's own orbit is a line through the camera; hide it.
-                // Near the planets, other orbits are just lines slicing across the view: show only the target's.
-                // And never when the camera is close to the ellipse itself: the ring would pass through the view.
                 const rc = b.parent ? this.camera.position.distanceTo(b.parent.pos) : 0;
                 const onOrbit = !!b.el && Math.abs(rc - b.el.a) < b.el.a * 0.2;
-                // In free flight the rings are hidden altogether: seen from near the ecliptic they are
-                // lines slicing across the view. They show in the overview, far from every body.
                 if (b.orbitLine) b.orbitLine.visible = overview && !onOrbit;
             }
             b.label.position.copy(b.pos);
@@ -844,7 +916,7 @@ export class StarSystemLevel implements Level {
             const pos = toThree(e3, new THREE.Vector3()).add(star.pos);
             updateComet(c.comet, pos, star.pos, this.realTime, px);
             c.label.position.copy(pos);
-            c.label.visible = pos.distanceTo(star.pos) < 8 * SCENE_AU; // named only while it is active
+            c.label.visible = false;
         }
 
         this.labels.update(this.camera, this.width, this.height);
@@ -993,6 +1065,8 @@ export class StarSystemLevel implements Level {
         this.labels.dispose();
         this.satellites.dispose();
         this.portals.dispose();
+        for (const b of this.bodies) this.unbake(b);
+        this.bakeMaterial.dispose();
         disposeObject(this.scene);
     }
 }

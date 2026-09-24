@@ -97,13 +97,17 @@ export class Labels {
 
     update(camera: THREE.Camera, width: number, height: number) {
         for (const l of this.items) {
+            // Touch the DOM only when something changed: style writes every frame add up.
+            const shown = l.el.style.display !== 'none';
+            if (!l.visible) { if (shown) l.el.style.display = 'none'; continue; }
             this.v.copy(l.position).project(camera);
-            const onScreen = l.visible && this.v.z < 1 && this.v.z > -1 && Math.abs(this.v.x) < 1.1 && Math.abs(this.v.y) < 1.1;
-            if (!onScreen) { l.el.style.display = 'none'; continue; }
-            l.el.style.display = '';
+            const onScreen = this.v.z < 1 && this.v.z > -1 && Math.abs(this.v.x) < 1.1 && Math.abs(this.v.y) < 1.1;
+            if (!onScreen) { if (shown) l.el.style.display = 'none'; continue; }
+            if (!shown) l.el.style.display = '';
             const x = (this.v.x * 0.5 + 0.5) * width;
             const y = (-this.v.y * 0.5 + 0.5) * height;
-            l.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+            const t = `translate(${x.toFixed(0)}px, ${y.toFixed(0)}px)`;
+            if (l.el.style.transform !== t) l.el.style.transform = t;
         }
     }
 

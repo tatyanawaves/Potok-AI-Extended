@@ -22,7 +22,8 @@ const ui = {
 
 let renderer: THREE.WebGLRenderer;
 try {
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
+    // No MSAA on the canvas: every frame goes through the composer's own targets, so it would only cost.
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true, powerPreference: 'high-performance' });
 } catch {
     ui.fade.innerHTML = '<p>Нужен браузер с WebGL 2.</p>';
     throw new Error('WebGL unavailable');
@@ -180,13 +181,19 @@ function renderActions() {
  * stuttering picture, a strong one gets them back.
  */
 let quality = 1;
-let slowFor = 0, fastFor = 0;
+let slowFor = 0, fastFor = 0, sinceDrop = 1e9;
 function adapt(dt: number) {
-    if (dt > 1 / 40) { slowFor += dt; fastFor = 0; } else if (dt < 1 / 58) { fastFor += dt; slowFor = 0; } else { slowFor = fastFor = 0; }
+    sinceDrop += dt;
+    if (dt > 1 / 40) { slowFor += dt; fastFor = 0; } else if (dt < 1 / 55) { fastFor += dt; slowFor = 0; } else { slowFor = fastFor = 0; }
     let next = quality;
-    if (slowFor > 1.2) next = Math.max(0.5, quality - 0.15);
-    if (fastFor > 4) next = Math.min(1, quality + 0.1);
-    if (next !== quality) { quality = next; slowFor = fastFor = 0; resize(); }
+    if (slowFor > 1.5) next = Math.max(0.5, quality - 0.15);
+    // Every change reallocates the render targets (a hitch), so climb back slowly and never
+    // soon after a drop: otherwise a GPU on the edge would see-saw and stutter every few seconds.
+    if (fastFor > 10 && sinceDrop > 30) next = Math.min(1, quality + 0.1);
+    if (next !== quality) {
+        if (next < quality) sinceDrop = 0;
+        quality = next; slowFor = fastFor = 0; resize();
+    }
 }
 
 function resize() {
@@ -221,7 +228,10 @@ window.addEventListener('keydown', e => {
     // Esc first releases a captured mouse; only a free Esc goes up a level.
     if (e.code === 'Escape' && path.length > 1 && !document.pointerLockElement && performance.now() - unlockedAt > 400) navigate(path.slice(0, -1));
 });
-$('toggle-panel').addEventListener('click', () => ui.panel.classList.toggle('collapsed'));
+$('toggle-panel').addEventListener('click', () => {
+    ui.panel.classList.toggle('collapsed');
+    if (level && !ui.panel.classList.contains('collapsed')) ui.info.innerHTML = level.info();
+});
 // The physics notes start folded, so the view is the game; ▾ opens them.
 ui.panel.classList.add('collapsed');
 
@@ -237,9 +247,11 @@ document.querySelectorAll<HTMLButtonElement>('[data-key]').forEach(b => {
 
 const clock = new THREE.Clock();
 let hudTimer = 0;
+let fps = 60;
 renderer.setAnimationLoop(() => {
     const raw = clock.getDelta();
     const dt = Math.min(raw, 0.1);
+    if (raw > 0 && raw < 1) fps += (1 / raw - fps) * 0.05;
     if (!level) return;
     if (!busy && !document.hidden && raw < 0.5) adapt(raw); // a long gap is a hidden tab or a level load, not a slow GPU
     level.update(dt);
@@ -247,8 +259,10 @@ renderer.setAnimationLoop(() => {
     hudTimer -= dt;
     if (hudTimer <= 0) {
         hudTimer = 0.2;
-        ui.info.innerHTML = level.info();
-        ui.status.textContent = level.status?.() ?? '';
+        // The physics notes only while their panel is open: rebuilding hidden HTML is wasted layout.
+        if (!ui.panel.classList.contains('collapsed')) ui.info.innerHTML = level.info();
+        const perf = `${Math.round(fps)} к/с${quality < 1 ? ` · разрешение ${Math.round(quality * 100)}%` : ''}`;
+        ui.status.textContent = `${level.status?.() ?? ''} · ${perf}`;
         renderActions();
     }
 });

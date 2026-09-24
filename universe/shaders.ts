@@ -91,72 +91,45 @@ void main() {
 }
 `;
 
-export const PLANET_FRAG = /* glsl */ `
-#include <logdepthbuf_pars_fragment>
-uniform vec3 uSun;
-uniform vec3 uStarColor;
-uniform float uStarIntensity;
+/**
+ * The look of a world's surface at a point of the unit sphere: albedo without clouds, and
+ * the masks lighting needs. Shared by the live shader (far away, a few pixels) and the bake
+ * that paints it once into a texture for when the world fills the view.
+ */
+const PLANET_SURFACE = /* glsl */ `
 uniform int uKind;
 uniform float uSeed;
-uniform float uTime;
 uniform vec3 uColA;
 uniform vec3 uColB;
 uniform vec3 uColC;
-uniform vec3 uAtmo;
-uniform float uAtmoStrength;
-uniform vec4 uRing; // inner, outer radius (world), enabled, unused
-uniform mat3 uRot;   // object → world rotation (no scale)
-uniform float uBump; // relief strength; 0 for gas and cloud-covered worlds
-uniform vec3 uRingNormal;
-uniform vec3 uCenter;
-varying vec3 vObj;
-varying vec3 vNormalW;
-varying vec3 vWorld;
-${NOISE}
-void main() {
-    #include <logdepthbuf_fragment>
-    vec3 p = normalize(vObj);
+// base: albedo without clouds; land: 0 sea … 1 land; wet: where the sea glints;
+// glow: emissive mask (city lights, lava); clouds: cloud cover; h: relief height.
+void surface(vec3 p, float time, out vec3 base, out float land, out float wet, out float glow, out float clouds, out float h) {
     vec3 sp = p + vec3(uSeed * 0.013, uSeed * 0.007, uSeed * 0.011);
-    vec3 N = normalize(vNormalW);
-    vec3 L = normalize(uSun - vWorld);
-    vec3 V = normalize(cameraPosition - vWorld);
-    float ndl = dot(N, L);
-    vec3 base;
-    vec3 emissive = vec3(0.0);
-    float spec = 0.0;
-    float terminator = 0.08;
-    float landMask = 1.0;
-
+    land = 1.0; wet = 0.0; glow = 0.0; clouds = 0.0; h = 0.0;
     if (uKind == 0 || uKind == 8) { // airless rock: Mercury, the Moon
         float f = fbm(sp * 3.0);
         float d = fbm3(sp * 14.0);
         float craters = smoothstep(0.35, 0.5, abs(snoise(sp * 22.0))) * 0.15;
         base = mix(uColA, uColB, smoothstep(-0.5, 0.6, f)) * (0.85 + 0.3 * d) - craters;
-        terminator = 0.02;
     } else if (uKind == 1) { // Venus: sulphuric-acid cloud deck
-        float w = fbm(vec3(sp.x * 2.0, sp.y * 7.0 + fbm(sp * 2.5) * 1.8, sp.z * 2.0) + vec3(uTime * 0.02, 0.0, 0.0));
+        float w = fbm(vec3(sp.x * 2.0, sp.y * 7.0 + fbm(sp * 2.5) * 1.8, sp.z * 2.0) + vec3(time * 0.02, 0.0, 0.0));
         base = mix(uColA, uColB, w * 0.5 + 0.5);
-        terminator = 0.25;
-    } else if (uKind == 2) { // Earth-like: oceans, continents, ice, clouds
-        float h = fbm(sp * 2.1) + 0.12 * snoise(sp * 9.0);
+    } else if (uKind == 2) { // Earth-like: oceans, continents, ice; clouds kept apart so they can drift
+        float e = fbm(sp * 2.1) + 0.12 * snoise(sp * 9.0);
         float lat = abs(p.y);
-        float land = smoothstep(0.02, 0.05, h);
-        vec3 ocean = mix(vec3(0.004, 0.02, 0.09), vec3(0.01, 0.08, 0.2), smoothstep(-0.4, 0.03, h));
-        vec3 green = mix(vec3(0.03, 0.12, 0.03), vec3(0.2, 0.17, 0.08), smoothstep(0.0, 0.5, h + lat * 0.3));
+        land = smoothstep(0.02, 0.05, e);
+        vec3 ocean = mix(vec3(0.004, 0.02, 0.09), vec3(0.01, 0.08, 0.2), smoothstep(-0.4, 0.03, e));
+        vec3 green = mix(vec3(0.03, 0.12, 0.03), vec3(0.2, 0.17, 0.08), smoothstep(0.0, 0.5, e + lat * 0.3));
         vec3 desert = vec3(0.45, 0.36, 0.2);
         float dry = smoothstep(0.1, 0.35, 1.0 - abs(lat - 0.3) * 3.0) * smoothstep(0.0, 0.4, fbm3(sp * 3.0 + 5.0));
-        vec3 ground = mix(green, desert, dry);
-        base = mix(ocean, ground, land);
+        base = mix(ocean, mix(green, desert, dry), land);
         float ice = smoothstep(0.78, 0.84, lat + 0.06 * snoise(sp * 6.0));
         base = mix(base, vec3(0.85, 0.88, 0.92), ice);
-        float clouds = smoothstep(0.12, 0.6, fbm(sp * 3.5 + vec3(uTime * 0.03, 0.0, uTime * 0.01)));
-        base = mix(base, vec3(0.8), clouds * 0.75);
-        spec = (1.0 - land) * (1.0 - clouds) * (1.0 - ice);
-        landMask = land * (1.0 - clouds);
-        // City lights on the night side.
-        float night = 1.0 - smoothstep(-0.12, 0.05, ndl);
-        float cities = step(0.9, hash13(floor(p * 420.0))) * smoothstep(0.25, 0.6, snoise(sp * 6.0));
-        emissive = vec3(1.0, 0.62, 0.25) * cities * land * (1.0 - ice) * (1.0 - clouds) * night * 0.12;
+        clouds = smoothstep(0.12, 0.6, fbm(sp * 3.5 + vec3(time * 0.03, 0.0, time * 0.01)));
+        wet = (1.0 - land) * (1.0 - ice);
+        glow = step(0.9, hash13(floor(p * 420.0))) * smoothstep(0.25, 0.6, snoise(sp * 6.0)) * land * (1.0 - ice);
+        land *= 1.0 - ice * 0.5;
     } else if (uKind == 3) { // desert / Mars
         float f = fbm(sp * 2.4);
         float dark = smoothstep(0.05, 0.3, fbm3(sp * 1.6 + 3.0));
@@ -164,48 +137,149 @@ void main() {
         base *= 1.0 - dark * 0.45;
         float cap = smoothstep(0.88, 0.92, abs(p.y) + 0.04 * snoise(sp * 8.0));
         base = mix(base, vec3(0.9, 0.88, 0.86), cap * uColC.x);
-        terminator = 0.04;
     } else if (uKind == 4) { // gas giant: zonal bands and storms
-        float warp = fbm(vec3(sp.x * 3.0, sp.y * 14.0, sp.z * 3.0) + vec3(uTime * 0.01, 0.0, 0.0));
+        float warp = fbm(vec3(sp.x * 3.0, sp.y * 14.0, sp.z * 3.0) + vec3(time * 0.01, 0.0, 0.0));
         float t = p.y * (7.0 + mod(uSeed, 5.0)) + warp * 0.9;
-        float band = 0.5 + 0.5 * sin(t * 3.14159);
-        base = mix(uColA, uColB, band);
+        base = mix(uColA, uColB, 0.5 + 0.5 * sin(t * 3.14159));
         base = mix(base, uColC, smoothstep(0.3, 0.9, fbm(sp * vec3(2.0, 20.0, 2.0))) * 0.35);
         // A long-lived anticyclone, like the Great Red Spot.
         vec3 spot = normalize(vec3(0.8, -0.38, 0.45));
         float s = smoothstep(0.16, 0.05, length((p - spot) * vec3(1.0, 1.8, 1.0)));
         base = mix(base, uColC * 1.1, s * step(0.5, fract(uSeed * 0.37)));
-        terminator = 0.18;
     } else if (uKind == 5) { // ice giant: methane blue, faint bands
         float w = fbm(vec3(sp.x * 2.0, sp.y * 9.0, sp.z * 2.0));
         base = mix(uColA, uColB, 0.5 + 0.5 * sin(p.y * 9.0 + w * 1.2));
-        terminator = 0.2;
     } else if (uKind == 6) { // lava world: dark crust, glowing cracks
         float f = fbm(sp * 4.0);
-        float crack = 1.0 - smoothstep(0.0, 0.07, abs(fbm(sp * 3.0 + 9.0)));
+        glow = 1.0 - smoothstep(0.0, 0.07, abs(fbm(sp * 3.0 + 9.0)));
         base = mix(vec3(0.05, 0.04, 0.035), vec3(0.18, 0.12, 0.09), f * 0.5 + 0.5);
-        emissive = vec3(1.0, 0.32, 0.05) * crack * (1.4 + 0.6 * sin(uTime + f * 10.0));
     } else { // ice world
         float f = fbm(sp * 3.0);
         base = mix(vec3(0.62, 0.72, 0.8), vec3(0.95, 0.97, 1.0), f * 0.5 + 0.5);
         float lines = 1.0 - smoothstep(0.0, 0.03, abs(snoise(sp * 7.0)));
         base = mix(base, vec3(0.5, 0.3, 0.22), lines * 0.5);
     }
+    h = fbm3(sp * 5.0);
+}
+`;
 
-    // Relief: tilt the normal by the gradient of a height field on the sphere, taken by finite
-    // differences in object space (stable, unlike screen-space derivatives of fine noise).
-    if (uBump > 0.0) {
-        vec3 t1 = normalize(cross(p, abs(p.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
-        vec3 t2 = cross(p, t1);
-        float e = 0.004;
-        vec3 off = sp - p;
-        float h0 = fbm3((p + off) * 5.0);
-        float h1 = fbm3((normalize(p + t1 * e) + off) * 5.0);
-        float h2 = fbm3((normalize(p + t2 * e) + off) * 5.0);
-        vec3 grad = ((h1 - h0) * t1 + (h2 - h0) * t2) / e;
-        vec3 No = normalize(p - uBump * 0.08 * landMask * grad);
-        N = normalize(uRot * No);
-        ndl = dot(N, L);
+/** Equirectangular coordinates of a direction: u along longitude, v along latitude. */
+const SPHERE_UV = /* glsl */ `
+vec2 sphereUv(vec3 p) { return vec2(atan(p.z, p.x) / 6.2831853 + 0.5, asin(clamp(p.y, -1.0, 1.0)) / 3.1415927 + 0.5); }
+vec3 sphereDir(vec2 uv) {
+    float lon = (uv.x - 0.5) * 6.2831853, lat = (uv.y - 0.5) * 3.1415927;
+    return vec3(cos(lat) * cos(lon), sin(lat), cos(lat) * sin(lon));
+}
+`;
+
+/** Paints a world's surface into two textures, once (see PLANET_FRAG). */
+export const PLANET_BAKE_VERT = /* glsl */ `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+`;
+
+export const PLANET_BAKE_FRAG = /* glsl */ `
+precision highp float;
+uniform int uLayer; // 0: albedo + land; 1: relief, clouds, wet, glow
+varying vec2 vUv;
+${NOISE}
+${PLANET_SURFACE}
+${SPHERE_UV}
+void main() {
+    vec3 base; float land, wet, glow, clouds, h;
+    surface(sphereDir(vUv), 0.0, base, land, wet, glow, clouds, h);
+    gl_FragColor = uLayer == 0 ? vec4(clamp(base, 0.0, 1.0), land) : vec4(h * 0.5 + 0.5, clouds, wet, glow);
+}
+`;
+
+export const PLANET_FRAG = /* glsl */ `
+#include <logdepthbuf_pars_fragment>
+uniform vec3 uSun;
+uniform vec3 uStarColor;
+uniform float uStarIntensity;
+uniform float uTime;
+uniform vec3 uAtmo;
+uniform float uAtmoStrength;
+uniform vec4 uRing; // inner, outer radius (world), enabled, unused
+uniform mat3 uRot;   // object → world rotation (no scale)
+uniform float uBump; // relief strength; 0 for gas and cloud-covered worlds
+uniform vec3 uRingNormal;
+uniform vec3 uCenter;
+// The baked surface: albedo + land, and relief + clouds + wet + glow; uBaked says whether to use it.
+uniform sampler2D uAlbedo;
+uniform sampler2D uDetail;
+uniform float uBaked;
+uniform vec2 uTexel; // 1 / detail texture size
+varying vec3 vObj;
+varying vec3 vNormalW;
+varying vec3 vWorld;
+${NOISE}
+${PLANET_SURFACE}
+${SPHERE_UV}
+
+// Sample an equirectangular texture without a seam where longitude wraps (Tarini's trick):
+// of two parametrisations, use the one whose derivatives do not jump.
+vec4 sphereTex(sampler2D t, vec2 uv) {
+    vec2 uvB = vec2(fract(uv.x + 0.5) - 0.5, uv.y);
+    vec2 dA = vec2(dFdx(uv.x), dFdy(uv.x)), dB = vec2(dFdx(uvB.x), dFdy(uvB.x));
+    bool useB = dot(dB, dB) < dot(dA, dA) - 1e-9;
+    vec2 u = useB ? uvB : uv;
+    return textureGrad(t, u, vec2(useB ? dB.x : dA.x, dFdx(uv.y)), vec2(useB ? dB.y : dA.y, dFdy(uv.y)));
+}
+
+void main() {
+    #include <logdepthbuf_fragment>
+    vec3 p = normalize(vObj);
+    vec3 N = normalize(vNormalW);
+    vec3 L = normalize(uSun - vWorld);
+    vec3 V = normalize(cameraPosition - vWorld);
+    float ndl = dot(N, L);
+    vec3 base; float land, wet, glow, clouds, h;
+    vec3 No = p;
+    if (uBaked > 0.5) {
+        // Read the painted surface: a few texture reads instead of dozens of noise evaluations.
+        vec2 uv = sphereUv(p);
+        vec4 a = sphereTex(uAlbedo, uv);
+        vec4 d = sphereTex(uDetail, uv);
+        base = a.rgb; land = a.a; wet = d.b; glow = d.a;
+        // Clouds drift eastwards over the ground.
+        clouds = uKind == 2 ? sphereTex(uDetail, uv + vec2(uTime * 0.0006, 0.0)).g : 0.0;
+        if (uBump > 0.0) {
+            // All three heights from the finest level, so the difference is a true slope.
+            float h0 = textureLod(uDetail, uv, 0.0).r;
+            float hx = textureLod(uDetail, uv + vec2(uTexel.x, 0.0), 0.0).r, hy = textureLod(uDetail, uv + vec2(0.0, uTexel.y), 0.0).r;
+            float lat = asin(clamp(p.y, -1.0, 1.0));
+            vec3 tLon = normalize(vec3(-p.z, 0.0, p.x) + 1e-6);
+            vec3 tLat = vec3(-sin(lat) * cos(atan(p.z, p.x)), cos(lat), -sin(lat) * sin(atan(p.z, p.x)));
+            // Heights are stored ×0.5; per radian of longitude and latitude.
+            vec2 g = vec2(hx - h0, hy - h0) * 2.0 / (uTexel * vec2(6.2831853, 3.1415927));
+            vec3 grad = g.x / max(cos(lat), 0.05) * tLon + g.y * tLat;
+            No = normalize(p - uBump * 0.08 * land * (1.0 - clouds) * grad);
+        }
+    } else {
+        surface(p, uTime, base, land, wet, glow, clouds, h);
+        if (uBump > 0.0) {
+            vec3 t1 = normalize(cross(p, abs(p.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+            vec3 t2 = cross(p, t1);
+            float e = 0.004;
+            vec3 off = vec3(uSeed * 0.013, uSeed * 0.007, uSeed * 0.011);
+            float h1 = fbm3((normalize(p + t1 * e) + off) * 5.0);
+            float h2 = fbm3((normalize(p + t2 * e) + off) * 5.0);
+            vec3 grad = ((h1 - h) * t1 + (h2 - h) * t2) / e;
+            No = normalize(p - uBump * 0.08 * land * (1.0 - clouds) * grad);
+        }
+    }
+    if (uBump > 0.0) { N = normalize(uRot * No); ndl = dot(N, L); }
+
+    float terminator = uKind == 0 || uKind == 8 ? 0.02 : uKind == 1 ? 0.25 : uKind == 3 ? 0.04 : uKind == 4 ? 0.18 : uKind == 5 ? 0.2 : 0.08;
+    base = mix(base, vec3(0.8), clouds * 0.75);
+    float spec = wet * (1.0 - clouds);
+    vec3 emissive = vec3(0.0);
+    if (uKind == 2) {
+        float night = 1.0 - smoothstep(-0.12, 0.05, ndl);
+        emissive = vec3(1.0, 0.62, 0.25) * glow * (1.0 - clouds) * night * 0.12;
+    } else if (uKind == 6) {
+        emissive = vec3(1.0, 0.32, 0.05) * glow * (1.4 + 0.6 * sin(uTime + p.x * 10.0));
     }
 
     float diff = smoothstep(-terminator, terminator, ndl) * max(ndl, 0.0);

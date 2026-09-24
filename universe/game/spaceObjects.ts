@@ -326,10 +326,11 @@ export class DebrisField {
         // A long lump of dirty ice, not a faceted crystal (those read as stray triangles).
         const shard = geo.clone();
         shard.scale(0.75, 1.5, 0.8);
-        // Junk: a satellite bus with a torn solar wing, lit like the ship.
+        // Junk: a dead satellite's bus with a burst fuel tank, lit like the ship. No thin panels:
+        // seen edge-on they read as stray triangles.
         const junk = new THREE.BoxGeometry(900, 700, 1100);
-        const wing = new THREE.BoxGeometry(2600, 40, 800).translate(1700, 0, 0);
-        const junkGeo = mergeGeometries([junk.toNonIndexed(), wing.toNonIndexed()]);
+        const tank = new THREE.CylinderGeometry(380, 380, 1500, 12).rotateZ(Math.PI / 2).translate(1100, 0, 0);
+        const junkGeo = mergeGeometries([junk.toNonIndexed(), tank.toNonIndexed()]);
         const junkMat = new THREE.MeshStandardMaterial({ color: 0x8a8070, metalness: 0.7, roughness: 0.45, emissive: 0x0a0806 });
         for (const [g, m] of [[geo, this.material], [shard, this.iceMaterial], [junkGeo, junkMat]] as [THREE.BufferGeometry, THREE.Material][]) {
             const mesh = new THREE.InstancedMesh(g, m, max);

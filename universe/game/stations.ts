@@ -146,8 +146,7 @@ export class Satellites {
             s.mesh.lookAt(s.mesh.position.clone().add(along));
             const blink = s.mesh.getObjectByName('blink');
             if (blink) blink.visible = Math.sin(realTime * 5 + s.spec.phase * 3) > 0.6;
-            s.label.position.copy(s.mesh.position);
-            s.label.visible = camera.position.distanceTo(p.pos) < p.radius * 14;
+            s.label.visible = false; // no name tags: the models and their blinking lights speak for themselves
         }
         this.labels.update(camera, w, h);
     }
