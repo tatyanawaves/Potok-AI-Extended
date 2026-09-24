@@ -44,6 +44,7 @@ const host: LevelHost = {
     canvas,
     labelLayer: ui.labels,
     open: req => navigate([...path, req]),
+    warp: next => navigate(next),
     back: () => { if (path.length > 1) navigate(path.slice(0, -1)); },
     saveCamera: (position, quaternion, data) => {
         path[path.length - 1].resume = { position: position.toArray(), quaternion: quaternion.toArray(), data };

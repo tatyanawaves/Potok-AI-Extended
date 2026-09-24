@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
-    AU_KM, blackbodyRGB, EARTH_MARS_GAP_KM, equilibriumTemperature, keplerPeriodDays, mainSequence, mutualHillRadius,
+    AU_KM, blackbodyRGB, EARTH_MARS_GAP_KM, equilibriumTemperature, keplerPeriodDays, mainSequence, mutualHillRadius, ORBIT_SCALE,
     orbitalPosition, planckStarCoreRadiusM, planetRadiusFromMass, schwarzschildRadiusKm, SHIP_CRUISE_KM_S, solveKepler,
 } from '../universe/physics';
 import { cosmicWeb, generateSystem, kroupaMass, mandelbrot, mulberry32 } from '../universe/mandelbrot';
 import { SOLAR_SYSTEM } from '../universe/solarSystem';
 
 describe('scale of the star-system view', () => {
-    it('crosses the Earth–Mars orbital gap in 30 seconds', () => {
-        expect(EARTH_MARS_GAP_KM / SHIP_CRUISE_KM_S).toBeCloseTo(30, 6);
+    it('crosses the drawn Earth–Mars orbital gap in 12 seconds', () => {
+        expect((EARTH_MARS_GAP_KM * ORBIT_SCALE) / SHIP_CRUISE_KM_S).toBeCloseTo(12, 6);
         expect(EARTH_MARS_GAP_KM / 1e6).toBeCloseTo(78.3, 1);
     });
 });

@@ -3,11 +3,12 @@
 // scale of a dogfight.
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { NOISE } from '../shaders';
-import { AU_KM, UNIT_KM } from '../physics';
+import { SCENE_AU } from '../physics';
 import { mulberry32 } from '../mandelbrot';
 
-const AU = AU_KM / UNIT_KM; // scene units per AU
+const AU = SCENE_AU; // scene units per (drawn) AU
 
 // ---------------------------------------------------------------------------
 // Asteroid belt: thousands of particles on Kepler orbits, moved on the GPU.
@@ -257,6 +258,7 @@ const ROCK_FRAG = /* glsl */ `
 #include <logdepthbuf_pars_fragment>
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
+uniform float uIce;
 varying vec3 vObj;
 varying vec3 vNormalW;
 varying vec3 vWorld;
@@ -268,6 +270,8 @@ void main() {
     float n = fbm(p * 2.0);
     float pits = smoothstep(0.55, 0.75, abs(snoise(p * 7.0)));
     vec3 albedo = mix(vec3(0.09, 0.085, 0.08), vec3(0.24, 0.21, 0.18), smoothstep(-0.4, 0.5, n)) * (1.0 - 0.35 * pits);
+    // Comet ice: bright, bluish, streaked with dark dust.
+    albedo = mix(albedo, mix(vec3(0.25, 0.27, 0.3), vec3(0.75, 0.85, 0.95), smoothstep(-0.2, 0.6, n)), uIce);
     // Bump from the same noise, via screen-space derivatives of object-space detail.
     vec3 N = normalize(vNormalW);
     float h = n + 0.3 * pits;
@@ -275,11 +279,14 @@ void main() {
     float ndl = max(dot(N, uSunDir), 0.0);
     vec3 V = normalize(cameraPosition - vWorld);
     float rim = pow(1.0 - max(dot(N, V), 0.0), 4.0) * 0.08;
-    gl_FragColor = vec4(albedo * (uSunColor * ndl + vec3(0.02, 0.022, 0.028)) + rim * uSunColor * albedo, 1.0);
+    vec3 glow = uIce * vec3(0.05, 0.12, 0.2) * (0.6 + rim * 8.0);
+    gl_FragColor = vec4(albedo * (uSunColor * ndl + vec3(0.02, 0.022, 0.028)) + rim * uSunColor * albedo + glow, 1.0);
 }
 `;
 
-interface Rock { local: THREE.Vector3; vel: THREE.Vector3; spin: THREE.Vector3; rot: THREE.Euler; radiusKm: number; hp: number }
+/** What drifts about: stony rocks, icy comet fragments, and dead-satellite junk. */
+type DebrisKind = 0 | 1 | 2;
+interface Rock { kind: DebrisKind; local: THREE.Vector3; vel: THREE.Vector3; spin: THREE.Vector3; rot: THREE.Euler; radiusKm: number; hp: number }
 interface Meteor { local: THREE.Vector3; vel: THREE.Vector3; life: number; line: THREE.Line }
 
 export interface FieldFrame {
@@ -290,14 +297,16 @@ export interface FieldFrame {
 
 export class DebrisField {
     private rocks: Rock[] = [];
-    private mesh: THREE.InstancedMesh;
+    /** One instanced mesh per kind; instances sit relative to the mesh, which follows the ship. */
+    private meshes: THREE.InstancedMesh[] = [];
     private meteors: Meteor[] = [];
-    private meteorIn = 4;
+    private meteorIn = 2;
     private dummy = new THREE.Object3D();
     private material: THREE.ShaderMaterial;
+    private iceMaterial: THREE.ShaderMaterial;
     private rng = mulberry32(99);
 
-    constructor(private scene: THREE.Scene, private kmToUnits: number, private max = 70) {
+    constructor(private scene: THREE.Scene, private kmToUnits: number, private max = 160) {
         const geo = new THREE.IcosahedronGeometry(1000, 3); // metres; scaled per rock
         const pos = geo.attributes.position as THREE.BufferAttribute;
         const v = new THREE.Vector3();
@@ -310,14 +319,26 @@ export class DebrisField {
             pos.setXYZ(i, v.x, v.y, v.z);
         }
         geo.computeVertexNormals();
-        this.material = new THREE.ShaderMaterial({
-            vertexShader: ROCK_VERT, fragmentShader: ROCK_FRAG,
-            uniforms: { uSunDir: { value: new THREE.Vector3(1, 0, 0) }, uSunColor: { value: new THREE.Vector3(1.6, 1.55, 1.5) } },
+        const uniforms = (ice: number) => ({
+            uSunDir: { value: new THREE.Vector3(1, 0, 0) }, uSunColor: { value: new THREE.Vector3(1.6, 1.55, 1.5) }, uIce: { value: ice },
         });
-        this.mesh = new THREE.InstancedMesh(geo, this.material, max);
-        this.mesh.frustumCulled = false;
-        this.mesh.count = 0;
-        scene.add(this.mesh);
+        this.material = new THREE.ShaderMaterial({ vertexShader: ROCK_VERT, fragmentShader: ROCK_FRAG, uniforms: uniforms(0) });
+        // Comet fragments: dirty ice, sharper, with a faint blue glow of outgassing.
+        this.iceMaterial = new THREE.ShaderMaterial({ vertexShader: ROCK_VERT, fragmentShader: ROCK_FRAG, uniforms: uniforms(1) });
+        const shard = new THREE.OctahedronGeometry(1000, 1);
+        shard.scale(0.7, 1.4, 0.8);
+        // Junk: a satellite bus with a torn solar wing, lit like the ship.
+        const junk = new THREE.BoxGeometry(900, 700, 1100);
+        const wing = new THREE.BoxGeometry(2600, 40, 800).translate(1700, 0, 0);
+        const junkGeo = mergeGeometries([junk.toNonIndexed(), wing.toNonIndexed()]);
+        const junkMat = new THREE.MeshStandardMaterial({ color: 0x8a8070, metalness: 0.7, roughness: 0.45, emissive: 0x0a0806 });
+        for (const [g, m] of [[geo, this.material], [shard, this.iceMaterial], [junkGeo, junkMat]] as [THREE.BufferGeometry, THREE.Material][]) {
+            const mesh = new THREE.InstancedMesh(g, m, max);
+            mesh.frustumCulled = false;
+            mesh.count = 0;
+            scene.add(mesh);
+            this.meshes.push(mesh);
+        }
     }
 
     /** Rocks close enough to be shot at, for the combat's bolt tests. */
@@ -334,8 +355,11 @@ export class DebrisField {
         r.local.copy(me).addScaledVector(dir, first ? 3 + this.rng() * 22 : 20 + this.rng() * 6);
         r.vel.randomDirection().multiplyScalar(0.02 + this.rng() * 0.08);
         r.spin.set(this.rng() - 0.5, this.rng() - 0.5, this.rng() - 0.5).multiplyScalar(0.6);
-        r.radiusKm = 0.02 + 0.35 * Math.pow(this.rng(), 3);
+        const k = this.rng();
+        r.kind = k < 0.62 ? 0 : k < 0.85 ? 1 : 2;
+        r.radiusKm = r.kind === 2 ? 0.01 + 0.03 * this.rng() : 0.02 + 0.35 * Math.pow(this.rng(), 3);
         r.hp = 30 + r.radiusKm * 600;
+        if (r.kind === 2) r.spin.multiplyScalar(2.5); // junk tumbles
     }
 
     /**
@@ -345,13 +369,14 @@ export class DebrisField {
     update(dt: number, frame: FieldFrame, shipWorld: THREE.Vector3, shipVelKmS: THREE.Vector3, sunDir: THREE.Vector3, density: number, visible: boolean): { damage: number; broken: THREE.Vector3[] } {
         const out = { damage: 0, broken: [] as THREE.Vector3[] };
         this.material.uniforms.uSunDir.value.copy(sunDir);
+        this.iceMaterial.uniforms.uSunDir.value.copy(sunDir);
         const me = frame.toLocal(shipWorld);
-        this.mesh.visible = visible && !!me;
+        for (const m of this.meshes) m.visible = visible && !!me;
         if (!me || !visible) return out;
         const ahead = shipVelKmS.lengthSq() > 1e-6 ? shipVelKmS.clone().normalize() : new THREE.Vector3(0, 0, -1);
         const want = Math.min(this.max, Math.round(density));
         while (this.rocks.length < want) {
-            const r: Rock = { local: new THREE.Vector3(), vel: new THREE.Vector3(), spin: new THREE.Vector3(), rot: new THREE.Euler(), radiusKm: 0.1, hp: 50 };
+            const r: Rock = { kind: 0, local: new THREE.Vector3(), vel: new THREE.Vector3(), spin: new THREE.Vector3(), rot: new THREE.Euler(), radiusKm: 0.1, hp: 50 };
             this.place(r, me, ahead, true);
             this.rocks.push(r);
         }
@@ -369,20 +394,25 @@ export class DebrisField {
                 this.place(r, me, ahead, false);
             }
         }
-        this.rocks.forEach((r, i) => {
-            this.dummy.position.copy(frame.toWorld(r.local));
+        // Instances are placed relative to the ship: instance matrices are float32, which a
+        // whole AU from the Sun cannot place to better than kilometres (rocks jumped about).
+        const origin = frame.toWorld(me);
+        const counts = [0, 0, 0];
+        const rel = new THREE.Vector3();
+        for (const m of this.meshes) m.position.copy(origin);
+        for (const r of this.rocks) {
+            this.dummy.position.copy(rel.subVectors(r.local, me).multiplyScalar(this.kmToUnits));
             this.dummy.rotation.copy(r.rot);
             this.dummy.scale.setScalar((r.radiusKm * this.kmToUnits) / 1000);
             this.dummy.updateMatrix();
-            this.mesh.setMatrixAt(i, this.dummy.matrix);
-        });
-        this.mesh.count = this.rocks.length;
-        this.mesh.instanceMatrix.needsUpdate = true;
+            this.meshes[r.kind].setMatrixAt(counts[r.kind]++, this.dummy.matrix);
+        }
+        this.meshes.forEach((m, k) => { m.count = counts[k]; m.instanceMatrix.needsUpdate = true; });
 
         // Meteoroids: now and then a pebble streaks past at tens of km/s, glowing.
         this.meteorIn -= dt;
         if (this.meteorIn <= 0) {
-            this.meteorIn = 2 + this.rng() * 5;
+            this.meteorIn = 0.6 + this.rng() * 2;
             const from = me.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(8));
             const to = me.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(2));
             const vel = to.sub(from).normalize().multiplyScalar(25 + this.rng() * 40);
@@ -395,9 +425,11 @@ export class DebrisField {
         for (const m of this.meteors) {
             m.life -= dt;
             m.local.addScaledVector(m.vel, dt);
-            const head = frame.toWorld(m.local), tailPt = frame.toWorld(m.local.clone().addScaledVector(m.vel, -0.06));
-            (m.line.geometry.attributes.position as THREE.BufferAttribute).setXYZ(0, head.x, head.y, head.z);
-            (m.line.geometry.attributes.position as THREE.BufferAttribute).setXYZ(1, tailPt.x, tailPt.y, tailPt.z);
+            // The line sits at its head (a double-precision object position); its vertices stay small.
+            frame.toWorld(m.local, m.line.position);
+            const tail = m.vel.clone().multiplyScalar(-0.06 * this.kmToUnits);
+            (m.line.geometry.attributes.position as THREE.BufferAttribute).setXYZ(0, 0, 0, 0);
+            (m.line.geometry.attributes.position as THREE.BufferAttribute).setXYZ(1, tail.x, tail.y, tail.z);
             m.line.geometry.attributes.position.needsUpdate = true;
             (m.line.material as THREE.LineBasicMaterial).opacity = Math.min(1, m.life * 3);
         }
@@ -412,9 +444,7 @@ export class DebrisField {
     }
 
     dispose() {
-        this.scene.remove(this.mesh);
-        this.mesh.geometry.dispose();
-        this.material.dispose();
+        for (const m of this.meshes) { this.scene.remove(m); m.geometry.dispose(); (m.material as THREE.Material).dispose(); }
         for (const m of this.meteors) this.scene.remove(m.line);
     }
 }

@@ -19,6 +19,10 @@ export interface Mission {
     state: 'available' | 'active' | 'done' | 'failed';
     spawned: boolean;
     startedAt: number;
+    /** An errand given by someone met on the way: open at once, outside the main chain. */
+    side?: boolean;
+    /** Who gave it, for the panel. */
+    giver?: string;
 }
 
 const ENEMY_RU: Record<EnemyKind, [string, string]> = {
@@ -28,12 +32,12 @@ const ENEMY_RU: Record<EnemyKind, [string, string]> = {
     leviathan: ['левиафан', 'левиафанов'],
 };
 
-function mission(id: string, title: string, brief: string, location: string, spawn: Mission['spawn'], objectives: Objective[], reward: number): Mission {
+export function mission(id: string, title: string, brief: string, location: string, spawn: Mission['spawn'], objectives: Objective[], reward: number): Mission {
     return { id, title, brief, location, triggerKm: 40_000, spawn, objectives, reward, state: 'available', spawned: false, startedAt: 0 };
 }
 
-const kill = (enemy: EnemyKind, count: number): Objective => ({ type: 'kill', enemy, count, done: 0 });
-const reach = (body: string, withinKm: number): Objective => ({ type: 'reach', body, withinKm, done: 0 });
+export const kill = (enemy: EnemyKind, count: number): Objective => ({ type: 'kill', enemy, count, done: 0 });
+export const reach = (body: string, withinKm: number): Objective => ({ type: 'reach', body, withinKm, done: 0 });
 
 export function solarMissions(): Mission[] {
     return [
@@ -102,8 +106,21 @@ export class MissionLog {
 
     /** Missions open one after another: each needs the one before it done. */
     unlocked(m: Mission): boolean {
-        const i = this.missions.indexOf(m);
-        return i <= 0 || this.missions[i - 1].state === 'done';
+        if (m.side) return true;
+        const chain = this.missions.filter(x => !x.side);
+        const i = chain.indexOf(m);
+        return i <= 0 || chain[i - 1].state === 'done';
+    }
+
+    /** Take on an errand from a creature: added to the log and made the active mission. */
+    addSide(m: Mission, now: number): Mission {
+        m.side = true;
+        let id = m.id, k = 2;
+        while (this.missions.some(x => x.id === id)) id = `${m.id}-${k++}`;
+        m.id = id;
+        this.missions.push(m);
+        this.accept(id, now);
+        return m;
     }
 
     /** Returns false if the mission is still locked. */

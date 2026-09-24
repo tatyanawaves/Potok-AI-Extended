@@ -19,16 +19,22 @@ export const DAY_S = 86_400;
 // ---------------------------------------------------------------------------
 // Scale of the star-system view.
 //
-// One scene unit is a million kilometres, and the ship's cruise speed is set
-// so that the gap between the orbits of Earth and Mars (0.524 AU, ≈78 million
-// km, the distance at an average opposition) is crossed in 30 seconds.
+// One scene unit is a million kilometres. Bodies keep their real sizes and
+// moons their real orbits, but the orbits around the star are drawn ten times
+// tighter (ORBIT_SCALE), so the planets are neighbours rather than dots
+// lost in the dark. The ship's cruise speed crosses the drawn gap between
+// Earth's and Mars's orbits (0.524 AU, 78 million km, shown as 7.8) in 12 s.
 // ---------------------------------------------------------------------------
 export const UNIT_KM = 1e6;
+export const ORBIT_SCALE = 0.1;
+/** One astronomical unit of heliocentric distance, in scene units. */
+export const SCENE_AU = (AU_KM * ORBIT_SCALE) / UNIT_KM;
 export const EARTH_A_AU = 1.000_002_61;
 export const MARS_A_AU = 1.523_710_34;
-export const EARTH_MARS_FLIGHT_S = 30;
+export const EARTH_MARS_FLIGHT_S = 12;
 export const EARTH_MARS_GAP_KM = (MARS_A_AU - EARTH_A_AU) * AU_KM;
-export const SHIP_CRUISE_KM_S = EARTH_MARS_GAP_KM / EARTH_MARS_FLIGHT_S;
+/** Speed in scene-km per second: drawn distances, not real ones. */
+export const SHIP_CRUISE_KM_S = (EARTH_MARS_GAP_KM * ORBIT_SCALE) / EARTH_MARS_FLIGHT_S;
 export const SHIP_CRUISE_UNITS_S = SHIP_CRUISE_KM_S / UNIT_KM;
 
 const DEG = Math.PI / 180;

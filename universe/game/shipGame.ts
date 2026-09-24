@@ -6,7 +6,9 @@ import type { Action } from '../common';
 import { virtualKeys } from '../flight';
 import { UNIT_KM } from '../physics';
 import { Combat, CombatOptions } from './combat';
-import { Mission, MissionLog, objectiveText } from './missions';
+import { kill, mission, Mission, MissionLog, objectiveText, reach } from './missions';
+import { Creatures, CreatureSpec, DialogBox, TALK_KM } from './creatures';
+import type { QuestOffer, WorldBrief } from './dialogue';
 import { makeShip } from './models';
 import { DebrisField } from './spaceObjects';
 
@@ -43,10 +45,11 @@ type EnemyGroup = { kind: import('./models').EnemyKind; count: number }[];
 
 /** What you might run into between the planets. */
 const ENCOUNTERS: { weight: number; text: string; groups: EnemyGroup }[] = [
-    { weight: 45, text: 'Перехват! Звено дронов-разведчиков', groups: [{ kind: 'drone', count: 3 }] },
-    { weight: 25, text: 'Пиратская засада!', groups: [{ kind: 'fighter', count: 2 }, { kind: 'drone', count: 1 }] },
-    { weight: 20, text: 'Рой кристаллидов идёт на таран!', groups: [{ kind: 'crystal', count: 6 }] },
-    { weight: 10, text: 'Из темноты выплывает космический левиафан…', groups: [{ kind: 'leviathan', count: 1 }] },
+    { weight: 30, text: 'Перехват! Звено дронов-разведчиков', groups: [{ kind: 'drone', count: 5 }] },
+    { weight: 25, text: 'Пиратская засада!', groups: [{ kind: 'fighter', count: 3 }, { kind: 'drone', count: 2 }] },
+    { weight: 20, text: 'Рой кристаллидов идёт на таран!', groups: [{ kind: 'crystal', count: 9 }] },
+    { weight: 15, text: 'Пираты гонят рой кристаллидов на вас!', groups: [{ kind: 'fighter', count: 2 }, { kind: 'crystal', count: 5 }] },
+    { weight: 10, text: 'Из темноты выплывает космический левиафан…', groups: [{ kind: 'leviathan', count: 1 }, { kind: 'crystal', count: 3 }] },
 ];
 
 export class ShipGame {
@@ -62,10 +65,12 @@ export class ShipGame {
     private bank = 0;
     private lean = 0;
     private flash = 0;
+    /** Which gun fires next. */
+    private gun = 0;
     private time = 0;
     private mouseFiring = false;
     /** Seconds until the next chance of running into something in open space. */
-    private encounterIn = 20 + Math.random() * 20;
+    private encounterIn = 12 + Math.random() * 10;
     private field: DebrisField | null = null;
     private keys = new Set<string>();
     private mouse: THREE.Vector2 | null = null;
@@ -81,6 +86,7 @@ export class ShipGame {
         if (e.code === 'Space') e.preventDefault();
         if (e.code === 'KeyV') this.toggleView();
         if (e.code === 'KeyM') this.togglePanel();
+        if (e.code === 'KeyT') this.talk();
     };
     private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
     private onMouseDown = (e: MouseEvent) => {
@@ -105,6 +111,8 @@ export class ShipGame {
         combat: CombatOptions = {},
         /** Chance meetings with enemies, away from any mission. */
         private encounters = true,
+        /** Creatures to talk to, and what they may know of the system. */
+        social?: { creatures: CreatureSpec[]; world: WorldBrief },
     ) {
         this.KM = combat.unitsPerKm ?? 1 / UNIT_KM;
         this.M = this.KM / 1000;
@@ -116,6 +124,12 @@ export class ShipGame {
         if ((combat.unitsPerKm ?? 1 / UNIT_KM) < 1) {
             this.field = new DebrisField(scene, this.KM);
             this.combat.extraTargets = () => this.field!.targets();
+        }
+        if (social?.creatures.length) {
+            this.creatures = new Creatures(scene, labelLayer, social.creatures, this.KM);
+            this.world = social.world;
+            this.dialog = new DialogBox();
+            this.dialog.onQuest = (q, spec) => this.takeErrand(q, spec);
         }
         if (!logs.has(key)) logs.set(key, new MissionLog(missions()));
         this.log = logs.get(key)!;
@@ -196,7 +210,7 @@ export class ShipGame {
             el.innerHTML = `<b></b><p></p><small></small>`;
             el.querySelector('b')!.textContent = m.title;
             el.querySelector('p')!.textContent = m.brief;
-            el.querySelector('small')!.textContent = `Где: ${m.location} · награда ${m.reward} ${state ? '· ' + state : ''}`;
+            el.querySelector('small')!.textContent = `${m.giver ? `От: ${m.giver} · ` : ''}Где: ${m.location} · награда ${m.reward} ${state ? '· ' + state : ''}`;
             if (m.state !== 'done' && m.state !== 'active') {
                 const btn = document.createElement('button');
                 const open = this.log.unlocked(m);
@@ -218,6 +232,47 @@ export class ShipGame {
 
     private lastNow = 0;
 
+    private creatures: Creatures | null = null;
+    private dialog: DialogBox | null = null;
+    private world: WorldBrief = { system: '', bodies: [] };
+    /** The creature within talking range, if any. */
+    private near: ReturnType<Creatures['update']> = null;
+    /** Errands handed out, by creature id: the mission they became. */
+    private errands = new Map<string, Mission>();
+
+    /** Creatures of this system and where they are now (positions update in place). */
+    get residents(): { name: string; emoji: string; pos: THREE.Vector3 }[] {
+        return (this.creatures?.all ?? []).map(c => ({ name: c.spec.name, emoji: c.spec.emoji, pos: c.pos }));
+    }
+
+    /** Move the creatures with their home worlds (call after the bodies move, before the ship does). */
+    placeResidents() {
+        this.creatures?.place(this.time, this.bodyByName);
+    }
+
+    /** A conversation is on: the ship holds still and does not shoot. */
+    get talking(): boolean { return !!this.dialog?.open; }
+
+    talk() {
+        if (!this.dialog || !this.near || this.dialog.open) return;
+        const spec = this.near.c.spec;
+        const m = this.errands.get(spec.id);
+        const state = !m ? 'none' : m.state === 'active' ? 'active' : m.state === 'done' ? 'done' : 'none';
+        if (state === 'done') this.errands.delete(spec.id);
+        this.dialog.start(spec, this.world, state);
+    }
+
+    private takeErrand(q: QuestOffer, spec: CreatureSpec) {
+        const m = q.type === 'kill'
+            ? mission(`side-${spec.id}`, q.title, q.brief, q.body, [{ kind: q.enemy!, count: q.count! }], [kill(q.enemy!, q.count!)], q.reward)
+            : mission(`side-${spec.id}`, q.title, q.brief, q.body, [], [reach(q.body, 30_000)], q.reward);
+        m.giver = spec.name;
+        this.log.addSide(m, this.lastNow);
+        this.errands.set(spec.id, m);
+        this.renderPanel();
+        this.toast(`Поручение от ${spec.name}: «${m.title}». Цель — ${m.location}`);
+    }
+
     /** Where the active mission wants the pilot to go, for the planet label. */
     get objectiveBody(): string | null {
         const o = this.log.current();
@@ -228,8 +283,11 @@ export class ShipGame {
     /** Speed cap while enemies are close, km/s → scene units/s. */
     speedLimit(pilotPos: THREE.Vector3, boosted: boolean): number {
         const local = this.combat.toLocal(pilotPos);
-        if (!this.combat.engaged(local)) return Infinity;
-        return (boosted ? 40 : 4) * this.KM;
+        let limit = this.combat.engaged(local) ? (boosted ? 40 : 4) * this.KM : Infinity;
+        // Easing in towards a creature, the way the ship slows near a surface, so it is not overshot.
+        const km = this.creatures?.nearestKm(pilotPos) ?? Infinity;
+        if (km < 50_000) limit = Math.min(limit, Math.max(1, (km - TALK_KM * 0.3) * 0.7) * this.KM * (boosted ? 5 : 1));
+        return limit;
     }
 
     actions(): Action[] {
@@ -237,6 +295,9 @@ export class ShipGame {
         return [
             { label: `🎯 Миссии${active ? ' ●' : ''} (M)`, title: 'Список заданий', run: () => this.togglePanel(), active: () => !this.hud.panel.hidden },
             { label: this.view === 'third' ? '👁 Вид из кабины (V)' : '🚀 Вид от 3-го лица (V)', run: () => this.toggleView() },
+            ...(this.near && !this.talking
+                ? [{ label: `💬 Поговорить: ${this.near.c.spec.name} (T)`, title: this.near.c.spec.species, run: () => this.talk() }]
+                : []),
         ];
     }
 
@@ -245,12 +306,19 @@ export class ShipGame {
         this.lastPilot = f.pilot;
         this.time += dt;
         const locked = document.pointerLockElement === this.canvas;
-        const firing = this.keys.has('Space') || virtualKeys.has('Space') || this.mouseFiring;
+        const firing = !this.talking && (this.keys.has('Space') || virtualKeys.has('Space') || this.mouseFiring);
         if (firing && !f.free) this.wantsFree = true;
 
         // The combat frame rides along with the nearest body until a mission pins it somewhere.
         if (!this.combat.anchor || (this.combat.enemyCount === 0 && this.combat.anchor.name !== f.nearest.name)) {
             this.combat.anchor = f.nearest;
+        }
+
+        if (this.creatures) {
+            const was = this.near?.c;
+            this.near = this.creatures.update(this.time, f.pilot.position, f.camera, f.width, f.height);
+            const c = this.near?.c;
+            if (c && c !== was && !this.talking) this.toast(`${c.spec.emoji} ${c.spec.name} рядом — нажмите T, чтобы поговорить`);
         }
 
         // Missions: ambushes spring when the ship nears the mission's body.
@@ -268,10 +336,11 @@ export class ShipGame {
             }
         }
         // Open space is not empty: now and then something finds you.
-        if (this.encounters && f.free && this.combat.enemyCount === 0 && !this.combat.player.dead) {
+        // A quiet spell after a fight, then the next wave; a lone straggler does not hold it up.
+        if (this.encounters && f.free && this.combat.enemyCount <= 1 && !this.combat.player.dead && !this.talking) {
             this.encounterIn -= dt;
             if (this.encounterIn <= 0) {
-                this.encounterIn = 70 + Math.random() * 80;
+                this.encounterIn = 25 + Math.random() * 25;
                 let r = Math.random() * 100;
                 const e = ENCOUNTERS.find(x => (r -= x.weight) < 0) ?? ENCOUNTERS[0];
                 const ahead = new THREE.Vector3(0, 0, -1).applyQuaternion(f.pilot.quaternion);
@@ -288,7 +357,6 @@ export class ShipGame {
         // Shooting: at the crosshair (screen centre) with a captured mouse, else at the cursor,
         // converging on a point 3 km out.
         const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(f.pilot.quaternion);
-        const nose = f.pilot.position.clone().addScaledVector(forward, 25 * this.M);
         if (firing && f.free) {
             const m = !locked && this.mouse ? this.mouse : new THREE.Vector2();
             const look = new THREE.Vector3(m.x, m.y, 0.5).applyMatrix4(f.camera.projectionMatrixInverse)
@@ -297,8 +365,12 @@ export class ShipGame {
             // carried along with the planet, thousands of km a frame), so a Raycaster from its
             // last pose shoots nowhere near the crosshair: rebuild the eye from this frame's pilot.
             const eye = f.pilot.position.clone().add(this.camOffset);
-            const dir = eye.addScaledVector(look, 3 * this.KM).sub(nose).normalize();
-            if (this.combat.fire(nose, dir, f.velocity.clone().divideScalar(this.KM))) this.flash = 1;
+            // Left and right guns in turn, their tracers converging on the aim point: from behind,
+            // a shot straight out of the nose is a dot hidden by the hull; from the wings it is a streak.
+            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(f.pilot.quaternion);
+            const port = f.pilot.position.clone().addScaledVector(forward, 8 * this.M).addScaledVector(right, (this.gun ? 9 : -9) * this.M);
+            const dir = eye.addScaledVector(look, 3 * this.KM).sub(port).normalize();
+            if (this.combat.fire(port, dir, f.velocity.clone().divideScalar(this.KM))) { this.flash = 1; this.gun ^= 1; }
         }
         this.hud.cross.hidden = !f.free || !locked;
 
@@ -359,10 +431,11 @@ export class ShipGame {
         const aim = f.free && f.aim ? f.aim : f.pilot.quaternion;
         if (showShip) {
             // Behind and above the ship along the gaze, so looking around swings the camera round the hull.
-            const offset = new THREE.Vector3(0, 14, 70).multiplyScalar(this.M).applyQuaternion(aim);
+            // High enough that the aim point (where the tracers converge) sits clear above the hull.
+            const offset = new THREE.Vector3(0, 18, 80).multiplyScalar(this.M).applyQuaternion(aim);
             f.camera.position.copy(f.pilot.position).add(offset);
             this.camOffset.copy(offset);
-            f.camera.quaternion.copy(aim).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.08));
+            f.camera.quaternion.copy(aim).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.1));
         } else {
             f.camera.position.copy(f.pilot.position);
             this.camOffset.set(0, 0, 0);
@@ -410,6 +483,8 @@ export class ShipGame {
         this.canvas.removeEventListener('pointermove', this.onPointer);
         this.combat.dispose();
         this.field?.dispose();
+        this.creatures?.dispose();
+        this.dialog?.dispose();
         this.hud.root.remove();
         this.scene.remove(this.ship, this.sun, this.sun.target, this.fill);
     }

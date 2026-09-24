@@ -10,6 +10,8 @@ export interface LevelHost {
     labelLayer: HTMLElement;
     /** Replace the current level by a child one (pushes onto the breadcrumb path). */
     open(request: LevelRequest): void;
+    /** Jump to a whole new place in the universe (a portal): replaces the breadcrumb path. */
+    warp(path: LevelRequest[]): void;
     /** Go up one level, as if the pilot flew out of this one. */
     back(): void;
     /** Remember where the camera is, so coming back up returns here instead of to the overview. */

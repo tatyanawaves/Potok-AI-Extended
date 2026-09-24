@@ -3,18 +3,23 @@ import {
     Action, disposeObject, escapeHtml, Label, Labels, Level, LevelHost, pickPoint, pixelScale, ProximityTrigger, row,
     spriteMaterial, starfield,
 } from '../common';
-import { GalaxySpec, generateSystem, mulberry32, PlanetKind, SystemSpec } from '../mandelbrot';
+import {
+    galaxyFromWeb, GalaxySpec, galaxyTypeName, generateSystem, hash32, kroupaMass, MILKY_WAY, mulberry32, PlanetKind, SystemSpec,
+} from '../mandelbrot';
+import type { LevelRequest } from '../common';
 import {
     AU_KM, blackbodyRGB, C_KM_S, daysSinceJ2000, DAY_S, equilibriumTemperature, escapeVelocity, EARTH_PER_SUN_MASS,
     fmtDistanceKm, fmtDuration, fmtNum, frostLine, habitableZone, mainSequence, OrbitalElements, orbitalPosition,
     orbitPointAtE, EARTH_MARS_FLIGHT_S, EARTH_MARS_GAP_KM, R_EARTH_KM, R_SUN_KM, solveKepler, spectralClass,
-    surfaceGravity, UNIT_KM, visViva,
+    surfaceGravity, ORBIT_SCALE, SCENE_AU, UNIT_KM, visViva,
 } from '../physics';
 import { BodyData, SOLAR_SYSTEM, SUN } from '../solarSystem';
 import { FLY_HELP, FlyController, SHIP_HELP } from '../flight';
 import { ShipGame } from '../game/shipGame';
 import { Comet, makeBelt, makeComet, updateComet } from '../game/spaceObjects';
 import { generatedMissions, solarMissions } from '../game/missions';
+import { generatedCreatures, solarCreatures, TALK_KM } from '../game/creatures';
+import { generatedSatellites, PortalSpec, Portals, Satellites, SOLAR_SATELLITES } from '../game/stations';
 import { AtmosphereParams, landable, surfaceFor } from '../atmosphere';
 import { ATMO_SHELL_FRAG } from '../planetShaders';
 import type { CameraState } from '../common';
@@ -91,6 +96,8 @@ function lookFor(kind: Kind, name: string, seed: number): Look {
 
 /** Kinematic model of the ship: cruise speed from the chosen scale, and a brisk but finite acceleration. */
 const ACCEL = 6; // scene units per s²  (the whole speed-up takes under half a second)
+/** Autopilot time constant: beyond cruise range it closes the distance as e^(−t/τ). */
+const AUTO_TAU = 5;
 const toThree = (e: number[], out: THREE.Vector3) => out.set(e[0], e[2], -e[1]);
 
 export class StarSystemLevel implements Level {
@@ -102,7 +109,7 @@ export class StarSystemLevel implements Level {
     private game: ShipGame;
     readonly title: string;
     readonly bloom = { strength: 0.7, radius: 0.5, threshold: 0.8 };
-    readonly help = `${SHIP_HELP} · Пробел/ЛКМ — огонь · X — стоп · V — вид · L — посадка · M — миссии · Enter — автопилот к цели · Esc — отпустить мышь`;
+    readonly help = `${SHIP_HELP} · Пробел/ЛКМ — огонь · T — поговорить · X — стоп · V — вид · L — посадка · M — миссии · Enter — автопилот к цели · Esc — отпустить мышь`;
 
     private system: SystemSpec | null = null;
     private starMassSun: number;
@@ -121,7 +128,11 @@ export class StarSystemLevel implements Level {
     private realTime = 0;
 
     // Ship
-    private mode: 'free' | 'auto' | 'orbit' = 'orbit';
+    private mode: 'free' | 'auto' | 'orbit' | 'nav' = 'orbit';
+    /** Autopilot to a point that is not a body: a portal (flown through) or a creature (stopped beside). */
+    private nav: { name: string; pos: () => THREE.Vector3 | null; stopKm: number; through: boolean; last: THREE.Vector3 } | null = null;
+    private satellites!: Satellites;
+    private portals!: Portals;
     private target: Body | null = null;
     private orbitOffset = new THREE.Vector3();
     private ctl: FlyController;
@@ -131,8 +142,8 @@ export class StarSystemLevel implements Level {
     private flightStart = 0;
     private flightFrom = '';
     private lastFlight = '';
-    /** The scale: the 78 million km between Earth and Mars at an average opposition take 30 s. */
-    private readonly cruise = EARTH_MARS_GAP_KM / UNIT_KM / EARTH_MARS_FLIGHT_S;
+    /** The scale: the Earth–Mars gap, drawn ten times tighter, takes 12 s. */
+    private readonly cruise = (EARTH_MARS_GAP_KM * ORBIT_SCALE) / UNIT_KM / EARTH_MARS_FLIGHT_S;
     /** Radius of the outermost orbit; flying three times farther leaves for the galaxy. */
     private outer = 1;
     private leave = new ProximityTrigger(1);
@@ -213,7 +224,7 @@ export class StarSystemLevel implements Level {
         this.outer = outer;
 
         // The asteroid belt: between Mars and Jupiter here, just inside the snow line elsewhere.
-        const AU = AU_KM / UNIT_KM;
+        const AU = SCENE_AU;
         const frost = this.system ? this.system.frost : 2.7;
         this.beltRange = this.system ? [frost * 0.7 * AU, frost * 0.95 * AU] : [2.1 * AU, 3.3 * AU];
         this.belt = makeBelt(this.beltRange[0], this.beltRange[1], galaxy.seed ^ (this.system?.seed ?? 7));
@@ -250,7 +261,16 @@ export class StarSystemLevel implements Level {
         const planetNames = this.bodies.filter(b => b.parent?.kind === 'star').map(b => b.name);
         this.game = new ShipGame(this.scene, host.canvas, host.labelLayer, this.system ? `sys:${this.system.seed}` : 'sys:sun',
             () => this.system ? generatedMissions(planetNames, this.system.seed) : solarMissions(),
-            name => this.bodies.find(b => b.name === name), text => host.toast(text));
+            name => this.bodies.find(b => b.name === name), text => host.toast(text), {}, true,
+            {
+                creatures: this.system ? generatedCreatures(planetNames, this.system.seed) : solarCreatures(),
+                world: { system: this.title, bodies: this.bodies.filter(b => b.kind !== 'star').map(b => b.name) },
+            });
+        this.satellites = new Satellites(this.scene, host.labelLayer, this.system ? generatedSatellites(planetNames) : SOLAR_SATELLITES, 1 / UNIT_KM / 1000);
+        this.portals = new Portals(this.scene, host.labelLayer, this.portalSpecs(), spec => {
+            const b = this.bodies.find(x => x.name === spec.near)!;
+            return Math.min(9000, Math.max(1800, b.radiusKm * 0.6)) / UNIT_KM;
+        });
         // Start at the controls, beside the home planet, looking at it.
         this.pilot.position.copy(home.pos).add(this.orbitOffset);
         this.pilot.lookAt(home.pos);
@@ -372,8 +392,9 @@ export class StarSystemLevel implements Level {
         }
 
         this.scene.add(group);
+        // Orbits round the star are drawn tighter; moons keep their real distances.
         const el: OrbitalElements = {
-            a: d.aKm / UNIT_KM, e: d.e, i: d.i, node: d.node, peri: d.peri, M0: d.M0, period: d.periodDays,
+            a: (d.aKm / UNIT_KM) * (parent.kind === 'star' ? ORBIT_SCALE : 1), e: d.e, i: d.i, node: d.node, peri: d.peri, M0: d.M0, period: d.periodDays,
         };
         const body: Body = {
             name: d.name, kind, radius, radiusKm: d.radiusKm, massEarth: d.massEarth, parent, el, aKm: d.aKm,
@@ -533,10 +554,72 @@ export class StarSystemLevel implements Level {
         });
     }
 
+    /**
+     * Portals out of this system: to another star of this galaxy, to another
+     * galaxy, to the galaxy's central black hole, and home (or to the whole web).
+     */
+    private portalSpecs(): PortalSpec[] {
+        const rng = mulberry32((this.system?.seed ?? 0x50da) ^ this.galaxy.seed ^ 0x9071a1);
+        const planets = this.bodies.filter(b => b.parent?.kind === 'star').map(b => b.name);
+        if (!planets.length) return [];
+        const at = (i: number) => planets[Math.min(planets.length - 1, i)];
+        const web: LevelRequest = { kind: 'web' };
+        const inGalaxy = (g: GalaxySpec, last: LevelRequest): LevelRequest[] => [web, { kind: 'galaxy', galaxy: g }, last];
+        const specs: PortalSpec[] = [];
+
+        const seed = hash32(this.galaxy.seed, Math.floor(rng() * 1e9));
+        const mass = kroupaMass(rng, 0.5, 2.2);
+        const other = generateSystem(seed, mass);
+        specs.push({
+            title: `Система ${other.name} · ${this.galaxy.name}`, near: at(this.system ? 0 : 2), distRadii: 7, angle: 0.9, color: 0x44e0ff,
+            go: () => this.warp(`система ${other.name}`, inGalaxy(this.galaxy, { kind: 'system', galaxy: this.galaxy, star: { seed, mass } })),
+        });
+        const g2 = galaxyFromWeb(Math.floor(rng() * 1e6), rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1, rng());
+        const seed2 = hash32(g2.seed, 1 + Math.floor(rng() * 1e6)), mass2 = kroupaMass(rng, 0.6, 2);
+        specs.push({
+            title: `Галактика ${g2.name} (${galaxyTypeName(g2.type)})`, near: at(this.system ? 1 : 4), distRadii: 4, angle: -0.7, color: 0xc070ff,
+            go: () => this.warp(`галактика ${g2.name}`, inGalaxy(g2, { kind: 'system', galaxy: g2, star: { seed: seed2, mass: mass2 } })),
+        });
+        const bh = this.galaxy.isMilkyWay ? 'Стрелец A*' : `ядро ${this.galaxy.name}`;
+        specs.push({
+            title: `Чёрная дыра: ${bh}`, near: at(this.system ? 2 : 3), distRadii: 8, angle: 2.2, color: 0xff7a30,
+            go: () => this.warp(`чёрная дыра ${bh}`, inGalaxy(this.galaxy, { kind: 'blackhole', galaxy: this.galaxy })),
+        });
+        if (this.system) {
+            specs.push({
+                title: 'Солнечная система · Млечный Путь', near: at(planets.length - 1), distRadii: 6, angle: 0.4, color: 0xffd166,
+                go: () => this.warp('Солнечная система', inGalaxy(MILKY_WAY, { kind: 'system', galaxy: MILKY_WAY, star: 'sun' })),
+            });
+        } else {
+            specs.push({
+                title: 'Вся Вселенная — космическая паутина', near: at(planets.length - 1), distRadii: 6, angle: 0.4, color: 0xffd166,
+                go: () => this.warp('космическая паутина', [web]),
+            });
+        }
+        return specs;
+    }
+
+    private warp(where: string, path: LevelRequest[]) {
+        this.host.toast(`Портал: прыжок — ${where}`);
+        this.host.warp(path);
+    }
+
+    /** Autopilot to a portal (through it) or to a creature (to talking range). */
+    private navTo(name: string, pos: () => THREE.Vector3 | null, stopKm: number, through: boolean) {
+        const p = pos();
+        if (!p) return;
+        this.nav = { name, pos, stopKm, through, last: p.clone() };
+        this.mode = 'nav';
+        this.ctl.enabled = false;
+        this.flightStart = this.realTime;
+        this.speed = Math.min(this.speed, this.cruise);
+    }
+
     /** Hand the camera to the pilot, keeping where it looks. */
     private goFree() {
         if (this.mode === 'free') return;
         this.mode = 'free';
+        this.nav = null;
         this.ctl.enabled = true;
         this.ctl.sync();
     }
@@ -545,16 +628,26 @@ export class StarSystemLevel implements Level {
         const list: Action[] = [...this.game.actions()];
         if (this.target && this.mode !== 'auto') list.push({ label: `▶ Лететь: ${this.target.name}`, run: () => this.flyTo(this.target!) });
         if (this.target && landable(this.target.kind)) list.push({ label: `🪂 Сесть: ${this.target.name} (L)`, title: 'Спуститься на поверхность', run: () => this.landOn(this.target!) });
-        if (this.target && this.mode === 'auto') list.push({ label: '■ Стоп', run: () => { this.goFree(); this.ctl.stop(); this.speed = 0; } });
+        if ((this.target && this.mode === 'auto') || this.mode === 'nav') list.push({ label: '■ Стоп', run: () => { this.goFree(); this.ctl.stop(); this.speed = 0; } });
         if (this.mode !== 'free') list.push({ label: '✈ Свободный полёт', title: FLY_HELP, run: () => this.goFree() });
         return list;
     }
 
     targets(): Action[] {
-        return this.bodies.map(b => ({
+        const list: Action[] = this.bodies.map(b => ({
             label: `${b.kind === 'moon' ? '  · ' : ''}${b.name}`,
             run: () => { this.select(b); this.flyTo(b); },
         }));
+        for (const r of this.game.residents) {
+            list.push({ label: `${r.emoji} ${r.name}`, title: 'Лететь к существу и поговорить', run: () => this.navTo(r.name, () => r.pos, TALK_KM * 0.5, false) });
+        }
+        for (const p of this.portals.list) {
+            list.push({
+                label: `🌀 ${p.spec.title}`, title: 'Лететь в портал',
+                run: () => this.navTo(p.spec.title, () => (this.portals.place(p, n => this.bodies.find(b => b.name === n), this.bodies[0].pos) ? p.pos : null), 0, true),
+            });
+        }
+        return list;
     }
 
     private dateString() {
@@ -573,7 +666,8 @@ export class StarSystemLevel implements Level {
         const cruiseKms = this.cruise * UNIT_KM;
         html += row('Крейсерская скорость', `${fmtNum(cruiseKms / 1e6)} млн км/с ≈ ${fmtNum(cruiseKms / C_KM_S)} c`);
         html += row('Земля → Марс (среднее противостояние, 78 млн км)', `${EARTH_MARS_FLIGHT_S} с полёта`);
-        html += row('Размеры планет', 'реальные');
+        html += row('Размеры планет и орбиты спутников', 'реальные');
+        html += row('Расстояния от звезды', `сжаты в ${fmtNum(1 / ORBIT_SCALE)} раз`);
         if (this.system) {
             html += `<p>Система выведена из орбиты z → z² + c точки c = ${this.system.c[0].toFixed(3)} ${this.system.c[1] >= 0 ? '+' : '−'} ${Math.abs(this.system.c[1]).toFixed(3)}i
             у границы множества Мандельброта: время ухода — число планет, |z| — шаг орбит, arg z — фаза.
@@ -592,7 +686,7 @@ export class StarSystemLevel implements Level {
                 html += row('Масса', `${fmtNum(this.starMassSun)} M☉`);
                 html += row('Радиус', `${fmtNum(st.R)} R☉ = ${fmtNum(t.radiusKm)} км`);
             } else if (t.el && t.parent) {
-                const rKm = t.pos.distanceTo(t.parent.pos) * UNIT_KM;
+                const rKm = t.pos.distanceTo(t.parent.pos) * UNIT_KM / (t.parent.kind === 'star' ? ORBIT_SCALE : 1);
                 const mu = t.parent.kind === 'star' ? this.starMassSun : (t.parent.massEarth + t.massEarth) / EARTH_PER_SUN_MASS;
                 html += row('Большая полуось', t.parent.kind === 'star' ? `${fmtNum(t.aKm / AU_KM)} а.е.` : fmtDistanceKm(t.aKm));
                 html += row('Эксцентриситет', fmtNum(t.el.e));
@@ -604,7 +698,7 @@ export class StarSystemLevel implements Level {
                 html += row('Гравитация на поверхности', `${fmtNum(surfaceGravity(mE, rE))} м/с²`);
                 html += row('Вторая космическая', `${fmtNum(escapeVelocity(mE, rE))} км/с`);
                 const star = this.bodies[0];
-                const dAU = t.pos.distanceTo(star.pos) * UNIT_KM / AU_KM;
+                const dAU = t.pos.distanceTo(star.pos) / SCENE_AU;
                 html += row('Освещённость', `${fmtNum(1361 * L / (dAU * dAU))} Вт/м²`);
                 html += row('Равновесная температура', `${fmtNum(equilibriumTemperature(L, dAU, t.albedo))} K`);
                 html += row('Сутки', fmtDuration(Math.abs(t.dayDays) * DAY_S) + (t.dayDays < 0 ? ' (ретроградно)' : ''));
@@ -617,14 +711,18 @@ export class StarSystemLevel implements Level {
         const d = Math.max(0, this.pilot.position.distanceTo(b.pos) - this.parkDistance(b));
         const v = this.cruise;
         const dRamp = (v * v) / ACCEL; // accelerate + decelerate
-        return d < dRamp ? 2 * Math.sqrt(d / ACCEL) : d / v + v / ACCEL;
+        if (d < dRamp) return 2 * Math.sqrt(d / ACCEL);
+        const dCruise = v * AUTO_TAU; // closer than this the autopilot flies at cruise speed
+        return d < dCruise ? d / v + v / ACCEL : AUTO_TAU * (1 + Math.log(d / dCruise)) + v / ACCEL;
     }
 
     status(): string {
         const kms = this.speed * UNIT_KM;
         const speed = kms <= 0 ? '0' : `${kms >= 1e6 ? `${fmtNum(kms / 1e6)} млн` : fmtNum(kms)} км/с (${fmtNum(kms / C_KM_S)} c)`;
         let s = `Скорость: ${speed}`;
-        if (this.mode === 'auto' && this.target) {
+        if (this.mode === 'nav' && this.nav) {
+            s += ` · автопилот → ${this.nav.name}`;
+        } else if (this.mode === 'auto' && this.target) {
             s += ` · автопилот → ${this.target.name} · в пути ${(this.realTime - this.flightStart).toFixed(1)} с · осталось ≈ ${fmtDuration(this.eta(this.target))}`;
         } else if (this.mode === 'orbit' && this.target) {
             s += ` · на орбите: ${this.target.name}`;
@@ -642,6 +740,10 @@ export class StarSystemLevel implements Level {
         this.realTime += dt;
         this.tDays += (dt * this.timeScale) / DAY_S;
         this.updatePositions(dt);
+        // Creatures ride with their worlds: place them now, so the autopilot aims at where they are.
+        this.game.placeResidents();
+        // In conversation the ship holds still; the controls come back when it ends.
+        if (this.mode === 'free') this.ctl.enabled = !this.game.talking;
         this.fly(dt);
         if (this.game.wantsFree) { this.game.wantsFree = false; this.goFree(); }
         this.game.update(dt, {
@@ -669,7 +771,7 @@ export class StarSystemLevel implements Level {
         const px = pixelScale(this.camera, this.height);
         const spritePos = this.sprites.geometry.attributes.position as THREE.BufferAttribute;
         const tmp = new THREE.Vector3();
-        const overview = this.nearestSurface(this.camera.position).dist > 0.3 * AU_KM / UNIT_KM;
+        const overview = this.nearestSurface(this.camera.position).dist > 0.3 * SCENE_AU;
         this.bodies.forEach((b, i) => {
             spritePos.setXYZ(i, b.pos.x, b.pos.y, b.pos.z);
             if (b.kind === 'star') {
@@ -681,7 +783,7 @@ export class StarSystemLevel implements Level {
                 u.uSun.value.copy(star.pos);
                 u.uTime.value = this.realTime;
                 // Illuminance falls as 1/d²; the view adapts like an eye (a gentle power law).
-                const dAU = Math.max(b.pos.distanceTo(star.pos) * UNIT_KM / AU_KM, 0.01);
+                const dAU = Math.max(b.pos.distanceTo(star.pos) / SCENE_AU, 0.01);
                 const intensity = 1.05 * Math.pow(this.starL / (dAU * dAU), 0.3);
                 u.uStarIntensity.value = intensity;
                 u.uCenter.value.copy(b.pos);
@@ -710,13 +812,18 @@ export class StarSystemLevel implements Level {
             // Moon labels only near their planet; planet labels hide once the planet fills the view.
             const camDist = this.camera.position.distanceTo(b.pos);
             if (b.kind === 'moon' && b.parent) {
-                b.label.visible = this.camera.position.distanceTo(b.parent.pos) < b.el!.a * 40;
-                if (b.orbitLine) b.orbitLine.visible = b.label.visible;
+                const fromParent = this.camera.position.distanceTo(b.parent.pos);
+                b.label.visible = fromParent < b.el!.a * 40;
+                // Only from outside the orbit: from inside, the ring is a line slicing across the view.
+                if (b.orbitLine) b.orbitLine.visible = b.label.visible && fromParent > b.el!.a * 1.3;
             } else {
                 b.label.visible = b.radius / camDist * px < 60;
                 // Up close a planet's own orbit is a line through the camera; hide it.
                 // Near the planets, other orbits are just lines slicing across the view: show only the target's.
-                if (b.orbitLine) b.orbitLine.visible = (overview || b === this.target) && (!b.el || camDist > b.el.a * 0.02);
+                // And never when the camera is close to the ellipse itself: the ring would pass through the view.
+                const rc = b.parent ? this.camera.position.distanceTo(b.parent.pos) : 0;
+                const onOrbit = !!b.el && Math.abs(rc - b.el.a) < b.el.a * 0.2;
+                if (b.orbitLine) b.orbitLine.visible = (overview || b === this.target) && !onOrbit;
             }
             b.label.position.copy(b.pos);
             b.label.el.classList.toggle('target', b === this.target);
@@ -735,10 +842,13 @@ export class StarSystemLevel implements Level {
             const pos = toThree(e3, new THREE.Vector3()).add(star.pos);
             updateComet(c.comet, pos, star.pos, this.realTime, px);
             c.label.position.copy(pos);
-            c.label.visible = pos.distanceTo(star.pos) < 8 * AU_KM / UNIT_KM; // named only while it is active
+            c.label.visible = pos.distanceTo(star.pos) < 8 * SCENE_AU; // named only while it is active
         }
 
         this.labels.update(this.camera, this.width, this.height);
+        const byName = (n: string) => this.bodies.find(b => b.name === n);
+        this.satellites.update(this.realTime, byName, this.camera, this.width, this.height);
+        this.portals.update(this.realTime, this.pilot.position, byName, star.pos, this.camera, this.width, this.height);
     }
 
     /** Rocks around the ship: a few everywhere, many inside the asteroid belt. */
@@ -746,7 +856,7 @@ export class StarSystemLevel implements Level {
         const p = this.pilot.position.clone().sub(this.bodies[0].pos);
         const r = Math.hypot(p.x, p.z);
         const inBelt = r > this.beltRange[0] && r < this.beltRange[1] && Math.abs(p.y) < r * 0.12;
-        return inBelt ? 60 : 10;
+        return inBelt ? 140 : 45;
     }
 
     /**
@@ -776,13 +886,19 @@ export class StarSystemLevel implements Level {
         }
         if (this.mode === 'auto' && this.target) {
             const t = this.target;
+            // Ride along with the body's motion this frame, then close the gap to where it is now.
+            cam.position.addScaledVector(t.vel, dt);
             const to = new THREE.Vector3().subVectors(t.pos, cam.position);
             const remaining = to.length() - this.parkDistance(t);
             // Trapezoidal profile: accelerate, cruise, and brake so we stop exactly at the parking orbit.
-            const vBrake = Math.sqrt(2 * ACCEL * Math.max(remaining, 0));
-            this.speed = Math.min(this.cruise, this.speed + ACCEL * dt, vBrake);
+            // Far targets are approached faster (speed ∝ distance left), so even Neptune is under half a minute.
+            const vMax = Math.max(this.cruise, remaining / AUTO_TAU);
+            const accel = Math.max(ACCEL, vMax);
+            const vBrake = Math.sqrt(2 * accel * Math.max(remaining, 0));
+            this.speed = Math.min(vMax, this.speed + accel * dt, vBrake);
             const step = Math.min(this.speed * dt, Math.max(remaining, 0));
-            cam.position.addScaledVector(to.normalize(), step).addScaledVector(t.vel, dt);
+            cam.position.addScaledVector(to.normalize(), step);
+            this.keepOutside(cam.position);
             const m = new THREE.Matrix4().lookAt(cam.position, t.pos, cam.up.set(0, 1, 0));
             const q = new THREE.Quaternion().setFromRotationMatrix(m);
             cam.quaternion.slerp(q, 1 - Math.exp(-4 * dt));
@@ -791,6 +907,38 @@ export class StarSystemLevel implements Level {
                 this.lastFlight = `перелёт ${this.flightFrom} → ${t.name}: ${took.toFixed(1)} с`;
                 this.host.toast(`Прибыли к ${t.name} за ${took.toFixed(1)} с`);
                 this.enterOrbit(t);
+            }
+            return;
+        }
+        if (this.mode === 'nav' && this.nav) {
+            const n = this.nav;
+            const p = n.pos();
+            if (!p) { this.goFree(); return; }
+            // Ride along with the target's motion this frame first, then close the gap to where it is now.
+            cam.position.add(p.clone().sub(n.last));
+            n.last.copy(p);
+            const to = new THREE.Vector3().subVectors(p, cam.position);
+            const dist = to.length();
+            const remaining = dist - n.stopKm / UNIT_KM;
+            const vMax = Math.max(this.cruise, remaining / AUTO_TAU);
+            const accel = Math.max(ACCEL, vMax);
+            // Into a portal there is nothing to brake for; beside a creature we stop.
+            const vBrake = n.through ? Infinity : Math.sqrt(2 * accel * Math.max(remaining, 0));
+            this.speed = Math.min(vMax, this.speed + accel * dt, vBrake);
+            const step = n.through ? this.speed * dt : Math.min(this.speed * dt, Math.max(remaining, 0));
+            cam.position.addScaledVector(to.normalize(), step);
+            const m = new THREE.Matrix4().lookAt(cam.position, p, cam.up.set(0, 1, 0));
+            cam.quaternion.slerp(new THREE.Quaternion().setFromRotationMatrix(m), 1 - Math.exp(-4 * dt));
+            this.keepOutside(cam.position);
+            if (!n.through && remaining <= 1 / UNIT_KM) {
+                this.host.toast(`${n.name} рядом — нажмите T, чтобы поговорить`);
+                // Turned a little aside, so the creature is framed beside the hull rather than behind it.
+                const toIt = p.clone().sub(cam.position);
+                const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), toIt).setLength(toIt.length() * 0.25); // on the right, clear of the target list
+                cam.lookAt(p.clone().add(side).addScaledVector(new THREE.Vector3(0, 1, 0), -toIt.length() * 0.12));
+                this.goFree();
+                this.ctl.stop();
+                this.speed = 0;
             }
             return;
         }
@@ -804,6 +952,14 @@ export class StarSystemLevel implements Level {
         if (near.dist < near.body.radius * 0.02) {
             const out = new THREE.Vector3().subVectors(cam.position, near.body.pos).setLength(near.body.radius * 1.02);
             cam.position.copy(near.body.pos).add(out);
+        }
+    }
+
+    /** An autopilot flying a straight line must not pass through a planet or the star: slide round it. */
+    private keepOutside(p: THREE.Vector3) {
+        const near = this.nearestSurface(p);
+        if (near.dist < near.body.radius * 0.3) {
+            p.copy(near.body.pos).add(new THREE.Vector3().subVectors(p, near.body.pos).setLength(near.body.radius * 1.3));
         }
     }
 
@@ -832,6 +988,8 @@ export class StarSystemLevel implements Level {
         this.host.canvas.removeEventListener('wheel', this.onWheel);
 
         this.labels.dispose();
+        this.satellites.dispose();
+        this.portals.dispose();
         disposeObject(this.scene);
     }
 }

@@ -30,7 +30,7 @@ export const ENEMIES: Record<EnemyKind, EnemyDef> = {
     leviathan: { name: 'Космический левиафан', hp: 700, speed: 1.1, hitKm: 1.2, preferKm: 3, fireEvery: 2.2, boltSpeed: 7, boltDamage: 22, contactDamage: 40, score: 1000 },
 };
 
-export const PLAYER_BOLT_SPEED = 25; // km/s relative to the ship
+export const PLAYER_BOLT_SPEED = 8; // km/s relative to the ship: slow enough to watch a burst fly
 const PLAYER_BOLT_DAMAGE = 20;
 const PLAYER_HIT_KM = 0.04;
 const FIRE_INTERVAL = 0.12;
@@ -59,7 +59,11 @@ interface Bolt {
     damage: number;
     friendly: boolean;
     radius: number;
-    mesh: THREE.Mesh;
+    /** A plasma ball (a mesh), or a tracer: a glowing line with a bright head (see addBolt). */
+    mesh: THREE.Object3D;
+    /** km flown so far, and the longest trail it drags behind it. */
+    travelled: number;
+    trail: number;
 }
 
 interface Burst {
@@ -89,9 +93,29 @@ export interface PlayerState {
 }
 
 const boltGeo = new THREE.CylinderGeometry(1, 1, 1, 6).rotateX(Math.PI / 2);
-const friendlyMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x66ddff).multiplyScalar(6) });
-const hostileMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff3344).multiplyScalar(6) });
-const plasmaMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xcc44ff).multiplyScalar(6) });
+const friendlyMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x66ddff).multiplyScalar(14), toneMapped: false });
+const hostileMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff3344).multiplyScalar(10), toneMapped: false });
+const plasmaMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xcc44ff).multiplyScalar(8), toneMapped: false });
+/** A soft additive sheath round each bolt: readable at any range, and the bloom turns it into a beam. */
+const haloMat = (color: number) => new THREE.MeshBasicMaterial({
+    color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, opacity: 0.45,
+    blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+});
+const lineMat = (color: number, k: number) => new THREE.LineBasicMaterial({
+    color: new THREE.Color(color).multiplyScalar(k), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+});
+const tracerLine = lineMat(0x66ddff, 9);
+const hostileLine = lineMat(0xff3344, 7);
+const headMat = (color: number) => new THREE.PointsMaterial({
+    color: new THREE.Color(color).multiplyScalar(12), size: 5, sizeAttenuation: false,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+});
+const tracerHead = headMat(0xaaf0ff);
+const hostileHead = headMat(0xff6060);
+const headGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+const HALO: Map<THREE.Material, THREE.Material> = new Map([
+    [friendlyMat, haloMat(0x44bbff)], [hostileMat, haloMat(0xff2233)], [plasmaMat, haloMat(0xaa33ff)],
+]);
 
 export const pilotState: PlayerState = { hull: 100, maxHull: 100, shield: 100, maxShield: 100, score: 0, sinceHit: 99, dead: false };
 
@@ -214,18 +238,34 @@ export class Combat {
             }
         }
         const vel = dir.multiplyScalar(PLAYER_BOLT_SPEED).add(shipVelKmS);
-        this.addBolt(from.addScaledVector(vel.clone().normalize(), 0.03), vel, PLAYER_BOLT_DAMAGE, true, 0.004, friendlyMat, 2.5);
+        this.addBolt(from.addScaledVector(vel.clone().normalize(), 0.03), vel, PLAYER_BOLT_DAMAGE, true, 0.006, friendlyMat, 3);
         return true;
     }
 
     private addBolt(local: THREE.Vector3, vel: THREE.Vector3, damage: number, friendly: boolean, radius: number, mat: THREE.Material, life: number) {
-        const mesh = new THREE.Mesh(boltGeo, mat);
         const big = mat === plasmaMat;
-        const M = this.M;
-        // Tracers are fat and long enough to see where they go from kilometres away.
-        mesh.scale.set((big ? 70 : 7) * M, (big ? 70 : 7) * M, (big ? 160 : 280) * M);
+        let mesh: THREE.Object3D;
+        if (big) {
+            // The leviathan's plasma: a fat glowing slug.
+            mesh = new THREE.Mesh(boltGeo, mat);
+            mesh.scale.set(70 * this.M, 70 * this.M, 160 * this.M);
+            const halo = new THREE.Mesh(boltGeo, HALO.get(mat)!);
+            halo.scale.set(3, 3, 1.1);
+            mesh.add(halo);
+        } else {
+            // A tracer: a line from where it was fired to where it is now (up to 1.6 km), with a bright
+            // head. Lines stay a pixel or two wide at any range and the bloom makes them glow; a solid
+            // bolt seen from behind the ship is an end-on blob, or a dot hundreds of metres away.
+            const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+            const line = new THREE.Line(g, friendly ? tracerLine : hostileLine);
+            line.frustumCulled = false;
+            const head = new THREE.Points(headGeo, friendly ? tracerHead : hostileHead);
+            head.frustumCulled = false;
+            line.add(head);
+            mesh = line;
+        }
         this.group.add(mesh);
-        this.bolts.push({ local, vel, life, damage, friendly, radius, mesh });
+        this.bolts.push({ local, vel, life, damage, friendly, radius, mesh, travelled: 0, trail: big ? 0 : friendly ? 1.6 : 0.8 });
     }
 
     damagePlayer(amount: number) {
@@ -311,12 +351,21 @@ export class Combat {
                 this.damagePlayer(b.damage);
                 b.life = 0;
             }
+            b.travelled += b.vel.length() * dt;
             this.toWorld(b.local, b.mesh.position);
-            b.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), b.vel, new THREE.Vector3(0, 1, 0)));
+            if (b.mesh instanceof THREE.Line) {
+                // The tail, relative to the head: small numbers, so float32 holds them exactly enough.
+                const tail = b.vel.clone().setLength(-Math.min(b.travelled + 0.03, b.trail) * this.KM);
+                (b.mesh.geometry.attributes.position as THREE.BufferAttribute).setXYZ(1, tail.x, tail.y, tail.z);
+                b.mesh.geometry.attributes.position.needsUpdate = true;
+            } else {
+                b.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), b.vel, new THREE.Vector3(0, 1, 0)));
+            }
         }
         this.bolts = this.bolts.filter(b => {
             if (b.life > 0) return true;
             this.group.remove(b.mesh);
+            if (b.mesh instanceof THREE.Line) b.mesh.geometry.dispose();
             return false;
         });
 
