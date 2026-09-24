@@ -56,6 +56,12 @@ const host: LevelHost = {
     open: req => navigate([...path, req]),
     warp: next => navigate(next),
     back: () => { if (path.length > 1) navigate(path.slice(0, -1)); },
+    returnDown: () => {
+        const below = path[path.length - 1].below;
+        if (!below?.length) return false;
+        navigate([...path, ...below]);
+        return true;
+    },
     saveCamera: (position, quaternion, data) => {
         path[path.length - 1].resume = { position: position.toArray(), quaternion: quaternion.toArray(), data };
     },
@@ -132,13 +138,18 @@ async function navigate(next: LevelRequest[]) {
     ui.fade.textContent = 'Генерация…';
     await new Promise(res => setTimeout(res, 350));
     await nextFrame();
+    // Going up the path: the map marks where the pilot was, and remembers the exact place
+    // (the ship's position, the moment in the system) so «вы здесь» leads straight back to it.
+    if (next.length < path.length && next[next.length - 1] === path[next.length - 1]) {
+        const here = path[path.length - 1];
+        const state = level?.saveState?.();
+        if (state) here.resume = state;
+        const below = path.slice(next.length).map(r => ({ ...r, from: undefined, below: undefined }));
+        next[next.length - 1].from = below[0];
+        next[next.length - 1].below = below;
+    }
     level?.dispose();
     level = null;
-    // Going up the path: the map one level up marks where the pilot was.
-    if (next.length < path.length && next[next.length - 1] === path[next.length - 1]) {
-        const child = path[next.length];
-        next[next.length - 1].from = { ...child, resume: undefined, from: undefined };
-    }
     path = next;
     try {
         const req = path[path.length - 1];

@@ -64,6 +64,18 @@ export class ShipAvatar {
         this.ship.traverse(o => { if (o.name === 'flame') o.scale.set(1, (0.25 + thrust * 1.6) * flicker, 1); });
     }
 
+    /**
+     * Tidal strain: stretched along the line of flight (towards the hole) and squeezed across it;
+     * `s` 1 is none. Past the breaking point the ship is gone.
+     */
+    strain(s: number, broken = false) {
+        const k = 1 / Math.sqrt(s);
+        this.ship.scale.set(k, k, s).multiplyScalar(this.size / 40);
+        const shake = Math.min(s - 1, 3) * this.size * 0.004;
+        this.ship.position.set((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake, 0);
+        this.ship.visible = !broken;
+    }
+
     dispose() {
         this.off();
         this.camera.remove(this.rig, this.key, this.fill);

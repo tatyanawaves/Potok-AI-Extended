@@ -14,6 +14,8 @@ export interface LevelHost {
     warp(path: LevelRequest[]): void;
     /** Go up one level, as if the pilot flew out of this one. */
     back(): void;
+    /** Back down to exactly where the pilot was before coming up to this map («вы здесь»); false if nothing is remembered. */
+    returnDown(): boolean;
     /** Remember where the camera is, so coming back up returns here instead of to the overview. */
     saveCamera(position: THREE.Vector3, quaternion: THREE.Quaternion, data?: CameraState['data']): void;
     toast(text: string): void;
@@ -36,6 +38,8 @@ export type LevelRequest = (
     resume?: CameraState;
     /** The place one level down that the pilot came up from: a map marks it «вы здесь». */
     from?: LevelRequest;
+    /** The whole way back down to where the pilot was (with the saved place in each), for «вы здесь». */
+    below?: LevelRequest[];
 };
 
 export interface Action {

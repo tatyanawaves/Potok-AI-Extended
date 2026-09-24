@@ -6,9 +6,10 @@ import { Action, blackbodyTexture, Level, LevelHost, ProximityTrigger, row } fro
 import { GalaxySpec } from '../mandelbrot';
 import {
     fmtDistanceKm, fmtDuration, fmtNum, gravitationalTimeDilation, hawkingTemperatureK, horizonAreaM2, horizonAreaQuanta,
-    lqgAreaGapM2, planckStarCoreRadiusM, schwarzschildRadiusKm, C_KM_S,
+    lqgAreaGapM2, planckStarCoreRadiusM, schwarzschildRadiusKm, tidalTearRadiusRs, C_KM_S,
 } from '../physics';
 import { BLACKHOLE_FRAG, BLACKHOLE_VERT } from '../shaders';
+import { pilotState } from '../game/combat';
 
 /**
  * The camera orbits in units of the Schwarzschild radius; the image is ray
@@ -20,7 +21,7 @@ export class BlackHoleLevel implements Level {
     readonly title: string;
     readonly bloom = { strength: 0.6, radius: 0.6, threshold: 0.7 };
     readonly maxPixelRatio = 1;
-    readonly help = `${FLY_HELP} · улетите дальше 150 rₛ — вернётесь в галактику · «Квантовое ядро» — что может быть вместо сингулярности`;
+    readonly help = `${FLY_HELP} · дыра притягивает: у горизонта нужен форсаж (Shift), из-под горизонта не выбраться · улетите дальше 150 rₛ — вернётесь в галактику`;
     private nav: Navigator;
     private avatar: ShipAvatar;
     private leave = new ProximityTrigger(30);
@@ -29,8 +30,15 @@ export class BlackHoleLevel implements Level {
     private core = 0;
     private coreTarget = 0;
     private doppler = true;
+    /** Radius (in rₛ) where tides tear the ship apart. */
+    private rTear: number;
+    /** Past the event horizon: there is no way back out. */
+    private inside = false;
+    /** Seconds since the ship was torn apart, −1 while whole. */
+    private torn = -1;
 
     constructor(private host: LevelHost, private galaxy: GalaxySpec) {
+        this.rTear = tidalTearRadiusRs(galaxy.bhMassSun);
         this.title = galaxy.isMilkyWay ? 'Стрелец A*' : `Чёрная дыра ${galaxy.name}`;
         this.material = new THREE.ShaderMaterial({
             vertexShader: BLACKHOLE_VERT,
@@ -69,6 +77,11 @@ export class BlackHoleLevel implements Level {
     }
 
     actions(): Action[] {
+        const core: Action = {
+            label: '⚛ Квантовое ядро', title: 'Петлевая квантовая гравитация: вместо сингулярности — ядро из плоских квантов пространства',
+            run: () => { this.coreTarget = this.coreTarget > 0 ? 0 : 1; }, active: () => this.coreTarget > 0,
+        };
+        if (this.inside || this.torn >= 0) return [core]; // no tour from beneath the horizon
         return [
             {
                 label: '⚛ Квантовое ядро', title: 'Петлевая квантовая гравитация: вместо сингулярности — ядро из плоских квантов пространства',
@@ -110,27 +123,77 @@ export class BlackHoleLevel implements Level {
         return html;
     }
 
-    saveState(): CameraState {
+    saveState(): CameraState | null {
+        if (this.inside || this.torn >= 0) return null; // no saving a doomed ship: it comes back from afar
         return { position: this.camera.position.toArray(), quaternion: this.camera.quaternion.toArray() };
     }
 
     resumed() {
+        if (this.camera.position.length() < 1.5) this.camera.position.setLength(22);
         this.nav.setFree();
     }
 
     status(): string {
         const r = this.camera.position.length();
+        if (this.torn >= 0) return 'Корабль разорван приливными силами';
+        const tide = Math.pow(this.rTear / r, 3);
+        const tideText = tide > 0.01 ? ` · приливное растяжение ${Math.round(tide * 100)} % от предела прочности` : '';
+        if (this.inside) return `r = ${r.toFixed(3)} rₛ · под горизонтом: все пути ведут к центру${tideText}`;
         return `r = ${r.toFixed(2)} rₛ · замедление времени ${(1 / Math.max(gravitationalTimeDilation(r), 1e-9)).toFixed(3)}× · ` +
-            (r < 1.5 ? 'внутри фотонной сферы: любое направление кроме «наружу» ведёт в дыру' : r < 3 ? 'ближе устойчивой орбиты: без двигателей упадём' : 'устойчивая орбита возможна');
+            (r < 1.5 ? 'внутри фотонной сферы: удержаться можно только на форсаже' : r < 3 ? 'ближе устойчивой орбиты: без двигателей упадём' : 'устойчивая орбита возможна') + tideText;
+    }
+
+    /**
+     * Gravity for the ship. Outside, a pull the engines must beat: to hover at r a ship needs
+     * an acceleration that grows without limit at the horizon (GM/r²·(1 − rₛ/r)^−½), so close in
+     * only the boost holds it. Inside the horizon every path leads to smaller r: steering can move
+     * the ship sideways, never out, and it falls ever faster. Tides stretch it as (r_tear/r)³.
+     */
+    private gravity(dt: number, r0: number) {
+        const pos = this.camera.position;
+        if (this.torn >= 0) {
+            pos.setLength(Math.max(pos.length() * Math.exp(-2 * dt), 1e-4));
+            this.torn += dt;
+            if (this.torn > 3) {
+                this.torn = -2; // once
+                pilotState.hull = pilotState.maxHull;
+                pilotState.shield = pilotState.maxShield;
+                this.host.toast('Корабль восстановлен у края галактики');
+                this.host.back();
+            }
+            return;
+        }
+        let r = pos.length();
+        if (!this.inside && r <= 1) {
+            this.inside = true;
+            this.host.toast('Вы пересекли горизонт событий — назад пути нет');
+        }
+        if (this.inside) {
+            if (r > r0) pos.setLength(r0); // no direction points out
+            r = pos.length();
+            pos.setLength(r * Math.exp(-0.7 * dt) - 0.02 * dt);
+        } else {
+            const pull = Math.min(2 / (r * r * Math.sqrt(Math.max(1 - 1 / r, 1e-4))), 40);
+            pos.setLength(Math.max(r - pull * dt, 0.5));
+        }
+        r = Math.max(pos.length(), 1e-4);
+        const tide = Math.pow(this.rTear / r, 3);
+        this.avatar.strain(1 + 2.5 * Math.sqrt(Math.min(tide, 1)));
+        if (tide >= 1) {
+            this.torn = 0;
+            this.avatar.strain(3.5, true);
+            pilotState.hull = 0;
+            this.host.toast('Приливные силы разорвали корабль на части (спагеттификация)');
+        }
     }
 
     update(dt: number) {
         this.time += dt;
-        const v = this.nav.update(dt);
+        const r0 = this.camera.position.length();
+        const v = this.torn >= 0 ? 0 : this.nav.update(dt);
         this.avatar.update(dt, this.nav.mode === 'free', Math.min(1, v / Math.max(this.nav.fly.speed, 1e-9)));
-        // Free flight may not cross the horizon: nothing would come back out to show.
-        if (this.camera.position.length() < 1.3) this.camera.position.setLength(1.3);
-        if (this.nav.mode === 'free' && this.leave.check(dt, () => 180 - this.camera.position.length())) {
+        if (this.nav.mode === 'free' && this.torn !== -2) this.gravity(dt, r0);
+        if (this.nav.mode === 'free' && !this.inside && this.torn < 0 && this.leave.check(dt, () => 180 - this.camera.position.length())) {
             this.host.toast('Покидаем окрестности чёрной дыры');
             this.host.back();
         }

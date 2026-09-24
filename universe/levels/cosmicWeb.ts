@@ -63,6 +63,8 @@ export class CosmicWebLevel implements Level {
     private selLabel: Label;
     private marker: THREE.Points;
     private selected = -1;
+    /** The galaxy the pilot is in («вы здесь»). */
+    private here = -1;
     private width = 1;
     private height = 1;
     private onKey = (e: KeyboardEvent) => { if (e.key === 'Enter') this.enter(); };
@@ -94,11 +96,14 @@ export class CosmicWebLevel implements Level {
         this.labels = new Labels(host.labelLayer);
         // Where the pilot is: the galaxy they came up from (the Milky Way unless a portal took them away).
         const here = from?.kind === 'galaxy' ? (from.galaxy.isMilkyWay ? home : from.galaxy.webIndex ?? -1) : home;
-        this.homeLabel = this.labels.add(here === home ? 'Млечный Путь — вы здесь' : 'Млечный Путь', here === home ? 'home' : 'star',
-            () => this.host.open({ kind: 'galaxy', galaxy: MILKY_WAY }));
+        this.here = here;
+        this.homeLabel = this.labels.add(here === home ? '📍 Вы здесь' : 'Млечный Путь', here === home ? 'home' : 'star',
+            () => this.openGalaxy(home));
+        if (here === home) this.homeLabel.el.title = 'Млечный Путь — вернуться туда, где корабль';
         this.homeLabel.position.fromArray(pos, home * 3);
         if (here >= 0 && here !== home && from?.kind === 'galaxy') {
-            const l = this.labels.add(`Вы здесь — ${from.galaxy.name}`, 'home', () => this.host.open({ kind: 'galaxy', galaxy: this.spec(here) }));
+            const l = this.labels.add('📍 Вы здесь', 'home', () => this.openGalaxy(here));
+            l.el.title = `${from.galaxy.name} — вернуться туда, где корабль`;
             l.position.fromArray(pos, here * 3);
         }
         this.selLabel = this.labels.add('', 'sel', () => this.enter());
@@ -132,6 +137,7 @@ export class CosmicWebLevel implements Level {
     }
 
     private openGalaxy(i: number) {
+        if (i === this.here && this.host.returnDown()) return; // back to the ship, not a fresh galaxy
         const back = new THREE.Vector3(0, 0, 1).applyQuaternion(this.camera.quaternion).multiplyScalar(6);
         this.host.saveCamera(this.camera.position.clone().add(back), this.camera.quaternion);
         this.host.open({ kind: 'galaxy', galaxy: this.spec(i) });

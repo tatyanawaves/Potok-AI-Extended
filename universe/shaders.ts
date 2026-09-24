@@ -625,6 +625,17 @@ void main() {
     vec2 ndc = (gl_FragCoord.xy / uRes) * 2.0 - 1.0;
     float aspect = uRes.x / uRes.y;
     vec3 dir = normalize(uCamBasis * vec3(ndc.x * aspect * uTanHalfFov, ndc.y * uTanHalfFov, -1.0));
+    // Beneath the horizon light from outside still falls in after us: the sky shrinks to a
+    // reddened patch overhead (away from the centre) as we fall, and everything else is dark.
+    float rc = length(uCamPos);
+    if (rc < 1.0) {
+        float up = dot(dir, normalize(uCamPos));
+        float edge = mix(0.97, 0.3, rc);
+        float patch = smoothstep(edge, 1.0, up);
+        vec3 c = sky(dir) * patch * vec3(1.4, 0.7, 0.45) * 2.0 + vec3(1.0, 0.45, 0.2) * smoothstep(edge - 0.1, edge, up) * (1.0 - patch) * 0.25;
+        gl_FragColor = vec4(c, 1.0);
+        return;
+    }
     vec3 pos = uCamPos;
     vec3 vel = dir;
     float h2 = dot(cross(pos, vel), cross(pos, vel));

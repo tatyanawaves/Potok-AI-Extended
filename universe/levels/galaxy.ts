@@ -163,6 +163,8 @@ export class GalaxyLevel implements Level {
     private labels: Labels;
     private sunLabel?: Label;
     private sunPos0 = new THREE.Vector3();
+    /** The pilot came up from the Solar System. */
+    private atSun = false;
     private selLabel: Label;
     private marker: THREE.Points;
     private selected = -1; // star index, -2 = the Sun
@@ -217,22 +219,26 @@ export class GalaxyLevel implements Level {
         this.scene.add(this.marker);
 
         this.labels = new Labels(host.labelLayer);
-        const bh = this.labels.add(spec.isMilkyWay ? 'Стрелец A* — чёрная дыра' : 'Сверхмассивная чёрная дыра', 'bh',
-            () => host.open({ kind: 'blackhole', galaxy: spec }));
+        const atHole = from?.kind === 'blackhole';
+        const bh = this.labels.add(atHole ? '📍 Вы здесь' : spec.isMilkyWay ? 'Стрелец A* — чёрная дыра' : 'Сверхмассивная чёрная дыра', atHole ? 'home' : 'bh',
+            () => { if (!(atHole && host.returnDown())) host.open({ kind: 'blackhole', galaxy: spec }); });
         bh.position.set(0, 0, 0);
         if (spec.isMilkyWay) {
             const theta = armAngle(SUN_R_LY, 1, spec) + 0.06;
             this.sunPos0.set(SUN_R_LY * Math.cos(theta), 55, SUN_R_LY * Math.sin(theta));
-            const atSun = from?.kind === 'system' && from.star === 'sun';
-            this.sunLabel = this.labels.add(atSun ? 'Солнце — вы здесь' : 'Солнце', atSun ? 'home' : 'star', () => this.openSun());
+            this.atSun = from?.kind === 'system' && from.star === 'sun';
+            this.sunLabel = this.labels.add(this.atSun ? '📍 Вы здесь' : 'Солнце', this.atSun ? 'home' : 'star', () => this.openSun());
+            if (this.atSun) this.sunLabel.el.title = 'Солнечная система — вернуться туда, где корабль';
         }
         // Where the pilot came from: that star is marked, and the view starts on it.
         if (from?.kind === 'system' && from.star !== 'sun') {
             const s = from.star;
             this.here = s.index ?? this.findStar(s.seed);
-            if (this.here >= 0) this.hereLabel = this.labels.add(`Вы здесь — ${starName(s.seed)}`, 'home', () => this.openStar(this.here));
+            if (this.here >= 0) {
+                this.hereLabel = this.labels.add('📍 Вы здесь', 'home', () => this.openStar(this.here));
+                this.hereLabel.el.title = `${starName(s.seed)} — вернуться туда, где корабль`;
+            }
         }
-        if (from?.kind === 'blackhole') bh.el.textContent += ' — вы здесь';
         this.selLabel = this.labels.add('', 'sel', () => this.enter());
         this.selLabel.visible = false;
 
@@ -261,6 +267,7 @@ export class GalaxyLevel implements Level {
     }
 
     private openSun() {
+        if (this.atSun && this.host.returnDown()) return; // back to the ship, not a fresh system
         this.host.open({ kind: 'system', galaxy: this.spec, star: 'sun' });
     }
 
@@ -270,6 +277,7 @@ export class GalaxyLevel implements Level {
     }
 
     private openStar(i: number) {
+        if (i === this.here && this.host.returnDown()) return; // back to the ship, not a fresh system
         this.saveCamera();
         this.host.open({ kind: 'system', galaxy: this.spec, star: { seed: hash32(this.spec.seed, i), mass: this.stars.masses[i], index: i } });
     }

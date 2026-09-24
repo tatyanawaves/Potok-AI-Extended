@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { effects, progress } from '../universe/game/progress';
 import { memoryGreeting, REFUSE_MOOD, scriptedTurn } from '../universe/game/dialogue';
 import { solarCreatures } from '../universe/game/creatures';
+import { tidalTearRadiusRs } from '../universe/physics';
 
 describe('upgrades bought with score', () => {
     it('costs score, raises the level, and stops at the maximum', () => {
@@ -44,5 +45,14 @@ describe('creature memory', () => {
     it('holds a grudge against a rude pilot', () => {
         expect(memoryGreeting({ talks: 2, mood: -1.5, said: [], errands: [] })).toMatch(/не слишком вежлив/);
         expect(REFUSE_MOOD).toBeLessThan(-1.5);
+    });
+});
+
+describe('tides near a black hole', () => {
+    it('shred a ship far outside a small hole, but only deep inside a supermassive one', () => {
+        expect(tidalTearRadiusRs(10)).toBeGreaterThan(10);
+        const sgrA = tidalTearRadiusRs(4.3e6);
+        expect(sgrA).toBeLessThan(0.05);
+        expect(sgrA).toBeGreaterThan(0.001);
     });
 });

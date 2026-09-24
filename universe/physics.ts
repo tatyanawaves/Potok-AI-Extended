@@ -235,6 +235,16 @@ export function blackbodyFast(T: number, out: number[] = [0, 0, 0]): number[] {
 // ---------------------------------------------------------------------------
 
 /** Schwarzschild radius r_s = 2GM/c², km. */
+/**
+ * Where tides tear a ship apart, in Schwarzschild radii: the stretch across its length L,
+ * Δa = 2GM·L/r³, reaches what the hull can bear. Small holes shred a ship far outside the
+ * horizon; a supermassive one lets it cross the horizon whole and tears it deep inside.
+ */
+export function tidalTearRadiusRs(massSun: number, lengthM = 40, maxAccel = 1e4): number {
+    const gm = GM_SUN_KM3_S2 * 1e9 * massSun; // m³/s²
+    return Math.cbrt((2 * gm * lengthM) / maxAccel) / (schwarzschildRadiusKm(massSun) * 1000);
+}
+
 export function schwarzschildRadiusKm(massSun: number): number {
     return (2 * GM_SUN_KM3_S2 * massSun) / (C_KM_S * C_KM_S);
 }
