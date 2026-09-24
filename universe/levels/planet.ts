@@ -51,6 +51,8 @@ export class PlanetLevel implements Level {
     readonly camera = new THREE.PerspectiveCamera(65, 1, 0.3, 2e7);
     readonly title: string;
     readonly bloom = { strength: 0.35, radius: 0.4, threshold: 1.2 };
+    /** The ground shader is heavy (shadows, erosion noise): render at one sample per CSS pixel. */
+    readonly maxPixelRatio = 1;
     readonly help = `${SHIP_HELP} · Пробел/ЛКМ — огонь · V — вид · M — миссии · наберите высоту — выход в космос · Esc — отпустить мышь`;
     private surface: SurfaceParams;
     private terrain: TerrainParams;
@@ -274,7 +276,7 @@ export class PlanetLevel implements Level {
 
         this.game.update(dt, {
             pilot: this.pilot, camera: this.camera, free: true, velocity: this.ctl.velocity,
-            aim: this.ctl.aimQuaternion, turnRate: this.ctl.turnRate, pitchRate: this.ctl.pitchRate, boost: this.ctl.boosted,
+            aim: this.ctl.aimQuaternion, turnRate: this.ctl.turnRate, pitchRate: this.ctl.pitchRate, boost: this.ctl.boosted, strafe: this.ctl.strafe,
             starPos: this.pilot.position.clone().addScaledVector(sun, 1e5), nearest: { name: this.visit.name, pos: new THREE.Vector3(), radius: 0 },
             width: this.width, height: this.height, now: this.time,
         });

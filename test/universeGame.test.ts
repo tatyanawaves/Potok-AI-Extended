@@ -27,8 +27,18 @@ describe('missions', () => {
         expect(paid).toBe(300);
     });
 
-    it('does reach objectives in order', () => {
+    it('opens missions one after another', () => {
         const log = new MissionLog(solarMissions());
+        expect(log.accept('pirates', 0)).toBe(false);
+        expect(log.accept('patrol', 0)).toBe(true);
+        for (let i = 0; i < 4; i++) log.kill('drone');
+        expect(log.accept('courier', 0)).toBe(true);
+    });
+
+    it('does reach objectives in order', () => {
+        const ms = solarMissions();
+        for (const m of ms.slice(0, 2)) m.state = 'done';
+        const log = new MissionLog(ms);
         log.accept('moon-scan', 0);
         const dist: Record<string, number> = { 'Луна': 1e6, 'Венера': 100 };
         log.proximity(n => dist[n], 1);
@@ -40,7 +50,9 @@ describe('missions', () => {
     });
 
     it('fails a race that runs out of time', () => {
-        const log = new MissionLog(solarMissions());
+        const ms = solarMissions();
+        ms[0].state = 'done';
+        const log = new MissionLog(ms);
         let failed = false;
         log.onFail = () => { failed = true; };
         log.accept('courier', 10);

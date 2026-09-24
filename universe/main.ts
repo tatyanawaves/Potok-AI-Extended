@@ -171,7 +171,7 @@ function renderActions() {
 
 function resize() {
     const w = window.innerWidth, h = window.innerHeight;
-    const ratio = Math.min(window.devicePixelRatio, level?.maxPixelRatio ?? 2);
+    const ratio = Math.min(window.devicePixelRatio, level?.maxPixelRatio ?? 1.5);
     renderer.setPixelRatio(ratio);
     renderer.setSize(w, h);
     composer.setPixelRatio(ratio);

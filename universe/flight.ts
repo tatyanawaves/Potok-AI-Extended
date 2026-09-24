@@ -12,8 +12,8 @@ const UP = ['KeyE', 'KeyR', 'PageUp'];
 const DOWN = ['KeyQ', 'KeyF', 'PageDown'];
 export const MOVE_KEYS = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, ...UP, ...DOWN]);
 
-export const FLY_HELP = 'WASD / стрелки — лететь · Q/E — вниз/вверх · Shift — ×10 · мышь (зажать) — смотреть · колесо — скорость';
-export const SHIP_HELP = 'Клик — захватить мышь · мышь — обзор и курс · ПКМ или C — оглядеться (в т.ч. назад) · WASD — тяга · Q/E — вниз/вверх · Shift — форсаж · колесо — скорость';
+export const FLY_HELP = 'WASD / стрелки — лететь · Q/E — вниз/вверх · Shift — ×10 · движение мыши — смотреть · колесо — скорость';
+export const SHIP_HELP = 'Движение мыши — обзор и поворот · курсор у края — продолжать поворот · C или ПКМ — оглядеться (в т.ч. назад) · WASD — тяга · Q/E — вниз/вверх · Shift — форсаж · колесо — скорость · двойной клик — скрыть курсор';
 
 const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
@@ -30,9 +30,10 @@ export interface FlyOptions {
 }
 
 /**
- * Free flight as in a game: WASD or the arrows move, holding the mouse button
- * and dragging turns the view (yaw about "up", pitch clamped so the horizon
- * never flips), the wheel sets the throttle, Shift boosts. The ship eases in
+ * Free flight as in a game: WASD or the arrows move; for a ship, moving the
+ * mouse turns the view (for a map camera, dragging does), yaw about "up" with
+ * the pitch clamped so the horizon never flips; the wheel sets the throttle,
+ * Shift boosts. The ship eases in
  * and out of motion and stops when no key is held.
  */
 export class FlyController {
@@ -51,6 +52,10 @@ export class FlyController {
     /** Yaw and pitch rates of the hull, rad/s, for banking animations. */
     turnRate = 0;
     pitchRate = 0;
+    /** Sideways thrust input, −1…1, for banking. */
+    strafe = 0;
+    /** Cursor position over the view (NDC), for steering without a captured mouse. */
+    private cursor: { x: number; y: number } | null = null;
     private dragging = false;
     private last = { x: 0, y: 0 };
     private autopilot: { target: () => THREE.Vector3; standoff: number; last: THREE.Vector3 | null } | null = null;
@@ -74,10 +79,6 @@ export class FlyController {
     private onDown = (e: PointerEvent) => {
         if (!this.enabled || e.button > 2) return;
         if (e.button === 2) this.setFreeLook(true);
-        if (this.opts.ship && e.button === 0 && e.pointerType === 'mouse' && !this.locked) {
-            // The first click hands the mouse to the ship; Esc gives it back.
-            (this.dom as HTMLElement).requestPointerLock?.();
-        }
         this.dragging = true;
         this.last = { x: e.clientX, y: e.clientY };
     };
@@ -87,12 +88,23 @@ export class FlyController {
     };
     private onMove = (e: PointerEvent) => {
         if (!this.enabled) return;
+        if (e.pointerType === 'mouse' && e.target === this.dom) {
+            const r = this.dom.getBoundingClientRect();
+            this.cursor = { x: ((e.clientX - r.left) / r.width) * 2 - 1, y: -(((e.clientY - r.top) / r.height) * 2 - 1) };
+        }
         let dx: number, dy: number;
-        if (this.locked) { dx = e.movementX; dy = e.movementY; }
-        else if (this.dragging) {
+        if (this.opts.ship || this.locked) {
+            // A ship: moving the mouse turns the view, no button held. Over buttons and panels it does not.
+            if (!this.locked && e.target !== this.dom) return;
+            dx = e.movementX; dy = e.movementY;
+            // Entering the view or leaving a panel can report a jump across the whole window; that is not a turn.
+            if (Math.abs(dx) > 120 || Math.abs(dy) > 120) return;
+        } else if (this.dragging) {
+            // A floating camera over a map: drag to look, so the cursor stays free for picking stars.
             dx = e.clientX - this.last.x; dy = e.clientY - this.last.y;
             this.last = { x: e.clientX, y: e.clientY };
         } else return;
+        if (!dx && !dy) return;
         // Narrow fields of view turn more slowly, so aiming stays precise.
         const k = (this.locked ? 0.0022 : 0.0035) * (this.camera.fov / 60);
         this.aimYaw -= dx * k;
@@ -110,6 +122,9 @@ export class FlyController {
         this.speed = Math.max(this.opts.minSpeed, Math.min(this.opts.maxSpeed, this.speed * Math.exp(-e.deltaY * 0.0015)));
     };
     private onContext = (e: Event) => e.preventDefault();
+    private onLeave = () => { this.cursor = null; };
+    // A double click captures the mouse for pure mouse-look (Esc releases it).
+    private onDbl = () => { if (this.opts.ship && this.enabled && !this.locked) (this.dom as HTMLElement).requestPointerLock?.(); };
 
     constructor(private camera: THREE.PerspectiveCamera, private dom: HTMLElement, private opts: FlyOptions) {
         this.speed = opts.speed;
@@ -123,6 +138,8 @@ export class FlyController {
         window.addEventListener('pointermove', this.onMove);
         dom.addEventListener('wheel', this.onWheel, { passive: true });
         dom.addEventListener('contextmenu', this.onContext);
+        dom.addEventListener('pointerleave', this.onLeave);
+        dom.addEventListener('dblclick', this.onDbl);
     }
 
     get locked(): boolean {
@@ -210,6 +227,7 @@ export class FlyController {
             this.held(UP) - this.held(DOWN),
             this.held(BACK) - this.held(FORWARD),
         );
+        this.strafe = this.held(RIGHT) - this.held(LEFT);
         const max = Math.min(this.speed * (this.boosted ? 10 : 1), limit);
         if (dir.lengthSq() > 0) dir.normalize().applyQuaternion(cam.quaternion).multiplyScalar(max);
         // Ease towards the wanted velocity: quick to respond, no jerk, and a glide to a stop.
@@ -227,6 +245,13 @@ export class FlyController {
             this.aimYaw += wrapAngle(this.yaw - this.aimYaw) * k;
             this.aimPitch += (this.pitch - this.aimPitch) * k;
             if (Math.abs(wrapAngle(this.yaw - this.aimYaw)) + Math.abs(this.pitch - this.aimPitch) < 0.005) this.returning = false;
+        }
+        // With the cursor pushed against the edge of the view, keep turning that way.
+        if (!this.locked && this.cursor && !this.freeLook) {
+            const edge = 0.82, max = 1.6;
+            const f = (v: number) => (Math.abs(v) < edge ? 0 : Math.sign(v) * (Math.abs(v) - edge) / (1 - edge));
+            this.aimYaw -= f(this.cursor.x) * max * dt;
+            this.aimPitch = Math.max(-1.5, Math.min(1.5, this.aimPitch + f(this.cursor.y) * max * 0.7 * dt));
         }
         let dYaw = 0, dPitch = 0;
         if (!this.freeLook && !this.returning) {
@@ -253,6 +278,8 @@ export class FlyController {
         window.removeEventListener('pointermove', this.onMove);
         this.dom.removeEventListener('wheel', this.onWheel);
         this.dom.removeEventListener('contextmenu', this.onContext);
+        this.dom.removeEventListener('pointerleave', this.onLeave);
+        this.dom.removeEventListener('dblclick', this.onDbl);
     }
 }
 

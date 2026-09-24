@@ -24,10 +24,10 @@ interface EnemyDef {
 }
 
 export const ENEMIES: Record<EnemyKind, EnemyDef> = {
-    drone: { name: 'Дрон-разведчик', hp: 40, speed: 2.2, hitKm: 0.09, preferKm: 3, fireEvery: 1.6, boltSpeed: 12, boltDamage: 6, contactDamage: 10, score: 50 },
-    fighter: { name: 'Пиратский штурмовик', hp: 90, speed: 4, hitKm: 0.12, preferKm: 1.5, fireEvery: 0.7, boltSpeed: 16, boltDamage: 7, contactDamage: 20, score: 120 },
-    crystal: { name: 'Кристаллид', hp: 20, speed: 5, hitKm: 0.07, preferKm: 0, fireEvery: 0, boltSpeed: 0, boltDamage: 0, contactDamage: 25, score: 30 },
-    leviathan: { name: 'Космический левиафан', hp: 700, speed: 1.1, hitKm: 0.5, preferKm: 2.5, fireEvery: 2.2, boltSpeed: 7, boltDamage: 22, contactDamage: 40, score: 1000 },
+    drone: { name: 'Дрон-разведчик', hp: 40, speed: 2.2, hitKm: 0.2, preferKm: 2.2, fireEvery: 1.6, boltSpeed: 12, boltDamage: 6, contactDamage: 10, score: 50 },
+    fighter: { name: 'Пиратский штурмовик', hp: 90, speed: 4, hitKm: 0.25, preferKm: 1.2, fireEvery: 0.7, boltSpeed: 16, boltDamage: 7, contactDamage: 20, score: 120 },
+    crystal: { name: 'Кристаллид', hp: 20, speed: 5, hitKm: 0.15, preferKm: 0, fireEvery: 0, boltSpeed: 0, boltDamage: 0, contactDamage: 25, score: 30 },
+    leviathan: { name: 'Космический левиафан', hp: 700, speed: 1.1, hitKm: 1.2, preferKm: 3, fireEvery: 2.2, boltSpeed: 7, boltDamage: 22, contactDamage: 40, score: 1000 },
 };
 
 export const PLAYER_BOLT_SPEED = 25; // km/s relative to the ship
@@ -147,15 +147,19 @@ export class Combat {
     }
 
     /** Put `count` enemies on a shell 2.5–6 km around a point (in the anchor's frame): close enough to see and fight. */
-    spawn(kind: EnemyKind, anchor: Anchor, aroundWorld: THREE.Vector3, count: number) {
+    spawn(kind: EnemyKind, anchor: Anchor, aroundWorld: THREE.Vector3, count: number, aheadWorld?: THREE.Vector3) {
         if (this.anchor && this.anchor !== anchor) this.clear();
         this.anchor = anchor;
         const center = this.toLocal(aroundWorld)!;
         const def = ENEMIES[kind];
         for (let i = 0; i < count; i++) {
-            const dir = new THREE.Vector3().randomDirection();
+            // Out in front of the pilot when we know which way that is, so the fight starts in view.
+            const dir = aheadWorld
+                ? aheadWorld.clone().normalize().add(new THREE.Vector3().randomDirection().multiplyScalar(0.55)).normalize()
+                : new THREE.Vector3().randomDirection();
             const mesh = makeEnemy(kind);
-            mesh.scale.setScalar(this.M);
+            // Drawn larger than life (×2.5) so they read at dogfight ranges; hit spheres match.
+            mesh.scale.setScalar(this.M * (kind === 'leviathan' ? 2 : 2.5));
             this.group.add(mesh);
             const label = document.createElement('div');
             label.className = 'elabel';
@@ -218,7 +222,8 @@ export class Combat {
         const mesh = new THREE.Mesh(boltGeo, mat);
         const big = mat === plasmaMat;
         const M = this.M;
-        mesh.scale.set((big ? 25 : 1.5) * M, (big ? 25 : 1.5) * M, (big ? 60 : 45) * M);
+        // Tracers are fat and long enough to see where they go from kilometres away.
+        mesh.scale.set((big ? 70 : 7) * M, (big ? 70 : 7) * M, (big ? 160 : 280) * M);
         this.group.add(mesh);
         this.bolts.push({ local, vel, life, damage, friendly, radius, mesh });
     }

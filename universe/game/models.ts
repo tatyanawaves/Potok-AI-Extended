@@ -158,10 +158,11 @@ function makeLeviathan(): THREE.Group {
 }
 
 export function makeEnemy(kind: EnemyKind): THREE.Group {
-    switch (kind) {
-        case 'drone': return makeDrone();
-        case 'fighter': return makeFighter();
-        case 'crystal': return makeCrystal();
-        case 'leviathan': return makeLeviathan();
-    }
+    const g = kind === 'drone' ? makeDrone() : kind === 'fighter' ? makeFighter() : kind === 'crystal' ? makeCrystal() : makeLeviathan();
+    // A faint red self-glow keeps the silhouette readable on the night side, against black space.
+    g.traverse(o => {
+        const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+        if (m && m.isMeshStandardMaterial && m.emissive && m.emissive.getHex() === 0) m.emissive.setRGB(0.12, 0.03, 0.03);
+    });
+    return g;
 }

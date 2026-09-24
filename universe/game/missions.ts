@@ -100,15 +100,23 @@ export class MissionLog {
         this.missions = missions;
     }
 
-    accept(id: string, now: number) {
+    /** Missions open one after another: each needs the one before it done. */
+    unlocked(m: Mission): boolean {
+        const i = this.missions.indexOf(m);
+        return i <= 0 || this.missions[i - 1].state === 'done';
+    }
+
+    /** Returns false if the mission is still locked. */
+    accept(id: string, now: number): boolean {
         const m = this.missions.find(x => x.id === id);
-        if (!m || m.state === 'done') return;
+        if (!m || m.state === 'done' || !this.unlocked(m)) return false;
         if (this.active && this.active !== m && this.active.state === 'active') this.active.state = 'available';
         m.state = 'active';
         m.spawned = false;
         m.startedAt = now;
         for (const o of m.objectives) o.done = 0;
         this.active = m;
+        return true;
     }
 
     /** The next objective still open: reach/race objectives are done in order. */

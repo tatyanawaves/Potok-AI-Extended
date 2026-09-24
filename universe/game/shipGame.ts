@@ -33,6 +33,8 @@ export interface FrameContext {
     turnRate?: number;
     pitchRate?: number;
     boost?: boolean;
+    /** Sideways thrust input (−1…1), which also banks the hull. */
+    strafe?: number;
     /** How many rocks to keep around the ship (dense in an asteroid belt); 0 for none. */
     debris?: number;
 }
@@ -63,7 +65,7 @@ export class ShipGame {
     private time = 0;
     private mouseFiring = false;
     /** Seconds until the next chance of running into something in open space. */
-    private encounterIn = 45 + Math.random() * 60;
+    private encounterIn = 20 + Math.random() * 20;
     private field: DebrisField | null = null;
     private keys = new Set<string>();
     private mouse: THREE.Vector2 | null = null;
@@ -93,6 +95,8 @@ export class ShipGame {
 
     /** Scene units per km and per metre. */
     private readonly KM: number;
+    /** Camera position relative to the pilot, as last placed. */
+    private camOffset = new THREE.Vector3();
     private readonly M: number;
 
     constructor(
@@ -195,13 +199,17 @@ export class ShipGame {
             el.querySelector('small')!.textContent = `Где: ${m.location} · награда ${m.reward} ${state ? '· ' + state : ''}`;
             if (m.state !== 'done' && m.state !== 'active') {
                 const btn = document.createElement('button');
-                btn.textContent = m.state === 'failed' ? 'Повторить' : 'Взять';
+                const open = this.log.unlocked(m);
+                btn.textContent = !open ? '🔒' : m.state === 'failed' ? 'Повторить' : 'Взять';
+                btn.disabled = !open;
+                btn.title = open ? '' : 'Сначала выполните предыдущую миссию';
                 btn.onclick = () => {
-                    this.log.accept(m.id, this.lastNow);
+                    if (!this.log.accept(m.id, this.lastNow)) return;
                     this.toast(`Миссия: «${m.title}». Цель — ${m.location}`);
                     this.renderPanel();
                 };
                 el.appendChild(btn);
+                if (!open) el.classList.add('locked');
             }
             p.appendChild(el);
         }
@@ -252,7 +260,8 @@ export class ShipGame {
             if (body && (f.pilot.position.distanceTo(body.pos) - body.radius) / this.KM < m.triggerKm) {
                 m.spawned = true;
                 if (m.spawn.length) {
-                    for (const s of m.spawn) this.combat.spawn(s.kind, body, f.pilot.position, s.count);
+                    const ahead = new THREE.Vector3(0, 0, -1).applyQuaternion(f.pilot.quaternion);
+                    for (const s of m.spawn) this.combat.spawn(s.kind, body, f.pilot.position, s.count, ahead);
                     this.toast('Контакт! Пробел — огонь, мышь — прицел, V — вид');
                     this.wantsFree = true;
                 }
@@ -265,7 +274,8 @@ export class ShipGame {
                 this.encounterIn = 70 + Math.random() * 80;
                 let r = Math.random() * 100;
                 const e = ENCOUNTERS.find(x => (r -= x.weight) < 0) ?? ENCOUNTERS[0];
-                for (const g of e.groups) this.combat.spawn(g.kind, f.nearest, f.pilot.position, g.count);
+                const ahead = new THREE.Vector3(0, 0, -1).applyQuaternion(f.pilot.quaternion);
+                for (const g of e.groups) this.combat.spawn(g.kind, f.nearest, f.pilot.position, g.count, ahead);
                 this.toast(`${e.text} Пробел/ЛКМ — огонь`);
             }
         }
@@ -280,9 +290,14 @@ export class ShipGame {
         const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(f.pilot.quaternion);
         const nose = f.pilot.position.clone().addScaledVector(forward, 25 * this.M);
         if (firing && f.free) {
-            const ray = new THREE.Raycaster();
-            ray.setFromCamera(!locked && this.mouse ? this.mouse : new THREE.Vector2(), f.camera);
-            const dir = ray.ray.origin.clone().addScaledVector(ray.ray.direction, 3 * this.KM).sub(nose).normalize();
+            const m = !locked && this.mouse ? this.mouse : new THREE.Vector2();
+            const look = new THREE.Vector3(m.x, m.y, 0.5).applyMatrix4(f.camera.projectionMatrixInverse)
+                .normalize().applyQuaternion(f.camera.quaternion);
+            // The camera is placed at the end of the frame, after the pilot has moved (and been
+            // carried along with the planet, thousands of km a frame), so a Raycaster from its
+            // last pose shoots nowhere near the crosshair: rebuild the eye from this frame's pilot.
+            const eye = f.pilot.position.clone().add(this.camOffset);
+            const dir = eye.addScaledVector(look, 3 * this.KM).sub(nose).normalize();
             if (this.combat.fire(nose, dir, f.velocity.clone().divideScalar(this.KM))) this.flash = 1;
         }
         this.hud.cross.hidden = !f.free || !locked;
@@ -326,8 +341,9 @@ export class ShipGame {
         this.ship.visible = showShip;
         // The hull banks into turns and leans with the climb, as an aircraft would look doing it.
         const turn = f.free ? f.turnRate ?? 0 : 0, climb = f.free ? f.pitchRate ?? 0 : 0;
-        this.bank += (THREE.MathUtils.clamp(-turn * 0.55, -0.9, 0.9) - this.bank) * 0.12;
-        this.lean += (THREE.MathUtils.clamp(climb * 0.25, -0.3, 0.3) - this.lean) * 0.12;
+        const strafe = f.free ? f.strafe ?? 0 : 0;
+        this.bank += (THREE.MathUtils.clamp(-turn * 0.9 - strafe * 0.5, -1.0, 1.0) - this.bank) * 0.1;
+        this.lean += (THREE.MathUtils.clamp(climb * 0.35, -0.35, 0.35) - this.lean) * 0.1;
         const bob = Math.sin(this.time * 1.7) * 0.6 * this.M;
         this.ship.position.copy(f.pilot.position).add(new THREE.Vector3(0, bob, 0).applyQuaternion(f.pilot.quaternion));
         this.ship.quaternion.copy(f.pilot.quaternion)
@@ -345,9 +361,11 @@ export class ShipGame {
             // Behind and above the ship along the gaze, so looking around swings the camera round the hull.
             const offset = new THREE.Vector3(0, 14, 70).multiplyScalar(this.M).applyQuaternion(aim);
             f.camera.position.copy(f.pilot.position).add(offset);
+            this.camOffset.copy(offset);
             f.camera.quaternion.copy(aim).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.08));
         } else {
             f.camera.position.copy(f.pilot.position);
+            this.camOffset.set(0, 0, 0);
             f.camera.quaternion.copy(aim);
         }
     }

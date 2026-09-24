@@ -175,8 +175,8 @@ void main() {
 
 export const TERRAIN_FRAG = /* glsl */ `
 #include <logdepthbuf_pars_fragment>
-#define STEPS 10
-#define LIGHT_STEPS 4
+#define STEPS 6
+#define LIGHT_STEPS 3
 ${TERRAIN_GLSL}
 ${ATMOSPHERE_GLSL}
 uniform vec3 uSunColor;
@@ -192,13 +192,13 @@ varying float vDrop;
 float terrainShadow(vec3 p, vec3 L) {
     if (L.y <= -0.02) return 0.0;
     float res = 1.0;
-    float t = 15.0;
-    for (int i = 0; i < 28; i++) {
+    float t = 20.0;
+    for (int i = 0; i < 14; i++) {
         vec3 q = p + L * t;
         float h = q.y - terrainHeight(q.xz, 5);
         res = min(res, 10.0 * h / t);
         if (res < 0.001 || q.y > uRelief * 1.6) break;
-        t *= 1.32;
+        t *= 1.6;
     }
     return clamp(res, 0.0, 1.0);
 }
@@ -267,7 +267,7 @@ void main() {
     float dist = length(camToP);
     vec3 V = -camToP / dist;
     // Normals from the full-detail height field; far away fewer octaves, so it does not shimmer.
-    int oct = dist < 1500.0 ? 13 : dist < 8000.0 ? 11 : 9;
+    int oct = dist < 1500.0 ? 11 : dist < 8000.0 ? 9 : 7;
     float e = clamp(dist * 0.0015, 0.5, 40.0);
     float h0 = terrainHeight(vWorld.xz, oct);
     float hx = terrainHeight(vWorld.xz + vec2(e, 0.0), oct);

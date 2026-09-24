@@ -175,7 +175,6 @@ export class StarSystemLevel implements Level {
             this.orbitOffset.setLength(len);
         }
     };
-    private onDbl = () => { if (this.target) this.flyTo(this.target); };
 
     constructor(private host: LevelHost, private galaxy: GalaxySpec, star: { seed: number; mass: number } | 'sun') {
         this.labels = new Labels(host.labelLayer);
@@ -252,13 +251,15 @@ export class StarSystemLevel implements Level {
         this.game = new ShipGame(this.scene, host.canvas, host.labelLayer, this.system ? `sys:${this.system.seed}` : 'sys:sun',
             () => this.system ? generatedMissions(planetNames, this.system.seed) : solarMissions(),
             name => this.bodies.find(b => b.name === name), text => host.toast(text));
-        this.ctl.enabled = false;
+        // Start at the controls, beside the home planet, looking at it.
+        this.pilot.position.copy(home.pos).add(this.orbitOffset);
+        this.pilot.lookAt(home.pos);
+        this.goFree();
         window.addEventListener('keydown', this.onKeyDown);
         host.canvas.addEventListener('pointerdown', this.onDown);
         window.addEventListener('pointerup', this.onUp);
         window.addEventListener('pointermove', this.onMove);
         host.canvas.addEventListener('wheel', this.onWheel, { passive: true });
-        host.canvas.addEventListener('dblclick', this.onDbl);
     }
 
     // -----------------------------------------------------------------------
@@ -647,7 +648,7 @@ export class StarSystemLevel implements Level {
             pilot: this.pilot, camera: this.camera, free: this.mode === 'free', velocity: this.mode === 'free' ? this.ctl.velocity : new THREE.Vector3(),
             // In open space the fight happens in the star's frame, which does not move under us.
             starPos: this.bodies[0].pos, nearest: this.frameBody() ?? this.bodies[0],
-            aim: this.ctl.aimQuaternion, turnRate: this.ctl.turnRate, pitchRate: this.ctl.pitchRate, boost: this.ctl.boosted,
+            aim: this.ctl.aimQuaternion, turnRate: this.ctl.turnRate, pitchRate: this.ctl.pitchRate, boost: this.ctl.boosted, strafe: this.ctl.strafe,
             debris: this.debrisDensity(),
             width: this.width, height: this.height, now: this.realTime,
         });
@@ -668,6 +669,7 @@ export class StarSystemLevel implements Level {
         const px = pixelScale(this.camera, this.height);
         const spritePos = this.sprites.geometry.attributes.position as THREE.BufferAttribute;
         const tmp = new THREE.Vector3();
+        const overview = this.nearestSurface(this.camera.position).dist > 0.3 * AU_KM / UNIT_KM;
         this.bodies.forEach((b, i) => {
             spritePos.setXYZ(i, b.pos.x, b.pos.y, b.pos.z);
             if (b.kind === 'star') {
@@ -713,7 +715,8 @@ export class StarSystemLevel implements Level {
             } else {
                 b.label.visible = b.radius / camDist * px < 60;
                 // Up close a planet's own orbit is a line through the camera; hide it.
-                if (b.orbitLine) b.orbitLine.visible = !b.el || camDist > b.el.a * 0.02;
+                // Near the planets, other orbits are just lines slicing across the view: show only the target's.
+                if (b.orbitLine) b.orbitLine.visible = (overview || b === this.target) && (!b.el || camDist > b.el.a * 0.02);
             }
             b.label.position.copy(b.pos);
             b.label.el.classList.toggle('target', b === this.target);
@@ -827,7 +830,7 @@ export class StarSystemLevel implements Level {
         window.removeEventListener('pointerup', this.onUp);
         window.removeEventListener('pointermove', this.onMove);
         this.host.canvas.removeEventListener('wheel', this.onWheel);
-        this.host.canvas.removeEventListener('dblclick', this.onDbl);
+
         this.labels.dispose();
         disposeObject(this.scene);
     }
