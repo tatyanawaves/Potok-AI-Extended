@@ -101,18 +101,40 @@ const haloMat = (color: number) => new THREE.MeshBasicMaterial({
     color: new THREE.Color(color).multiplyScalar(2.5), transparent: true, opacity: 0.45,
     blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
 });
-const lineMat = (color: number, k: number) => new THREE.LineBasicMaterial({
-    color: new THREE.Color(color).multiplyScalar(k), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+/**
+ * A tracer is a glowing ribbon turned to face the camera: a white-hot core in a coloured glow,
+ * brightest at the head and fading along the tail. u runs head (0) → tail (1), v across.
+ */
+const tracerMat = (color: number, k: number) => new THREE.ShaderMaterial({
+    vertexShader: /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+varying vec2 vUv;
+void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    #include <logdepthbuf_vertex>
+}`,
+    fragmentShader: /* glsl */ `
+#include <logdepthbuf_pars_fragment>
+uniform vec3 uColor;
+varying vec2 vUv;
+void main() {
+    #include <logdepthbuf_fragment>
+    float across = 1.0 - abs(vUv.y * 2.0 - 1.0);
+    float fade = pow(1.0 - vUv.x, 1.8);
+    float head = exp(-vUv.x * 25.0);
+    vec3 core = vec3(1.0) * pow(across, 8.0) * (0.6 + 1.4 * head);
+    vec3 glow = uColor * pow(across, 1.6);
+    gl_FragColor = vec4((core * 2.0 + glow) * fade * 1.4, 1.0);
+}`,
+    uniforms: { uColor: { value: new THREE.Color(color).multiplyScalar(k) } },
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
 });
-const tracerLine = lineMat(0x66ddff, 9);
-const hostileLine = lineMat(0xff3344, 7);
-const headMat = (color: number) => new THREE.PointsMaterial({
-    color: new THREE.Color(color).multiplyScalar(12), size: 5, sizeAttenuation: false,
-    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
-});
-const tracerHead = headMat(0xaaf0ff);
-const hostileHead = headMat(0xff6060);
-const headGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+const tracerFriendly = tracerMat(0x44c8ff, 3);
+const tracerHostile = tracerMat(0xff3040, 2);
+const RIBBON_INDEX = [0, 2, 1, 1, 2, 3];
+const RIBBON_UV = new Float32Array([0, 0, 0, 1, 1, 0, 1, 1]);
 const HALO: Map<THREE.Material, THREE.Material> = new Map([
     [friendlyMat, haloMat(0x44bbff)], [hostileMat, haloMat(0xff2233)], [plasmaMat, haloMat(0xaa33ff)],
 ]);
@@ -163,8 +185,6 @@ export class Combat {
         return out.subVectors(world, this.anchor.pos).divideScalar(this.KM);
     }
 
-    /** Other things bolts can hit (rocks): hit() returns true when the target breaks. */
-    extraTargets?: () => { local: THREE.Vector3; radiusKm: number; hit: (damage: number) => boolean }[];
 
     toWorld(local: THREE.Vector3, out = new THREE.Vector3()): THREE.Vector3 {
         return out.copy(local).multiplyScalar(this.KM).add(this.anchor!.pos);
@@ -238,7 +258,9 @@ export class Combat {
             }
         }
         const vel = dir.multiplyScalar(PLAYER_BOLT_SPEED).add(shipVelKmS);
-        this.addBolt(from.addScaledVector(vel.clone().normalize(), 0.03), vel, PLAYER_BOLT_DAMAGE, true, 0.006, friendlyMat, 3);
+        // Seen from the chase camera the first hundred metres of a shot lie over the hull, so the
+        // bolt starts beyond them.
+        this.addBolt(from.addScaledVector(vel.clone().normalize(), 0.12), vel, PLAYER_BOLT_DAMAGE, true, 0.006, friendlyMat, 3);
         return true;
     }
 
@@ -253,19 +275,43 @@ export class Combat {
             halo.scale.set(3, 3, 1.1);
             mesh.add(halo);
         } else {
-            // A tracer: a line from where it was fired to where it is now (up to 1.6 km), with a bright
-            // head. Lines stay a pixel or two wide at any range and the bloom makes them glow; a solid
-            // bolt seen from behind the ship is an end-on blob, or a dot hundreds of metres away.
-            const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-            const line = new THREE.Line(g, friendly ? tracerLine : hostileLine);
-            line.frustumCulled = false;
-            const head = new THREE.Points(headGeo, friendly ? tracerHead : hostileHead);
-            head.frustumCulled = false;
-            line.add(head);
-            mesh = line;
+            // A tracer: a ribbon from where it was fired to where it is now (up to 4 km), kept a few
+            // pixels wide at any range (see update). A solid bolt seen from behind the ship is an end-on
+            // blob, or a dot hundreds of metres away.
+            const g = new THREE.BufferGeometry()
+                .setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3))
+                .setAttribute('uv', new THREE.BufferAttribute(RIBBON_UV, 2));
+            g.setIndex(RIBBON_INDEX);
+            mesh = new THREE.Mesh(g, friendly ? tracerFriendly : tracerHostile);
+            mesh.frustumCulled = false;
+            mesh.userData.ribbon = true;
         }
         this.group.add(mesh);
-        this.bolts.push({ local, vel, life, damage, friendly, radius, mesh, travelled: 0, trail: big ? 0 : friendly ? 1.6 : 0.8 });
+        this.bolts.push({ local, vel, life, damage, friendly, radius, mesh, travelled: 0, trail: big ? 0 : friendly ? 4 : 1.2 });
+    }
+
+    /**
+     * Lay a tracer's ribbon from its head back along its path, turned to face the camera and
+     * widened with distance so it stays ~6 px across. Vertices are relative to the head (a
+     * double-precision object position), so float32 holds them exactly enough.
+     */
+    private shapeRibbon(b: Bolt, eye: THREE.Vector3, camFwd: THREE.Vector3, camUp: THREE.Vector3) {
+        const dir = b.vel.clone().normalize();
+        const len = Math.min(b.travelled, b.trail) * this.KM;
+        let side = new THREE.Vector3().crossVectors(dir, camFwd);
+        if (side.lengthSq() < 1e-8) side.crossVectors(dir, camUp);
+        side.normalize();
+        const minHalf = (b.friendly ? 1.5 : 2.5) * this.M;
+        const half = (d: number) => Math.max(minHalf, d * 0.0035);
+        const head = b.mesh.position, tail = head.clone().addScaledVector(dir, -len);
+        const hHead = half(head.distanceTo(eye)), hTail = half(tail.distanceTo(eye));
+        const pos = (b.mesh as THREE.Mesh).geometry.attributes.position as THREE.BufferAttribute;
+        const back = dir.clone().multiplyScalar(-len);
+        pos.setXYZ(0, -side.x * hHead, -side.y * hHead, -side.z * hHead);
+        pos.setXYZ(1, side.x * hHead, side.y * hHead, side.z * hHead);
+        pos.setXYZ(2, back.x - side.x * hTail, back.y - side.y * hTail, back.z - side.z * hTail);
+        pos.setXYZ(3, back.x + side.x * hTail, back.y + side.y * hTail, back.z + side.z * hTail);
+        pos.needsUpdate = true;
     }
 
     damagePlayer(amount: number) {
@@ -321,6 +367,8 @@ export class Combat {
         for (const e of this.enemies) this.think(e, dt, me, shipVelKmS);
 
         // Projectiles: swept-sphere hits so fast bolts cannot tunnel through a target.
+        const camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+        const camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
         const prev = new THREE.Vector3();
         for (const b of this.bolts) {
             prev.copy(b.local);
@@ -336,36 +384,21 @@ export class Combat {
                         break;
                     }
                 }
-                if (b.life > 0 && this.extraTargets) {
-                    for (const t of this.extraTargets()) {
-                        if (segmentHits(prev, b.local, t.local, t.radiusKm + b.radius)) {
-                            b.life = 0;
-                            this.onHit?.();
-                            if (t.hit(b.damage)) p.score += 10;
-                            else this.explode(b.local, 0.03, 0xffcc88);
-                            break;
-                        }
-                    }
-                }
             } else if (!p.dead && segmentHits(prev, b.local, me, PLAYER_HIT_KM + b.radius)) {
                 this.damagePlayer(b.damage);
                 b.life = 0;
             }
             b.travelled += b.vel.length() * dt;
             this.toWorld(b.local, b.mesh.position);
-            if (b.mesh instanceof THREE.Line) {
-                // The tail, relative to the head: small numbers, so float32 holds them exactly enough.
-                const tail = b.vel.clone().setLength(-Math.min(b.travelled + 0.03, b.trail) * this.KM);
-                (b.mesh.geometry.attributes.position as THREE.BufferAttribute).setXYZ(1, tail.x, tail.y, tail.z);
-                b.mesh.geometry.attributes.position.needsUpdate = true;
-            } else {
+            if (b.mesh.userData.ribbon) this.shapeRibbon(b, shipWorld, camFwd, camUp);
+            else {
                 b.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), b.vel, new THREE.Vector3(0, 1, 0)));
             }
         }
         this.bolts = this.bolts.filter(b => {
             if (b.life > 0) return true;
             this.group.remove(b.mesh);
-            if (b.mesh instanceof THREE.Line) b.mesh.geometry.dispose();
+            if (b.mesh.userData.ribbon) (b.mesh as THREE.Mesh).geometry.dispose();
             return false;
         });
 

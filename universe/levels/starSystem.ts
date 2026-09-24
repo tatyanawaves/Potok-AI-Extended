@@ -829,7 +829,6 @@ export class StarSystemLevel implements Level {
             // In open space the fight happens in the star's frame, which does not move under us.
             starPos: this.bodies[0].pos, nearest: this.frameBody() ?? this.bodies[0],
             aim: this.ctl.aimQuaternion, turnRate: this.ctl.turnRate, pitchRate: this.ctl.pitchRate, boost: this.ctl.boosted, strafe: this.ctl.strafe,
-            debris: this.debrisDensity(),
             width: this.width, height: this.height, now: this.realTime,
         });
         {
@@ -923,14 +922,6 @@ export class StarSystemLevel implements Level {
         const byName = (n: string) => this.bodies.find(b => b.name === n);
         this.satellites.update(this.realTime, byName, this.camera, this.width, this.height);
         this.portals.update(this.realTime, this.pilot.position, byName, star.pos, this.camera, this.width, this.height);
-    }
-
-    /** Rocks around the ship: a few everywhere, many inside the asteroid belt. */
-    private debrisDensity(): number {
-        const p = this.pilot.position.clone().sub(this.bodies[0].pos);
-        const r = Math.hypot(p.x, p.z);
-        const inBelt = r > this.beltRange[0] && r < this.beltRange[1] && Math.abs(p.y) < r * 0.12;
-        return inBelt ? 140 : 45;
     }
 
     /**

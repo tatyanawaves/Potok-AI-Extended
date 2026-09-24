@@ -52,17 +52,12 @@ export function makeShip(): THREE.Group {
     const fin = new THREE.Mesh(new THREE.BoxGeometry(0.8, 8, 8), hull(0x5c6573, 0.7, 0.5));
     fin.position.set(0, 5, 9);
     g.add(fin);
-    // Wing guns and their muzzle flashes, shown for a moment after each shot.
+    // Wing guns. No muzzle flash: a glow on the hull read as the shot sitting on the ship.
     for (const side of [1, -1]) {
         const gun = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 7, 8), hull(0x3a3f48, 0.8, 0.4));
         gun.rotation.x = Math.PI / 2;
         gun.position.set(side * 9, -0.3, -4.5);
         g.add(gun);
-        const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.8, 8, 6), glow(0x88e0ff, 2));
-        muzzle.position.set(side * 9, -0.3, -8.5);
-        muzzle.name = 'muzzle';
-        muzzle.visible = false;
-        g.add(muzzle);
     }
     return g;
 }

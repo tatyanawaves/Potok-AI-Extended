@@ -10,7 +10,6 @@ import { kill, mission, Mission, MissionLog, objectiveText, reach } from './miss
 import { Creatures, CreatureSpec, DialogBox, TALK_KM } from './creatures';
 import type { QuestOffer, WorldBrief } from './dialogue';
 import { makeShip } from './models';
-import { DebrisField } from './spaceObjects';
 
 /** Mission progress per place (a system, or a planet's surface) survives leaving and coming back. */
 const logs = new Map<string, MissionLog>();
@@ -37,8 +36,6 @@ export interface FrameContext {
     boost?: boolean;
     /** Sideways thrust input (−1…1), which also banks the hull. */
     strafe?: number;
-    /** How many rocks to keep around the ship (dense in an asteroid belt); 0 for none. */
-    debris?: number;
 }
 
 type EnemyGroup = { kind: import('./models').EnemyKind; count: number }[];
@@ -61,17 +58,15 @@ export class ShipGame {
     private ship = makeShip();
     private sun = new THREE.DirectionalLight(0xffffff, 2.2);
     private fill = new THREE.HemisphereLight(0x7d8aa8, 0x2a2018, 0.7);
-    // Animation state of the hull: bank, lean, and the muzzle flash.
+    // Animation state of the hull: bank and lean.
     private bank = 0;
     private lean = 0;
-    private flash = 0;
     /** Which gun fires next. */
     private gun = 0;
     private time = 0;
     private mouseFiring = false;
     /** Seconds until the next chance of running into something in open space. */
     private encounterIn = 12 + Math.random() * 10;
-    private field: DebrisField | null = null;
     private keys = new Set<string>();
     private mouse: THREE.Vector2 | null = null;
     private deadFor = -1;
@@ -120,11 +115,6 @@ export class ShipGame {
         this.ship.visible = false;
         scene.add(this.ship, this.sun, this.sun.target, this.fill);
         this.combat = new Combat(scene, labelLayer, combat);
-        // Rocks drift around the ship in space (not on a planet's surface).
-        if ((combat.unitsPerKm ?? 1 / UNIT_KM) < 1) {
-            this.field = new DebrisField(scene, this.KM);
-            this.combat.extraTargets = () => this.field!.targets();
-        }
         if (social?.creatures.length) {
             this.creatures = new Creatures(scene, social.creatures, this.KM);
             this.world = social.world;
@@ -373,20 +363,11 @@ export class ShipGame {
             const right = new THREE.Vector3(1, 0, 0).applyQuaternion(f.pilot.quaternion);
             const port = f.pilot.position.clone().addScaledVector(forward, 8 * this.M).addScaledVector(right, (this.gun ? 9 : -9) * this.M);
             const dir = eye.addScaledVector(look, 3 * this.KM).sub(port).normalize();
-            if (this.combat.fire(port, dir, f.velocity.clone().divideScalar(this.KM))) { this.flash = 1; this.gun ^= 1; }
+            if (this.combat.fire(port, dir, f.velocity.clone().divideScalar(this.KM))) this.gun ^= 1;
         }
         this.hud.cross.hidden = !f.free || !locked;
 
         this.combat.update(dt, f.pilot.position, f.velocity.clone().divideScalar(this.KM), f.camera, f.width, f.height);
-
-        if (this.field) {
-            const velKm = f.velocity.clone().divideScalar(this.KM);
-            const sunDir = f.starPos.clone().sub(f.pilot.position).normalize();
-            // Rocks only make sense at dogfight speeds; at warp they would be a blur.
-            const hit = this.field.update(dt, this.combat, f.pilot.position, velKm, sunDir, f.debris ?? 12, f.free && velKm.length() < 300);
-            if (hit.damage > 0) { this.combat.damagePlayer(hit.damage); this.toast('Столкновение с камнем!'); }
-            for (const at of hit.broken) this.combat.explode(at, 0.25, 0xd8b890);
-        }
 
         if (this.deadFor >= 0) {
             this.deadFor += dt;
@@ -426,19 +407,18 @@ export class ShipGame {
         // Engines: flame length follows thrust, with a flicker; afterburner when boosting.
         const thrust = Math.min(1, f.velocity.length() / this.KM / 5) + (f.boost ? 0.6 : 0);
         const flicker = 0.85 + 0.15 * Math.sin(this.time * 47) * Math.sin(this.time * 31);
-        this.flash = Math.max(0, this.flash - dt * 12);
         this.ship.traverse(o => {
             if (o.name === 'flame') o.scale.set(1 + (f.boost ? 0.3 : 0), (0.25 + thrust * 1.6) * flicker, 1 + (f.boost ? 0.3 : 0));
-            if (o.name === 'muzzle') { o.visible = this.flash > 0; o.scale.setScalar(0.6 + this.flash); }
         });
         const aim = f.free && f.aim ? f.aim : f.pilot.quaternion;
         if (showShip) {
             // Behind and above the ship along the gaze, so looking around swings the camera round the hull.
-            // High enough that the aim point (where the tracers converge) sits clear above the hull.
+            // Above and behind, looking along the aim (hardly tilted down): the crosshair, where the
+            // tracers converge, sits clear above the hull instead of on its canopy.
             const offset = new THREE.Vector3(0, 18, 80).multiplyScalar(this.M).applyQuaternion(aim);
             f.camera.position.copy(f.pilot.position).add(offset);
             this.camOffset.copy(offset);
-            f.camera.quaternion.copy(aim).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.1));
+            f.camera.quaternion.copy(aim).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -0.02));
         } else {
             f.camera.position.copy(f.pilot.position);
             this.camOffset.set(0, 0, 0);
@@ -485,7 +465,6 @@ export class ShipGame {
         window.removeEventListener('mouseup', this.onMouseUp);
         this.canvas.removeEventListener('pointermove', this.onPointer);
         this.combat.dispose();
-        this.field?.dispose();
         this.creatures?.dispose();
         this.dialog?.dispose();
         this.hud.root.remove();
