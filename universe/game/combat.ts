@@ -24,11 +24,21 @@ interface EnemyDef {
 }
 
 export const ENEMIES: Record<EnemyKind, EnemyDef> = {
-    drone: { name: 'Дрон-разведчик', hp: 40, speed: 2.2, hitKm: 0.2, preferKm: 2.2, fireEvery: 1.6, boltSpeed: 12, boltDamage: 6, contactDamage: 10, score: 50 },
-    fighter: { name: 'Пиратский штурмовик', hp: 90, speed: 4, hitKm: 0.25, preferKm: 1.2, fireEvery: 0.7, boltSpeed: 16, boltDamage: 7, contactDamage: 20, score: 120 },
-    crystal: { name: 'Кристаллид', hp: 20, speed: 5, hitKm: 0.15, preferKm: 0, fireEvery: 0, boltSpeed: 0, boltDamage: 0, contactDamage: 25, score: 30 },
-    leviathan: { name: 'Космический левиафан', hp: 700, speed: 1.1, hitKm: 1.2, preferKm: 3, fireEvery: 2.2, boltSpeed: 7, boltDamage: 22, contactDamage: 40, score: 1000 },
+    drone: { name: 'Дрон-разведчик', hp: 40, speed: 2.2, hitKm: 0.32, preferKm: 2.2, fireEvery: 1.6, boltSpeed: 12, boltDamage: 6, contactDamage: 10, score: 50 },
+    fighter: { name: 'Пиратский штурмовик', hp: 90, speed: 4, hitKm: 0.4, preferKm: 1.2, fireEvery: 0.7, boltSpeed: 16, boltDamage: 7, contactDamage: 20, score: 120 },
+    crystal: { name: 'Кристаллид', hp: 20, speed: 5, hitKm: 0.24, preferKm: 0, fireEvery: 0, boltSpeed: 0, boltDamage: 0, contactDamage: 25, score: 30 },
+    leviathan: { name: 'Космический левиафан', hp: 700, speed: 1.1, hitKm: 1.92, preferKm: 3, fireEvery: 2.2, boltSpeed: 7, boltDamage: 22, contactDamage: 40, score: 1000 },
+    // Fast and fragile: weaving strafing runs.
+    interceptor: { name: 'Перехватчик', hp: 35, speed: 7, hitKm: 0.29, preferKm: 0.8, fireEvery: 0.45, boltSpeed: 18, boltDamage: 4, contactDamage: 15, score: 90 },
+    // Slow and armoured: keeps its distance and fires spreads of three.
+    gunship: { name: 'Канонерка', hp: 260, speed: 1.6, hitKm: 0.72, preferKm: 3, fireEvery: 1.8, boltSpeed: 11, boltDamage: 9, contactDamage: 30, score: 350 },
+    // A living hive: hardly moves, never shoots, but keeps releasing drones until it dies.
+    hive: { name: 'Улей', hp: 400, speed: 0.6, hitKm: 0.96, preferKm: 5, fireEvery: 6, boltSpeed: 0, boltDamage: 0, contactDamage: 30, score: 600 },
 };
+
+/** Beyond this, a straggler closes in at speed; beyond ESCAPE_KM the pilot has got away. */
+const CATCH_UP_KM = 10;
+const ESCAPE_KM = 150;
 
 export const PLAYER_BOLT_SPEED = 8; // km/s relative to the ship: slow enough to watch a burst fly
 const PLAYER_BOLT_DAMAGE = 20;
@@ -45,9 +55,6 @@ interface Enemy {
     cooldown: number;
     phase: number;
     breakTimer: number;
-    label: HTMLDivElement;
-    bar: HTMLElement;
-    text: HTMLElement;
     /** Arrow at the screen edge while the enemy is off screen or behind. */
     arrow: HTMLDivElement;
 }
@@ -195,30 +202,29 @@ export class Combat {
         if (this.anchor && this.anchor !== anchor) this.clear();
         this.anchor = anchor;
         const center = this.toLocal(aroundWorld)!;
-        const def = ENEMIES[kind];
         for (let i = 0; i < count; i++) {
             // Out in front of the pilot when we know which way that is, so the fight starts in view.
             const dir = aheadWorld
-                ? aheadWorld.clone().normalize().add(new THREE.Vector3().randomDirection().multiplyScalar(0.55)).normalize()
+                ? aheadWorld.clone().normalize().add(new THREE.Vector3().randomDirection().multiplyScalar(0.3)).normalize()
                 : new THREE.Vector3().randomDirection();
-            const mesh = makeEnemy(kind);
-            // Drawn larger than life (×2.5) so they read at dogfight ranges; hit spheres match.
-            mesh.scale.setScalar(this.M * (kind === 'leviathan' ? 2 : 2.5));
-            this.group.add(mesh);
-            const label = document.createElement('div');
-            label.className = 'elabel';
-            label.innerHTML = `<span></span><i><b></b></i>`;
-            this.labelLayer.appendChild(label);
-            const arrow = document.createElement('div');
-            arrow.className = 'earrow';
-            this.labelLayer.appendChild(arrow);
-            this.enemies.push({
-                kind, def, mesh, hp: def.hp,
-                local: center.clone().addScaledVector(dir, kind === 'leviathan' ? 7 : 2.5 + Math.random() * 3.5), arrow,
-                vel: new THREE.Vector3(), cooldown: 1 + Math.random() * 2, phase: Math.random() * 10, breakTimer: 0,
-                label, text: label.querySelector('span')!, bar: label.querySelector('b')!,
-            });
+            const big = kind === 'leviathan' || kind === 'hive';
+            this.addEnemy(kind, center.clone().addScaledVector(dir, big ? 6 : 1.8 + Math.random() * 2.2));
         }
+    }
+
+    private addEnemy(kind: EnemyKind, local: THREE.Vector3) {
+        const def = ENEMIES[kind];
+        const mesh = makeEnemy(kind);
+        // Drawn well larger than life (×4) so they read at dogfight ranges; hit spheres match.
+        mesh.scale.setScalar(this.M * (kind === 'leviathan' ? 3 : 4));
+        this.group.add(mesh);
+        const arrow = document.createElement('div');
+        arrow.className = 'earrow';
+        this.labelLayer.appendChild(arrow);
+        this.enemies.push({
+            kind, def, mesh, hp: def.hp, local, arrow,
+            vel: new THREE.Vector3(), cooldown: 1 + Math.random() * 2, phase: Math.random() * 10, breakTimer: 0,
+        });
     }
 
     clear() {
@@ -231,7 +237,6 @@ export class Combat {
     private removeEnemy(e: Enemy) {
         this.group.remove(e.mesh);
         e.mesh.traverse(o => (o as THREE.Mesh).geometry?.dispose());
-        e.label.remove();
         e.arrow.remove();
     }
 
@@ -404,6 +409,8 @@ export class Combat {
 
         // Deaths.
         this.enemies = this.enemies.filter(e => {
+            // Left far behind at cruise speed: the pilot got away, and the fight is over.
+            if (e.hp > 0 && e.local.distanceTo(me) > ESCAPE_KM) { this.removeEnemy(e); return false; }
             if (e.hp > 0) return true;
             this.explode(e.local, e.kind === 'leviathan' ? 1.2 : 0.3, e.kind === 'crystal' ? 0x66ffff : 0xffaa44);
             p.score += e.def.score;
@@ -443,6 +450,11 @@ export class Combat {
             want.copy(dir).multiplyScalar(-def.speed * 0.3);
         } else if (e.kind === 'crystal') {
             want.copy(dir).multiplyScalar(def.speed); // kamikaze
+        } else if (e.kind === 'interceptor') {
+            // Weaving runs: in fast on a zigzag, overshoot, swing round.
+            const weave = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize().multiplyScalar(Math.sin(this.time * 3 + e.phase) * 0.8);
+            if (e.breakTimer > 0) { e.breakTimer -= dt; want.copy(dir).multiplyScalar(-0.4).add(weave).setLength(def.speed); }
+            else { want.copy(dir).add(weave).setLength(def.speed); if (d < def.preferKm) e.breakTimer = 1.5; }
         } else if (e.kind === 'fighter') {
             // Attack runs: dive in, fire, break away, come round again.
             if (e.breakTimer > 0) {
@@ -458,7 +470,9 @@ export class Combat {
             const tangent = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(Math.sin(e.phase), 1, Math.cos(e.phase))).normalize();
             want.copy(dir).multiplyScalar(radial).addScaledVector(tangent, 0.7).setLength(def.speed);
         }
-        e.vel.lerp(want, 1 - Math.exp(-1.2 * dt));
+        // A straggler (the pilot flew on) closes in at speed rather than being left a dot far behind.
+        if (!p.dead && d > CATCH_UP_KM) want.copy(dir).multiplyScalar(Math.max(def.speed, (d - def.preferKm) * 0.6));
+        e.vel.lerp(want, 1 - Math.exp(-(d > CATCH_UP_KM ? 3 : 1.2) * dt));
         e.local.addScaledVector(e.vel, dt);
         if (this.ground) {
             const floor = this.ground(e.local.x, e.local.z) + def.hitKm + 0.05;
@@ -467,7 +481,16 @@ export class Combat {
 
         // Weapons: lead the target like a gunner would.
         e.cooldown -= dt;
-        if (!p.dead && def.fireEvery > 0 && d < 14 && e.cooldown <= 0) {
+        if (e.kind === 'hive') {
+            // The hive breeds drones instead of shooting, up to a swarm of eight.
+            if (!p.dead && d < 20 && e.cooldown <= 0) {
+                e.cooldown = def.fireEvery;
+                if (this.enemies.filter(x => x.kind === 'drone').length < 8) {
+                    this.addEnemy('drone', e.local.clone().addScaledVector(new THREE.Vector3().randomDirection(), def.hitKm * 1.5));
+                    this.explode(e.local, 0.15, 0x9dff7a);
+                }
+            }
+        } else if (!p.dead && def.fireEvery > 0 && d < 14 && e.cooldown <= 0) {
             e.cooldown = def.fireEvery * (0.7 + Math.random() * 0.6);
             const t = d / def.boltSpeed;
             const aim = me.clone().addScaledVector(meVel, t).sub(e.local).normalize();
@@ -476,9 +499,17 @@ export class Combat {
             const big = e.kind === 'leviathan';
             this.addBolt(e.local.clone().addScaledVector(aim, def.hitKm), vel, def.boltDamage, false, big ? 0.05 : 0.006,
                 big ? plasmaMat : hostileMat, 3);
+            if (e.kind === 'gunship') {
+                // Two more to the sides: a spread of three.
+                for (const s of [-1, 1]) {
+                    const side = new THREE.Vector3().crossVectors(aim, new THREE.Vector3(0, 1, 0)).normalize().multiplyScalar(0.06 * s);
+                    const v2 = aim.clone().add(side).normalize().multiplyScalar(def.boltSpeed).add(e.vel);
+                    this.addBolt(e.local.clone().addScaledVector(aim, def.hitKm), v2, def.boltDamage, false, 0.006, hostileMat, 3);
+                }
+            }
         }
         if (!p.dead && d < def.hitKm + PLAYER_HIT_KM + 0.02) {
-            if (e.kind === 'crystal' || e.kind === 'drone' || e.kind === 'fighter') {
+            if (e.kind === 'crystal' || e.kind === 'drone' || e.kind === 'fighter' || e.kind === 'interceptor') {
                 this.damagePlayer(def.contactDamage);
                 e.hp = 0; // rammed
             } else {
@@ -489,11 +520,12 @@ export class Combat {
         // Pose and animation.
         this.toWorld(e.local, e.mesh.position);
         // Noses point along −Z; Matrix4.lookAt(0, face) turns −Z towards `face`.
-        const face = e.kind === 'drone' || e.kind === 'leviathan' || e.vel.lengthSq() < 1e-6 ? to : e.vel;
+        const face = e.kind === 'drone' || e.kind === 'leviathan' || e.kind === 'gunship' || e.vel.lengthSq() < 1e-6 ? to : e.vel;
         const look = new THREE.Matrix4().lookAt(new THREE.Vector3(), face, new THREE.Vector3(0, 1, 0));
         e.mesh.quaternion.slerp(new THREE.Quaternion().setFromRotationMatrix(look), 1 - Math.exp(-3 * dt));
         e.mesh.traverse(o => {
             if (o.name === 'spin') o.rotation.z += dt * 2;
+            else if (o.name === 'pulse') o.scale.setScalar(1 + 0.08 * Math.sin(this.time * 2.5 + e.phase));
             else if (o.name.startsWith('tentacle-')) {
                 const [, t, s] = o.name.split('-').map(Number);
                 o.rotation.x = Math.sin(this.time * 1.4 + t * 1.1 + s * 0.6) * 0.25;
@@ -502,15 +534,14 @@ export class Combat {
         });
     }
 
+    /** No tags over enemies; one off screen (or behind) gets an arrow at the screen edge. */
     private updateLabels(camera: THREE.Camera, width: number, height: number, me: THREE.Vector3) {
         const v = new THREE.Vector3();
         for (const e of this.enemies) {
             const d = e.local.distanceTo(me);
             this.toWorld(e.local, v).project(camera);
-            const visible = v.z < 1 && v.z > -1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05 && d < 120;
-            e.label.style.display = visible ? '' : 'none';
-            // Off screen (or behind us): an arrow on the edge points the way.
-            if (!visible && d < 120) {
+            const onScreen = v.z < 1 && v.z > -1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05;
+            if (!onScreen && d < ESCAPE_KM) {
                 let x = v.x, y = v.y;
                 if (v.z > 1) { x = -x; y = -y; }
                 const k = 0.92 / Math.max(Math.abs(x), Math.abs(y), 1e-6);
@@ -519,14 +550,9 @@ export class Combat {
                 e.arrow.style.display = '';
                 e.arrow.style.transform = `translate(${px.toFixed(0)}px, ${py.toFixed(0)}px) rotate(${Math.atan2(-y, x)}rad)`;
                 e.arrow.textContent = '➤';
-                e.arrow.title = `${e.def.name}, ${d.toFixed(1)} км`;
             } else {
                 e.arrow.style.display = 'none';
             }
-            if (!visible) continue;
-            e.label.style.transform = `translate(${((v.x * 0.5 + 0.5) * width).toFixed(1)}px, ${((-v.y * 0.5 + 0.5) * height).toFixed(1)}px)`;
-            e.text.textContent = `${e.def.name} · ${d < 10 ? d.toFixed(1) : Math.round(d)} км`;
-            e.bar.style.width = `${Math.max(0, (e.hp / e.def.hp) * 100)}%`;
         }
     }
 

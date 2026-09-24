@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 
-export type EnemyKind = 'drone' | 'fighter' | 'crystal' | 'leviathan';
+export type EnemyKind = 'drone' | 'fighter' | 'crystal' | 'leviathan' | 'interceptor' | 'gunship' | 'hive';
 
 const glow = (color: number, intensity = 1.6) => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(intensity) });
 
@@ -156,8 +156,92 @@ function makeLeviathan(): THREE.Group {
     return g;
 }
 
+/** An interceptor: a slim violet dart with forward-swept blades and a hot blue drive. Length ≈ 60 m. */
+function makeInterceptor(): THREE.Group {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.ConeGeometry(7, 60, 6), hull(0x3b2a55, 0.7, 0.35));
+    body.rotation.x = -Math.PI / 2;
+    g.add(body);
+    for (const side of [1, -1]) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(34, 1.5, 10), hull(0x6a4a9a, 0.6, 0.4));
+        blade.position.set(side * 18, 0, 8);
+        blade.rotation.y = -side * 0.5;
+        g.add(blade);
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(2.2, 8, 6), glow(0xff44cc, 4));
+        tip.position.set(side * 32, 0, -2);
+        g.add(tip);
+    }
+    const drive = new THREE.Mesh(new THREE.SphereGeometry(6, 12, 8), glow(0x55aaff, 5));
+    drive.position.z = 30;
+    drive.scale.set(1, 1, 1.8);
+    g.add(drive);
+    return g;
+}
+
+/** A gunship: a heavy armoured hull with two turrets and rows of orange lights. Length ≈ 150 m. */
+function makeGunship(): THREE.Group {
+    const g = new THREE.Group();
+    const armour = hull(0x3a3d42, 0.85, 0.5);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(50, 26, 140), armour);
+    g.add(body);
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(24, 14, 30), armour);
+    bridge.position.set(0, 18, 30);
+    g.add(bridge);
+    for (const z of [-40, 10]) {
+        const turret = new THREE.Mesh(new THREE.CylinderGeometry(9, 11, 8, 12), hull(0x55585e));
+        turret.position.set(0, 17, z);
+        g.add(turret);
+        for (const x of [-3, 3]) {
+            const barrel = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 26, 6), hull(0x2a2c30));
+            barrel.rotation.x = Math.PI / 2;
+            barrel.position.set(x, 19, z - 14);
+            g.add(barrel);
+        }
+    }
+    for (let k = 0; k < 8; k++) {
+        for (const side of [1, -1]) {
+            const light = new THREE.Mesh(new THREE.BoxGeometry(1, 3, 6), glow(0xff8a20, 4));
+            light.position.set(side * 25.5, 2, -55 + k * 15);
+            g.add(light);
+        }
+    }
+    for (const x of [-15, 15]) {
+        const engine = new THREE.Mesh(new THREE.SphereGeometry(8, 12, 8), glow(0xff5520, 4));
+        engine.position.set(x, 0, 72);
+        g.add(engine);
+    }
+    return g;
+}
+
+/** A hive: a ribbed organic pod with glowing pores, slowly breathing; drones hatch from it. Radius ≈ 150 m. */
+function makeHive(): THREE.Group {
+    const g = new THREE.Group();
+    const geo = new THREE.SphereGeometry(110, 40, 28);
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i);
+        const rib = 1 + 0.12 * Math.sin(Math.atan2(v.z, v.x) * 9) * Math.cos(v.y * 0.02);
+        v.multiplyScalar(rib);
+        v.y *= 1.3;
+        pos.setXYZ(i, v.x, v.y, v.z);
+    }
+    geo.computeVertexNormals();
+    const body = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x3a2a18, emissive: 0x1a2a08, roughness: 0.8, metalness: 0.1 }));
+    body.name = 'pulse';
+    g.add(body);
+    for (let k = 0; k < 22; k++) {
+        const pore = new THREE.Mesh(new THREE.SphereGeometry(9 + (k % 3) * 4, 10, 8), glow(0x9dff7a, 3));
+        const a = k * 2.4, b = ((k + 0.5) / 22) * Math.PI;
+        pore.position.set(Math.cos(a) * Math.sin(b) * 118, Math.cos(b) * 150, Math.sin(a) * Math.sin(b) * 118);
+        g.add(pore);
+    }
+    return g;
+}
+
 export function makeEnemy(kind: EnemyKind): THREE.Group {
-    const g = kind === 'drone' ? makeDrone() : kind === 'fighter' ? makeFighter() : kind === 'crystal' ? makeCrystal() : makeLeviathan();
+    const g = kind === 'drone' ? makeDrone() : kind === 'fighter' ? makeFighter() : kind === 'crystal' ? makeCrystal()
+        : kind === 'interceptor' ? makeInterceptor() : kind === 'gunship' ? makeGunship() : kind === 'hive' ? makeHive() : makeLeviathan();
     // A faint red self-glow keeps the silhouette readable on the night side, against black space.
     g.traverse(o => {
         const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;

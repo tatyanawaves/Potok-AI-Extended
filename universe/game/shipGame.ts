@@ -42,11 +42,14 @@ type EnemyGroup = { kind: import('./models').EnemyKind; count: number }[];
 
 /** What you might run into between the planets. */
 const ENCOUNTERS: { weight: number; text: string; groups: EnemyGroup }[] = [
-    { weight: 30, text: 'Перехват! Звено дронов-разведчиков', groups: [{ kind: 'drone', count: 5 }] },
-    { weight: 25, text: 'Пиратская засада!', groups: [{ kind: 'fighter', count: 3 }, { kind: 'drone', count: 2 }] },
-    { weight: 20, text: 'Рой кристаллидов идёт на таран!', groups: [{ kind: 'crystal', count: 9 }] },
-    { weight: 15, text: 'Пираты гонят рой кристаллидов на вас!', groups: [{ kind: 'fighter', count: 2 }, { kind: 'crystal', count: 5 }] },
-    { weight: 10, text: 'Из темноты выплывает космический левиафан…', groups: [{ kind: 'leviathan', count: 1 }, { kind: 'crystal', count: 3 }] },
+    { weight: 20, text: 'Перехват! Звено дронов-разведчиков', groups: [{ kind: 'drone', count: 5 }] },
+    { weight: 18, text: 'Пиратская засада!', groups: [{ kind: 'fighter', count: 3 }, { kind: 'drone', count: 2 }] },
+    { weight: 15, text: 'Рой кристаллидов идёт на таран!', groups: [{ kind: 'crystal', count: 9 }] },
+    { weight: 15, text: 'Стая перехватчиков заходит на вас зигзагом!', groups: [{ kind: 'interceptor', count: 4 }] },
+    { weight: 10, text: 'Канонерка с эскортом! Держитесь подальше от её залпов', groups: [{ kind: 'gunship', count: 1 }, { kind: 'fighter', count: 2 }] },
+    { weight: 8, text: 'Улей! Уничтожьте его, пока он не выпустил весь рой', groups: [{ kind: 'hive', count: 1 }, { kind: 'drone', count: 2 }] },
+    { weight: 8, text: 'Пираты гонят рой кристаллидов на вас!', groups: [{ kind: 'fighter', count: 2 }, { kind: 'crystal', count: 5 }] },
+    { weight: 6, text: 'Из темноты выплывает космический левиафан…', groups: [{ kind: 'leviathan', count: 1 }, { kind: 'crystal', count: 3 }] },
 ];
 
 export class ShipGame {

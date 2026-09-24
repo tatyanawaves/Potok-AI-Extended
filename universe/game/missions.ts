@@ -30,6 +30,9 @@ const ENEMY_RU: Record<EnemyKind, [string, string]> = {
     fighter: ['штурмовик', 'штурмовиков'],
     crystal: ['кристаллид', 'кристаллидов'],
     leviathan: ['левиафан', 'левиафанов'],
+    interceptor: ['перехватчик', 'перехватчиков'],
+    gunship: ['канонерку', 'канонерок'],
+    hive: ['улей', 'ульев'],
 };
 
 export function mission(id: string, title: string, brief: string, location: string, spawn: Mission['spawn'], objectives: Objective[], reward: number): Mission {

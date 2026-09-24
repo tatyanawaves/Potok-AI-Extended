@@ -51,7 +51,7 @@ export interface Exchange {
     reply?: string;
 }
 
-const ENEMIES: EnemyKind[] = ['drone', 'fighter', 'crystal', 'leviathan'];
+const ENEMIES: EnemyKind[] = ['drone', 'fighter', 'crystal', 'leviathan', 'interceptor', 'gunship', 'hive'];
 /** A creature talks for at least this many pilot replies before it asks for anything… */
 export const MIN_REPLIES = 4;
 /** …and gets to its errand by this many at the latest. */
@@ -80,7 +80,7 @@ export function sanitizeQuest(q: unknown, world: WorldBrief, mind: CreatureMind)
     return {
         type, body,
         enemy: type === 'kill' ? enemy : undefined,
-        count: type === 'kill' ? clamp(o.count, 1, enemy === 'leviathan' ? 1 : 12, enemy === 'leviathan' ? 1 : 4) : undefined,
+        count: type === 'kill' ? clamp(o.count, 1, enemy === 'leviathan' || enemy === 'hive' ? 1 : enemy === 'gunship' ? 2 : 12, enemy === 'leviathan' || enemy === 'hive' ? 1 : 4) : undefined,
         title: text(o.title, `Поручение: ${mind.name}`, 60),
         brief: text(o.brief, type === 'kill' ? `Помочь у тела ${body}.` : `Долететь до ${body}.`, 240),
         reward: clamp(o.reward, 100, 1500, 400),
@@ -149,7 +149,7 @@ function systemPrompt(mind: CreatureMind, world: WorldBrief, forceQuest: boolean
         `Ты сама(сам) начинаешь разговор и постепенно ведёшь его к тому, чтобы дать пилоту поручение — не раньше ${MIN_REPLIES}-го ответа пилота.`,
         forceQuest ? 'СЕЙЧАС обязательно дай поручение.' : '',
         'Поручение бывает двух типов:',
-        '— "kill": уничтожить врагов. enemy: "drone" (дроны-разведчики), "fighter" (пиратские штурмовики), "crystal" (кристаллиды-тараны), "leviathan" (космический левиафан, только 1).',
+        '— "kill": уничтожить врагов. enemy: "drone" (дроны-разведчики), "fighter" (пиратские штурмовики), "crystal" (кристаллиды-тараны), "interceptor" (быстрые перехватчики), "gunship" (тяжёлые канонерки, 1–2), "hive" (улей, рождающий дронов, только 1), "leviathan" (космический левиафан, только 1).',
         '— "reach": долететь до тела и осмотреть его.',
         `body — одно из: ${world.bodies.join(', ')}.`,
         'Отвечай ТОЛЬКО объектом JSON, без markdown и пояснений:',

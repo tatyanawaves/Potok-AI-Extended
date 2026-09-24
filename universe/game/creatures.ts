@@ -903,4 +903,7 @@ export class DialogBox {
     }
 }
 
-const ENEMY_RU: Record<string, string> = { drone: 'дроны', fighter: 'пиратские штурмовики', crystal: 'кристаллиды', leviathan: 'левиафан' };
+const ENEMY_RU: Record<string, string> = {
+    drone: 'дроны', fighter: 'пиратские штурмовики', crystal: 'кристаллиды', leviathan: 'левиафан',
+    interceptor: 'перехватчики', gunship: 'канонерки', hive: 'улей',
+};
