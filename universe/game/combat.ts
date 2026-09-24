@@ -48,6 +48,8 @@ interface Enemy {
     label: HTMLDivElement;
     bar: HTMLElement;
     text: HTMLElement;
+    /** Arrow at the screen edge while the enemy is off screen or behind. */
+    arrow: HTMLDivElement;
 }
 
 interface Bolt {
@@ -100,6 +102,8 @@ export class Combat {
     anchor: Anchor | null = null;
     onKill?: (kind: EnemyKind) => void;
     onPlayerHit?: () => void;
+    /** A player's shot connected (for the hit marker). */
+    onHit?: () => void;
     onPlayerDeath?: () => void;
     private enemies: Enemy[] = [];
     private bolts: Bolt[] = [];
@@ -135,11 +139,14 @@ export class Combat {
         return out.subVectors(world, this.anchor.pos).divideScalar(this.KM);
     }
 
-    private toWorld(local: THREE.Vector3, out = new THREE.Vector3()): THREE.Vector3 {
+    /** Other things bolts can hit (rocks): hit() returns true when the target breaks. */
+    extraTargets?: () => { local: THREE.Vector3; radiusKm: number; hit: (damage: number) => boolean }[];
+
+    toWorld(local: THREE.Vector3, out = new THREE.Vector3()): THREE.Vector3 {
         return out.copy(local).multiplyScalar(this.KM).add(this.anchor!.pos);
     }
 
-    /** Put `count` enemies on a shell 6–14 km around a point (in the anchor's frame). */
+    /** Put `count` enemies on a shell 2.5–6 km around a point (in the anchor's frame): close enough to see and fight. */
     spawn(kind: EnemyKind, anchor: Anchor, aroundWorld: THREE.Vector3, count: number) {
         if (this.anchor && this.anchor !== anchor) this.clear();
         this.anchor = anchor;
@@ -154,9 +161,12 @@ export class Combat {
             label.className = 'elabel';
             label.innerHTML = `<span></span><i><b></b></i>`;
             this.labelLayer.appendChild(label);
+            const arrow = document.createElement('div');
+            arrow.className = 'earrow';
+            this.labelLayer.appendChild(arrow);
             this.enemies.push({
                 kind, def, mesh, hp: def.hp,
-                local: center.clone().addScaledVector(dir, kind === 'leviathan' ? 12 : 6 + Math.random() * 8),
+                local: center.clone().addScaledVector(dir, kind === 'leviathan' ? 7 : 2.5 + Math.random() * 3.5), arrow,
                 vel: new THREE.Vector3(), cooldown: 1 + Math.random() * 2, phase: Math.random() * 10, breakTimer: 0,
                 label, text: label.querySelector('span')!, bar: label.querySelector('b')!,
             });
@@ -174,6 +184,7 @@ export class Combat {
         this.group.remove(e.mesh);
         e.mesh.traverse(o => (o as THREE.Mesh).geometry?.dispose());
         e.label.remove();
+        e.arrow.remove();
     }
 
     /**
@@ -186,7 +197,7 @@ export class Combat {
         const from = this.toLocal(shipWorld)!;
         const ray = dirWorld.clone().normalize();
         let dir = ray.clone();
-        let best = Math.cos((4 * Math.PI) / 180);
+        let best = Math.cos((6 * Math.PI) / 180);
         for (const e of this.enemies) {
             const to = this.v.subVectors(e.local, from);
             const d = to.length();
@@ -212,7 +223,7 @@ export class Combat {
         this.bolts.push({ local, vel, life, damage, friendly, radius, mesh });
     }
 
-    private damagePlayer(amount: number) {
+    damagePlayer(amount: number) {
         const p = this.player;
         if (p.dead) return;
         p.sinceHit = 0;
@@ -234,7 +245,7 @@ export class Combat {
         p.score = Math.max(0, p.score - 200);
     }
 
-    private explode(local: THREE.Vector3, sizeKm: number, color: number) {
+    explode(local: THREE.Vector3, sizeKm: number, color: number) {
         const n = 90;
         const pos = new Float32Array(n * 3), vel = new Float32Array(n * 3);
         for (let i = 0; i < n; i++) {
@@ -275,8 +286,20 @@ export class Combat {
                     if (e.hp > 0 && segmentHits(prev, b.local, e.local, e.def.hitKm + b.radius)) {
                         e.hp -= b.damage;
                         b.life = 0;
+                        this.onHit?.();
                         this.explode(b.local, 0.05, 0x88ddff);
                         break;
+                    }
+                }
+                if (b.life > 0 && this.extraTargets) {
+                    for (const t of this.extraTargets()) {
+                        if (segmentHits(prev, b.local, t.local, t.radiusKm + b.radius)) {
+                            b.life = 0;
+                            this.onHit?.();
+                            if (t.hit(b.damage)) p.score += 10;
+                            else this.explode(b.local, 0.03, 0xffcc88);
+                            break;
+                        }
                     }
                 }
             } else if (!p.dead && segmentHits(prev, b.local, me, PLAYER_HIT_KM + b.radius)) {
@@ -361,7 +384,7 @@ export class Combat {
             e.cooldown = def.fireEvery * (0.7 + Math.random() * 0.6);
             const t = d / def.boltSpeed;
             const aim = me.clone().addScaledVector(meVel, t).sub(e.local).normalize();
-            aim.x += (Math.random() - 0.5) * 0.03; aim.y += (Math.random() - 0.5) * 0.03;
+            aim.x += (Math.random() - 0.5) * 0.06; aim.y += (Math.random() - 0.5) * 0.06; aim.z += (Math.random() - 0.5) * 0.06;
             const vel = aim.normalize().multiplyScalar(def.boltSpeed).add(e.vel);
             const big = e.kind === 'leviathan';
             this.addBolt(e.local.clone().addScaledVector(aim, def.hitKm), vel, def.boltDamage, false, big ? 0.05 : 0.006,
@@ -399,6 +422,20 @@ export class Combat {
             this.toWorld(e.local, v).project(camera);
             const visible = v.z < 1 && v.z > -1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05 && d < 120;
             e.label.style.display = visible ? '' : 'none';
+            // Off screen (or behind us): an arrow on the edge points the way.
+            if (!visible && d < 120) {
+                let x = v.x, y = v.y;
+                if (v.z > 1) { x = -x; y = -y; }
+                const k = 0.92 / Math.max(Math.abs(x), Math.abs(y), 1e-6);
+                x *= k; y *= k;
+                const px = (x * 0.5 + 0.5) * width, py = (-y * 0.5 + 0.5) * height;
+                e.arrow.style.display = '';
+                e.arrow.style.transform = `translate(${px.toFixed(0)}px, ${py.toFixed(0)}px) rotate(${Math.atan2(-y, x)}rad)`;
+                e.arrow.textContent = '➤';
+                e.arrow.title = `${e.def.name}, ${d.toFixed(1)} км`;
+            } else {
+                e.arrow.style.display = 'none';
+            }
             if (!visible) continue;
             e.label.style.transform = `translate(${((v.x * 0.5 + 0.5) * width).toFixed(1)}px, ${((-v.y * 0.5 + 0.5) * height).toFixed(1)}px)`;
             e.text.textContent = `${e.def.name} · ${d < 10 ? d.toFixed(1) : Math.round(d)} км`;

@@ -194,9 +194,12 @@ canvas.addEventListener('pointerup', e => {
     down = null;
 });
 
+let unlockedAt = 0;
+document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement) unlockedAt = performance.now(); });
 window.addEventListener('keydown', e => {
     if (e.code === 'KeyH') document.body.classList.toggle('hud-off');
-    if (e.code === 'Escape' && path.length > 1) navigate(path.slice(0, -1));
+    // Esc first releases a captured mouse; only a free Esc goes up a level.
+    if (e.code === 'Escape' && path.length > 1 && !document.pointerLockElement && performance.now() - unlockedAt > 400) navigate(path.slice(0, -1));
 });
 $('toggle-panel').addEventListener('click', () => ui.panel.classList.toggle('collapsed'));
 // The physics notes start folded, so the view is the game; ▾ opens them.

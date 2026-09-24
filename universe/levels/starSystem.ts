@@ -11,14 +11,15 @@ import {
     surfaceGravity, UNIT_KM, visViva,
 } from '../physics';
 import { BodyData, SOLAR_SYSTEM, SUN } from '../solarSystem';
-import { FLY_HELP, FlyController } from '../flight';
+import { FLY_HELP, FlyController, SHIP_HELP } from '../flight';
 import { ShipGame } from '../game/shipGame';
+import { Comet, makeBelt, makeComet, updateComet } from '../game/spaceObjects';
 import { generatedMissions, solarMissions } from '../game/missions';
 import { AtmosphereParams, landable, surfaceFor } from '../atmosphere';
 import { ATMO_SHELL_FRAG } from '../planetShaders';
 import type { CameraState } from '../common';
 import {
-    ATMO_SHELL_VERT, PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG,
+    ATMO_SHELL_VERT, CORONA_FRAG, CORONA_VERT, PLANET_FRAG, PLANET_VERT, RING_FRAG, RING_VERT, STAR_FRAG,
 } from '../shaders';
 
 type Kind = PlanetKind | 'moon' | 'star';
@@ -101,7 +102,7 @@ export class StarSystemLevel implements Level {
     private game: ShipGame;
     readonly title: string;
     readonly bloom = { strength: 0.7, radius: 0.5, threshold: 0.8 };
-    readonly help = `${FLY_HELP} · Пробел — огонь · X — стоп · V — вид · L — посадка · M — миссии · клик по планете — цель · Enter — автопилот`;
+    readonly help = `${SHIP_HELP} · Пробел/ЛКМ — огонь · X — стоп · V — вид · L — посадка · M — миссии · Enter — автопилот к цели · Esc — отпустить мышь`;
 
     private system: SystemSpec | null = null;
     private starMassSun: number;
@@ -135,6 +136,10 @@ export class StarSystemLevel implements Level {
     /** Radius of the outermost orbit; flying three times farther leaves for the galaxy. */
     private outer = 1;
     private leave = new ProximityTrigger(1);
+    private belt: THREE.Points;
+    private corona!: THREE.Mesh;
+    private beltRange: [number, number];
+    private comets: { comet: Comet; el: OrbitalElements; label: Label }[] = [];
     /** Dropping below 3% of a planet's radius takes us down to its surface. */
     private land = new ProximityTrigger(1);
 
@@ -151,8 +156,9 @@ export class StarSystemLevel implements Level {
     private onDown = (e: PointerEvent) => { this.dragging = true; this.lastPointer = { x: e.clientX, y: e.clientY }; };
     private onUp = () => { this.dragging = false; };
     private onMove = (e: PointerEvent) => {
-        if (!this.dragging) return;
-        const dx = e.clientX - this.lastPointer.x, dy = e.clientY - this.lastPointer.y;
+        const locked = !!document.pointerLockElement;
+        if (!this.dragging && !locked) return;
+        const dx = locked ? e.movementX : e.clientX - this.lastPointer.x, dy = locked ? e.movementY : e.clientY - this.lastPointer.y;
         this.lastPointer = { x: e.clientX, y: e.clientY };
         // In free flight the FlyController turns the view; here only the orbit camera is dragged around.
         if (this.mode === 'orbit' && this.target) {
@@ -206,6 +212,30 @@ export class StarSystemLevel implements Level {
 
         const outer = Math.max(...this.bodies.filter(b => b.parent === this.bodies[0]).map(b => b.el!.a));
         this.outer = outer;
+
+        // The asteroid belt: between Mars and Jupiter here, just inside the snow line elsewhere.
+        const AU = AU_KM / UNIT_KM;
+        const frost = this.system ? this.system.frost : 2.7;
+        this.beltRange = this.system ? [frost * 0.7 * AU, frost * 0.95 * AU] : [2.1 * AU, 3.3 * AU];
+        this.belt = makeBelt(this.beltRange[0], this.beltRange[1], galaxy.seed ^ (this.system?.seed ?? 7));
+        (this.belt.material as THREE.ShaderMaterial).uniforms.uStarMass.value = this.starMassSun;
+        this.scene.add(this.belt);
+
+        // Comets. Halley is far out near aphelion in 2026; a bright new comet is rounding the Sun now.
+        const J2000 = daysSinceJ2000(new Date());
+        const cometDefs: [string, number, number, number, number, number, number][] = this.system
+            ? [[`Комета ${this.system.name}-1`, frost * 1.6, 0.86, 25, 70, 200, J2000 + 15]]
+            : [
+                ['Комета Галлея', 17.834, 0.96714, 162.26, 58.42, 111.33, daysSinceJ2000(new Date(Date.UTC(1986, 1, 9)))],
+                ['Комета C/2026 Поток', 3.5, 0.8, 35, 40, 120, J2000 + 20],
+            ];
+        cometDefs.forEach(([name, aAU, e, i, node, peri, tPeri], k) => {
+            const period = 365.25 * Math.pow(aAU, 1.5) / Math.sqrt(this.starMassSun);
+            const el: OrbitalElements = { a: aAU * AU, e, i, node, peri, M0: (-360 * tPeri) / period, period };
+            const comet = makeComet(name, aAU, e, i, node, peri, el.M0, this.starMassSun, 31 + k);
+            this.scene.add(comet.group);
+            this.comets.push({ comet, el, label: this.labels.add(name, 'comet') });
+        });
         this.leave = new ProximityTrigger(outer * 0.5);
 
         this.updatePositions(0);
@@ -217,7 +247,7 @@ export class StarSystemLevel implements Level {
             .applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.75);
         this.mode = 'orbit';
 
-        this.ctl = new FlyController(this.pilot, host.canvas, { speed: this.cruise, minSpeed: 1e-7, maxSpeed: this.cruise * 30 });
+        this.ctl = new FlyController(this.pilot, host.canvas, { speed: this.cruise, minSpeed: 1e-7, maxSpeed: this.cruise * 30, ship: true });
         const planetNames = this.bodies.filter(b => b.parent?.kind === 'star').map(b => b.name);
         this.game = new ShipGame(this.scene, host.canvas, host.labelLayer, this.system ? `sys:${this.system.seed}` : 'sys:sun',
             () => this.system ? generatedMissions(planetNames, this.system.seed) : solarMissions(),
@@ -245,6 +275,13 @@ export class StarSystemLevel implements Level {
         const radius = radiusKm / UNIT_KM;
         mesh.scale.setScalar(radius);
         group.add(mesh);
+        this.corona = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.ShaderMaterial({
+            vertexShader: CORONA_VERT, fragmentShader: CORONA_FRAG,
+            uniforms: { uColor: { value: new THREE.Vector3(...this.starColor) }, uTime: { value: 0 } },
+            transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+        }));
+        this.corona.scale.setScalar(radius);
+        group.add(this.corona);
         this.scene.add(group);
         const name = this.system ? this.system.name : SUN.name;
         const body: Body = {
@@ -608,7 +645,10 @@ export class StarSystemLevel implements Level {
         if (this.game.wantsFree) { this.game.wantsFree = false; this.goFree(); }
         this.game.update(dt, {
             pilot: this.pilot, camera: this.camera, free: this.mode === 'free', velocity: this.mode === 'free' ? this.ctl.velocity : new THREE.Vector3(),
-            starPos: this.bodies[0].pos, nearest: this.frameBody() ?? this.nearestSurface(this.pilot.position).body,
+            // In open space the fight happens in the star's frame, which does not move under us.
+            starPos: this.bodies[0].pos, nearest: this.frameBody() ?? this.bodies[0],
+            aim: this.ctl.aimQuaternion, turnRate: this.ctl.turnRate, pitchRate: this.ctl.pitchRate, boost: this.ctl.boosted,
+            debris: this.debrisDensity(),
             width: this.width, height: this.height, now: this.realTime,
         });
         {
@@ -632,6 +672,8 @@ export class StarSystemLevel implements Level {
             spritePos.setXYZ(i, b.pos.x, b.pos.y, b.pos.z);
             if (b.kind === 'star') {
                 b.material.uniforms.uTime.value = this.realTime;
+                this.corona.quaternion.copy(this.camera.quaternion);
+                (this.corona.material as THREE.ShaderMaterial).uniforms.uTime.value = this.realTime;
             } else {
                 const u = b.material.uniforms;
                 u.uSun.value.copy(star.pos);
@@ -682,7 +724,26 @@ export class StarSystemLevel implements Level {
         (this.sky.material as THREE.ShaderMaterial).uniforms.uPx.value = px;
         this.sky.position.copy(this.camera.position);
 
+        (this.belt.material as THREE.ShaderMaterial).uniforms.uDays.value = this.tDays;
+        (this.belt.material as THREE.ShaderMaterial).uniforms.uPx.value = px;
+        const e3 = [0, 0, 0];
+        for (const c of this.comets) {
+            orbitalPosition(c.el, this.tDays, e3);
+            const pos = toThree(e3, new THREE.Vector3()).add(star.pos);
+            updateComet(c.comet, pos, star.pos, this.realTime, px);
+            c.label.position.copy(pos);
+            c.label.visible = pos.distanceTo(star.pos) < 8 * AU_KM / UNIT_KM; // named only while it is active
+        }
+
         this.labels.update(this.camera, this.width, this.height);
+    }
+
+    /** Rocks around the ship: a few everywhere, many inside the asteroid belt. */
+    private debrisDensity(): number {
+        const p = this.pilot.position.clone().sub(this.bodies[0].pos);
+        const r = Math.hypot(p.x, p.z);
+        const inBelt = r > this.beltRange[0] && r < this.beltRange[1] && Math.abs(p.y) < r * 0.12;
+        return inBelt ? 60 : 10;
     }
 
     /**
@@ -744,6 +805,7 @@ export class StarSystemLevel implements Level {
     }
 
     click(x: number, y: number) {
+        if (document.pointerLockElement) return; // a captured mouse clicks to fire, not to pick
         const i = pickPoint(this.bodies.length, (k, out) => out.copy(this.bodies[k].pos), k => (this.bodies[k].kind === 'moon' ? 0 : 1),
             this.camera, x, y, this.width, this.height, 22);
         if (i >= 0) this.select(this.bodies[i]);

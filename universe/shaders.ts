@@ -605,3 +605,37 @@ void main() {
     #include <logdepthbuf_vertex>
 }
 `;
+
+// ---------------------------------------------------------------------------
+// The star's corona: a camera-facing glow with slowly turning streamers.
+// ---------------------------------------------------------------------------
+
+export const CORONA_VERT = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+varying vec2 vUv;
+void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    #include <logdepthbuf_vertex>
+}
+`;
+
+export const CORONA_FRAG = /* glsl */ `
+#include <logdepthbuf_pars_fragment>
+uniform vec3 uColor;
+uniform float uTime;
+varying vec2 vUv;
+${NOISE}
+void main() {
+    #include <logdepthbuf_fragment>
+    vec2 q = (vUv * 2.0 - 1.0) * 4.0;       // in stellar radii
+    float r = length(q);
+    if (r < 0.98) discard;                   // the disk itself is drawn by the sphere
+    float a = atan(q.y, q.x);
+    float glow = exp(-(r - 1.0) * 3.5) * 0.3;
+    float streamers = pow(max(fbm(vec3(cos(a) * 2.5, sin(a) * 2.5, uTime * 0.03 + r * 0.25)), 0.0), 1.5) * exp(-(r - 1.0) * 0.9);
+    float fade = smoothstep(4.0, 3.0, r);
+    gl_FragColor = vec4(uColor * (glow + streamers * 0.45) * fade, 1.0);
+}
+`;

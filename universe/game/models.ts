@@ -5,7 +5,7 @@ import * as THREE from 'three';
 
 export type EnemyKind = 'drone' | 'fighter' | 'crystal' | 'leviathan';
 
-const glow = (color: number, intensity = 3) => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(intensity) });
+const glow = (color: number, intensity = 1.6) => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(intensity) });
 
 function hull(color: number, metal = 0.8, rough = 0.35) {
     return new THREE.MeshStandardMaterial({ color, metalness: metal, roughness: rough });
@@ -14,42 +14,52 @@ function hull(color: number, metal = 0.8, rough = 0.35) {
 /** The player's ship: a 40 m long interceptor, nose along −Z like a camera. */
 export function makeShip(): THREE.Group {
     const g = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(3, 5, 26, 12), hull(0xc8d0dc));
+    // Brushed grey hull: bright enough to read against space, dark enough not to bloom.
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(3, 5, 26, 16), hull(0x8a929e, 0.75, 0.45));
     body.rotation.x = Math.PI / 2;
     g.add(body);
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(3, 14, 12), hull(0xdfe6ef));
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(3, 14, 16), hull(0x9aa3ae, 0.75, 0.4));
     nose.rotation.x = -Math.PI / 2;
     nose.position.z = -20;
     g.add(nose);
     const canopy = new THREE.Mesh(new THREE.SphereGeometry(2.4, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
-        new THREE.MeshStandardMaterial({ color: 0x5fb8ff, metalness: 0.2, roughness: 0.05, emissive: 0x0a2a44 }));
+        new THREE.MeshStandardMaterial({ color: 0x2a5a80, metalness: 0.3, roughness: 0.08, emissive: 0x04121e }));
     canopy.position.set(0, 2.6, -9);
     canopy.scale.set(1, 0.7, 1.8);
     g.add(canopy);
     const wingShape = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(18, 8), new THREE.Vector2(18, 13), new THREE.Vector2(0, 11)]);
     const wingGeo = new THREE.ExtrudeGeometry(wingShape, { depth: 0.8, bevelEnabled: false });
     for (const side of [1, -1]) {
-        const w = new THREE.Mesh(wingGeo, hull(0x8e9aac, 0.7, 0.45));
+        const w = new THREE.Mesh(wingGeo, hull(0x5c6573, 0.7, 0.5));
         w.rotation.x = Math.PI / 2;
         w.scale.x = side;
         w.position.set(side * 3, 0, -2);
         g.add(w);
-        const tip = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 5), glow(side > 0 ? 0x22ff66 : 0xff3322, 4));
+        const tip = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 5), glow(side > 0 ? 0x22ff66 : 0xff3322, 0.9));
         tip.position.set(side * 21, 0, 9);
         g.add(tip);
         const pod = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2, 9, 10), hull(0x59626f));
         pod.rotation.x = Math.PI / 2;
         pod.position.set(side * 7, -1, 10);
         g.add(pod);
-        const flame = new THREE.Mesh(new THREE.ConeGeometry(1.5, 8, 10, 1, true), glow(0x66ccff, 5));
+        const flame = new THREE.Mesh(new THREE.ConeGeometry(1.4, 8, 10, 1, true),
+            new THREE.MeshBasicMaterial({ color: new THREE.Color(0x4aa8ff).multiplyScalar(1.8), transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false }));
         flame.rotation.x = Math.PI / 2;
         flame.position.set(side * 7, -1, 18);
         flame.name = 'flame';
         g.add(flame);
     }
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.8, 8, 8), hull(0x8e9aac));
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.8, 8, 8), hull(0x5c6573, 0.7, 0.5));
     fin.position.set(0, 5, 9);
     g.add(fin);
+    // Muzzle flashes at the two gun ports, shown for a moment after each shot.
+    for (const side of [1, -1]) {
+        const muzzle = new THREE.Mesh(new THREE.SphereGeometry(1.6, 8, 6), glow(0x88e0ff, 3));
+        muzzle.position.set(side * 5, -0.5, -22);
+        muzzle.name = 'muzzle';
+        muzzle.visible = false;
+        g.add(muzzle);
+    }
     return g;
 }
 

@@ -103,6 +103,7 @@ export const SKY_FRAG = /* glsl */ `
 #define LIGHT_STEPS 8
 ${ATMOSPHERE_GLSL}
 uniform vec3 uSunColor;
+uniform float uTime;
 varying vec3 vDir;
 vec3 h33(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -126,6 +127,24 @@ void main() {
     if (h.x > 0.975 && rd.y > -0.05) {
         float d = length(q - cell - 0.5 - 0.35 * (h33(cell + 3.0) - 0.5));
         col += vec3(0.8 + 0.2 * h.y, 0.85, 0.8 + 0.3 * h.z) * exp(-d * d * 40.0) * (0.3 + 1.5 * h.z * h.z) * trans * clamp(1.0 - sky * 8.0, 0.0, 1.0);
+    }
+    // Meteors burning up in the upper air, visible once the sky is dark.
+    if (uHasAtmo > 0.5 && rd.y > 0.0) {
+        float dark = clamp(1.0 - sky * 10.0, 0.0, 1.0);
+        for (int k = 0; k < 3; k++) {
+            float cyc = uTime / 3.1 + float(k) * 0.37;
+            float slot = floor(cyc), ph = fract(cyc);
+            vec3 hh = h33(vec3(slot, float(k), 7.0));
+            if (hh.z > 0.6) continue;               // not every slot has a meteor
+            vec3 a = normalize(vec3(hh.x * 2.0 - 1.0, 0.35 + 0.6 * hh.y, hh.z * 2.0 - 1.0));
+            vec3 b = normalize(a + vec3(0.3 * (hh.y - 0.5), -0.2, 0.3 * (hh.x - 0.5)));
+            float p1 = min(ph * 3.0, 1.0);
+            vec3 head = normalize(mix(a, b, p1)), tail = normalize(mix(a, b, max(p1 - 0.35, 0.0)));
+            vec3 ab = head - tail;
+            float t = clamp(dot(rd - tail, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+            float d = length(rd - (tail + ab * t));
+            col += vec3(1.0, 0.9, 0.75) * smoothstep(0.003, 0.0, d) * t * (1.0 - p1) * 6.0 * dark;
+        }
     }
     // Below the horizon of an airless world: the ground will cover it, but keep it black.
     gl_FragColor = vec4(col, 1.0);

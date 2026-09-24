@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Action, Level, LevelHost, row } from '../common';
 import { AtmosphereParams, scatter, SurfaceParams, sunTransmittance, surfaceFor } from '../atmosphere';
-import { FLY_HELP, FlyController } from '../flight';
+import { FlyController, SHIP_HELP } from '../flight';
 import { ShipGame } from '../game/shipGame';
 import { Mission } from '../game/missions';
 import type { PlanetKind } from '../mandelbrot';
@@ -51,7 +51,7 @@ export class PlanetLevel implements Level {
     readonly camera = new THREE.PerspectiveCamera(65, 1, 0.3, 2e7);
     readonly title: string;
     readonly bloom = { strength: 0.35, radius: 0.4, threshold: 1.2 };
-    readonly help = `${FLY_HELP} · Пробел — огонь · V — вид · M — миссии · наберите высоту, чтобы выйти в космос`;
+    readonly help = `${SHIP_HELP} · Пробел/ЛКМ — огонь · V — вид · M — миссии · наберите высоту — выход в космос · Esc — отпустить мышь`;
     private surface: SurfaceParams;
     private terrain: TerrainParams;
     private pilot = new THREE.PerspectiveCamera(65, 1, 0.3, 2e7);
@@ -140,7 +140,7 @@ export class PlanetLevel implements Level {
         const start = this.findLandingSpot();
         this.pilot.position.set(start.x, Math.max(this.groundAt(start.x, start.y), s.sea ?? -1e9) + 1500, start.y);
         this.pilot.rotation.set(-0.12, 0.6, 0, 'YXZ');
-        this.ctl = new FlyController(this.pilot, host.canvas, { speed: 300, minSpeed: 5, maxSpeed: 30_000 });
+        this.ctl = new FlyController(this.pilot, host.canvas, { speed: 300, minSpeed: 5, maxSpeed: 30_000, ship: true });
 
         const anchor = { name: visit.name, pos: new THREE.Vector3(), radius: 0 };
         this.game = new ShipGame(this.scene, host.canvas, host.labelLayer, `${visit.systemKey}:${visit.name}`,
@@ -274,6 +274,7 @@ export class PlanetLevel implements Level {
 
         this.game.update(dt, {
             pilot: this.pilot, camera: this.camera, free: true, velocity: this.ctl.velocity,
+            aim: this.ctl.aimQuaternion, turnRate: this.ctl.turnRate, pitchRate: this.ctl.pitchRate, boost: this.ctl.boosted,
             starPos: this.pilot.position.clone().addScaledVector(sun, 1e5), nearest: { name: this.visit.name, pos: new THREE.Vector3(), radius: 0 },
             width: this.width, height: this.height, now: this.time,
         });

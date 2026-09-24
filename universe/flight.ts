@@ -13,12 +13,20 @@ const DOWN = ['KeyQ', 'KeyF', 'PageDown'];
 export const MOVE_KEYS = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, ...UP, ...DOWN]);
 
 export const FLY_HELP = 'WASD / стрелки — лететь · Q/E — вниз/вверх · Shift — ×10 · мышь (зажать) — смотреть · колесо — скорость';
+export const SHIP_HELP = 'Клик — захватить мышь · мышь — обзор и курс · ПКМ или C — оглядеться (в т.ч. назад) · WASD — тяга · Q/E — вниз/вверх · Shift — форсаж · колесо — скорость';
+
+const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 export interface FlyOptions {
     /** Starting throttle, scene units per second. */
     speed: number;
     minSpeed: number;
     maxSpeed: number;
+    /**
+     * A ship rather than a floating camera: the mouse sets where you look, the
+     * hull turns after it at a finite rate, and a click captures the mouse.
+     */
+    ship?: boolean;
 }
 
 /**
@@ -34,6 +42,15 @@ export class FlyController {
     private keys = new Set<string>();
     private yaw = 0;
     private pitch = 0;
+    /** Where the pilot is looking; for a ship the hull chases it. */
+    private aimYaw = 0;
+    private aimPitch = 0;
+    /** Looking around without turning the ship (right mouse button or C). */
+    private freeLook = false;
+    private returning = false;
+    /** Yaw and pitch rates of the hull, rad/s, for banking animations. */
+    turnRate = 0;
+    pitchRate = 0;
     private dragging = false;
     private last = { x: 0, y: 0 };
     private autopilot: { target: () => THREE.Vector3; standoff: number; last: THREE.Vector3 | null } | null = null;
@@ -43,29 +60,50 @@ export class FlyController {
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         this.keys.add(e.code);
+        if (e.code === 'KeyC') this.setFreeLook(true);
         if (MOVE_KEYS.has(e.code)) {
             this.autopilot = null;
             if (e.code.startsWith('Arrow') || e.code.startsWith('Page')) e.preventDefault();
         }
     };
-    private onKeyUp = (e: KeyboardEvent) => { this.keys.delete(e.code); };
-    private onBlur = () => { this.keys.clear(); };
+    private onKeyUp = (e: KeyboardEvent) => {
+        this.keys.delete(e.code);
+        if (e.code === 'KeyC') this.setFreeLook(false);
+    };
+    private onBlur = () => { this.keys.clear(); this.setFreeLook(false); };
     private onDown = (e: PointerEvent) => {
         if (!this.enabled || e.button > 2) return;
+        if (e.button === 2) this.setFreeLook(true);
+        if (this.opts.ship && e.button === 0 && e.pointerType === 'mouse' && !this.locked) {
+            // The first click hands the mouse to the ship; Esc gives it back.
+            (this.dom as HTMLElement).requestPointerLock?.();
+        }
         this.dragging = true;
         this.last = { x: e.clientX, y: e.clientY };
     };
-    private onUp = () => { this.dragging = false; };
+    private onUp = (e: PointerEvent) => {
+        this.dragging = false;
+        if (e.button === 2) this.setFreeLook(false);
+    };
     private onMove = (e: PointerEvent) => {
-        if (!this.dragging || !this.enabled) return;
-        const dx = e.clientX - this.last.x, dy = e.clientY - this.last.y;
-        this.last = { x: e.clientX, y: e.clientY };
+        if (!this.enabled) return;
+        let dx: number, dy: number;
+        if (this.locked) { dx = e.movementX; dy = e.movementY; }
+        else if (this.dragging) {
+            dx = e.clientX - this.last.x; dy = e.clientY - this.last.y;
+            this.last = { x: e.clientX, y: e.clientY };
+        } else return;
         // Narrow fields of view turn more slowly, so aiming stays precise.
-        const k = 0.0035 * (this.camera.fov / 60);
-        this.yaw -= dx * k;
-        this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch - dy * k));
+        const k = (this.locked ? 0.0022 : 0.0035) * (this.camera.fov / 60);
+        this.aimYaw -= dx * k;
+        this.aimPitch = Math.max(-1.55, Math.min(1.55, this.aimPitch - dy * k));
         this.autopilot = null;
-        this.apply();
+        this.returning = false;
+        if (!this.opts.ship) {
+            this.yaw = this.aimYaw;
+            this.pitch = this.aimPitch;
+            this.apply();
+        }
     };
     private onWheel = (e: WheelEvent) => {
         if (!this.enabled) return;
@@ -87,11 +125,28 @@ export class FlyController {
         dom.addEventListener('contextmenu', this.onContext);
     }
 
+    get locked(): boolean {
+        return document.pointerLockElement === this.dom;
+    }
+
+    private setFreeLook(on: boolean) {
+        if (this.freeLook === on) return;
+        this.freeLook = on;
+        // Letting go swings the view back behind the ship.
+        if (!on) this.returning = true;
+    }
+
+    /** Where the pilot looks (for a ship this can differ from where the hull points). */
+    get aimQuaternion(): THREE.Quaternion {
+        return new THREE.Quaternion().setFromEuler(new THREE.Euler(this.aimPitch, this.aimYaw, 0, 'YXZ'));
+    }
+
     /** Take over the camera's current orientation (after another mode moved it). */
     sync() {
         const e = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
-        this.yaw = e.y;
-        this.pitch = Math.max(-1.55, Math.min(1.55, e.x));
+        this.yaw = this.aimYaw = e.y;
+        this.pitch = this.aimPitch = Math.max(-1.55, Math.min(1.55, e.x));
+        this.returning = false;
         this.apply();
     }
 
@@ -145,10 +200,11 @@ export class FlyController {
             const look = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(cam.position, target, new THREE.Vector3(0, 1, 0)));
             cam.quaternion.slerp(look, 1 - Math.exp(-4 * dt));
             const e = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ');
-            this.yaw = e.y; this.pitch = e.x;
+            this.yaw = this.aimYaw = e.y; this.pitch = this.aimPitch = e.x;
             if (Math.abs(dist - this.autopilot.standoff) < this.autopilot.standoff * 0.02) this.autopilot = null;
             return this.velocity.length();
         }
+        if (this.opts.ship) this.steer(dt);
         const dir = new THREE.Vector3(
             this.held(RIGHT) - this.held(LEFT),
             this.held(UP) - this.held(DOWN),
@@ -164,7 +220,30 @@ export class FlyController {
         return this.velocity.length();
     }
 
+    /** The hull turns after the pilot's gaze, quickly but not instantly (at most ~2.5 rad/s). */
+    private steer(dt: number) {
+        if (this.returning) {
+            const k = 1 - Math.exp(-7 * dt);
+            this.aimYaw += wrapAngle(this.yaw - this.aimYaw) * k;
+            this.aimPitch += (this.pitch - this.aimPitch) * k;
+            if (Math.abs(wrapAngle(this.yaw - this.aimYaw)) + Math.abs(this.pitch - this.aimPitch) < 0.005) this.returning = false;
+        }
+        let dYaw = 0, dPitch = 0;
+        if (!this.freeLook && !this.returning) {
+            const k = 1 - Math.exp(-5 * dt), cap = 2.5 * dt;
+            dYaw = THREE.MathUtils.clamp(wrapAngle(this.aimYaw - this.yaw) * k, -cap, cap);
+            dPitch = THREE.MathUtils.clamp((this.aimPitch - this.pitch) * k, -cap, cap);
+            this.yaw += dYaw;
+            this.pitch += dPitch;
+        }
+        const r = 1 - Math.exp(-8 * dt);
+        this.turnRate += (dYaw / Math.max(dt, 1e-4) - this.turnRate) * r;
+        this.pitchRate += (dPitch / Math.max(dt, 1e-4) - this.pitchRate) * r;
+        this.apply();
+    }
+
     dispose() {
+        if (this.locked) document.exitPointerLock?.();
         window.removeEventListener('keydown', this.onKeyDown);
         window.removeEventListener('keyup', this.onKeyUp);
         window.removeEventListener('blur', this.onBlur);
