@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { generatedCreatures, solarCreatures } from '../universe/game/creatures';
-import { ACCEPT, Conversation, MAX_REPLIES, parseTurn, sanitizeQuest, scriptedTurn, type Exchange } from '../universe/game/dialogue';
+import { ACCEPT, Conversation, MAX_REPLIES, MIN_REPLIES, parseTurn, sanitizeQuest, scriptedTurn, type Exchange } from '../universe/game/dialogue';
 import { kill, mission, MissionLog, solarMissions } from '../universe/game/missions';
 
 const world = { system: 'Солнечная система', bodies: ['Земля', 'Луна', 'Марс', 'Нептун'] };
@@ -18,9 +18,11 @@ describe('creature conversations', () => {
                     expect(history.length).toBeLessThanOrEqual(MAX_REPLIES);
                     turn = scriptedTurn(creature, history);
                 }
-                expect(history.length).toBeGreaterThanOrEqual(2);
+                // Talkative: a few exchanges first, and a new line every time.
+                expect(history.length).toBeGreaterThanOrEqual(MIN_REPLIES);
+                expect(new Set(history.map(h => h.turn.line)).size).toBe(history.length);
                 expect(turn.options[0]).toBe(ACCEPT);
-                expect(world.bodies.concat(solarCreatures().map(c => c.home))).toContain(turn.quest.body);
+                expect(turn.quest.body).toBe(creature.wish.body);
             }
         }
     });
@@ -54,9 +56,16 @@ describe('creature conversations', () => {
     it('settles creatures of a generated system on its planets', () => {
         const planets = ['A b', 'A c', 'A d'];
         const list = generatedCreatures(planets, 42);
-        expect(list.length).toBeGreaterThan(0);
+        expect(list.length).toBeGreaterThan(2);
         for (const c of list) expect(planets).toContain(c.home);
     });
+});
+
+it('has ten kinds of creature in the Solar System, each at its own world', () => {
+    const list = solarCreatures();
+    expect(list).toHaveLength(10);
+    expect(new Set(list.map(c => c.kind)).size).toBe(10);
+    expect(new Set(list.map(c => c.home)).size).toBe(10);
 });
 
 describe('errands', () => {

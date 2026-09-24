@@ -34,6 +34,11 @@ renderer.setClearColor(0x000000, 1);
 const composer = new EffectComposer(renderer);
 const renderPass = new RenderPass(new THREE.Scene(), new THREE.PerspectiveCamera());
 const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 1, 0.5, 0);
+// The glow is a blur anyway: build it from a half-size image, a quarter of the pixels.
+{
+    const setSize = bloom.setSize.bind(bloom);
+    bloom.setSize = (w: number, h: number) => setSize(Math.max(1, Math.round(w / 2)), Math.max(1, Math.round(h / 2)));
+}
 composer.addPass(renderPass);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
@@ -170,9 +175,23 @@ function renderActions() {
     });
 }
 
+/**
+ * Resolution scale that follows the frame rate: a weak GPU gets fewer pixels instead of a
+ * stuttering picture, a strong one gets them back.
+ */
+let quality = 1;
+let slowFor = 0, fastFor = 0;
+function adapt(dt: number) {
+    if (dt > 1 / 40) { slowFor += dt; fastFor = 0; } else if (dt < 1 / 58) { fastFor += dt; slowFor = 0; } else { slowFor = fastFor = 0; }
+    let next = quality;
+    if (slowFor > 1.2) next = Math.max(0.5, quality - 0.15);
+    if (fastFor > 4) next = Math.min(1, quality + 0.1);
+    if (next !== quality) { quality = next; slowFor = fastFor = 0; resize(); }
+}
+
 function resize() {
     const w = window.innerWidth, h = window.innerHeight;
-    const ratio = Math.min(window.devicePixelRatio, level?.maxPixelRatio ?? 1.5);
+    const ratio = Math.min(window.devicePixelRatio, level?.maxPixelRatio ?? 1.25) * quality;
     renderer.setPixelRatio(ratio);
     renderer.setSize(w, h);
     composer.setPixelRatio(ratio);
@@ -219,8 +238,10 @@ document.querySelectorAll<HTMLButtonElement>('[data-key]').forEach(b => {
 const clock = new THREE.Clock();
 let hudTimer = 0;
 renderer.setAnimationLoop(() => {
-    const dt = Math.min(clock.getDelta(), 0.1);
+    const raw = clock.getDelta();
+    const dt = Math.min(raw, 0.1);
     if (!level) return;
+    if (!busy && !document.hidden && raw < 0.5) adapt(raw); // a long gap is a hidden tab or a level load, not a slow GPU
     level.update(dt);
     composer.render(dt);
     hudTimer -= dt;
@@ -234,4 +255,10 @@ renderer.setAnimationLoop(() => {
 
 navigate(path);
 // A handle for poking at the running level from the console.
-Object.assign(window, { universe: { get level() { return level; } } });
+Object.assign(window, {
+    universe: {
+        get level() { return level; }, renderer, composer, bloom,
+        get quality() { return quality; },
+        set quality(q: number) { quality = q; resize(); },
+    },
+});

@@ -53,6 +53,12 @@ float fbm(vec3 p) {
     for (int i = 0; i < 5; i++) { s += a * snoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
     return s;
 }
+// Three octaves: for detail that is small on screen or only tilts the normal.
+float fbm3(vec3 p) {
+    float s = 0.0, a = 0.5;
+    for (int i = 0; i < 3; i++) { s += a * snoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
+    return s;
+}
 float hash13(vec3 p) {
     p = fract(p * 0.1031);
     p += dot(p, p.zyx + 31.32);
@@ -123,7 +129,7 @@ void main() {
 
     if (uKind == 0 || uKind == 8) { // airless rock: Mercury, the Moon
         float f = fbm(sp * 3.0);
-        float d = fbm(sp * 14.0);
+        float d = fbm3(sp * 14.0);
         float craters = smoothstep(0.35, 0.5, abs(snoise(sp * 22.0))) * 0.15;
         base = mix(uColA, uColB, smoothstep(-0.5, 0.6, f)) * (0.85 + 0.3 * d) - craters;
         terminator = 0.02;
@@ -132,13 +138,13 @@ void main() {
         base = mix(uColA, uColB, w * 0.5 + 0.5);
         terminator = 0.25;
     } else if (uKind == 2) { // Earth-like: oceans, continents, ice, clouds
-        float h = fbm(sp * 2.1) + 0.12 * fbm(sp * 9.0);
+        float h = fbm(sp * 2.1) + 0.12 * snoise(sp * 9.0);
         float lat = abs(p.y);
         float land = smoothstep(0.02, 0.05, h);
         vec3 ocean = mix(vec3(0.004, 0.02, 0.09), vec3(0.01, 0.08, 0.2), smoothstep(-0.4, 0.03, h));
         vec3 green = mix(vec3(0.03, 0.12, 0.03), vec3(0.2, 0.17, 0.08), smoothstep(0.0, 0.5, h + lat * 0.3));
         vec3 desert = vec3(0.45, 0.36, 0.2);
-        float dry = smoothstep(0.1, 0.35, 1.0 - abs(lat - 0.3) * 3.0) * smoothstep(0.0, 0.4, fbm(sp * 3.0 + 5.0));
+        float dry = smoothstep(0.1, 0.35, 1.0 - abs(lat - 0.3) * 3.0) * smoothstep(0.0, 0.4, fbm3(sp * 3.0 + 5.0));
         vec3 ground = mix(green, desert, dry);
         base = mix(ocean, ground, land);
         float ice = smoothstep(0.78, 0.84, lat + 0.06 * snoise(sp * 6.0));
@@ -153,7 +159,7 @@ void main() {
         emissive = vec3(1.0, 0.62, 0.25) * cities * land * (1.0 - ice) * (1.0 - clouds) * night * 0.12;
     } else if (uKind == 3) { // desert / Mars
         float f = fbm(sp * 2.4);
-        float dark = smoothstep(0.05, 0.3, fbm(sp * 1.6 + 3.0));
+        float dark = smoothstep(0.05, 0.3, fbm3(sp * 1.6 + 3.0));
         base = mix(uColA, uColB, smoothstep(-0.5, 0.5, f));
         base *= 1.0 - dark * 0.45;
         float cap = smoothstep(0.88, 0.92, abs(p.y) + 0.04 * snoise(sp * 8.0));
@@ -193,9 +199,9 @@ void main() {
         vec3 t2 = cross(p, t1);
         float e = 0.004;
         vec3 off = sp - p;
-        float h0 = fbm((p + off) * 5.0);
-        float h1 = fbm((normalize(p + t1 * e) + off) * 5.0);
-        float h2 = fbm((normalize(p + t2 * e) + off) * 5.0);
+        float h0 = fbm3((p + off) * 5.0);
+        float h1 = fbm3((normalize(p + t1 * e) + off) * 5.0);
+        float h2 = fbm3((normalize(p + t2 * e) + off) * 5.0);
         vec3 grad = ((h1 - h0) * t1 + (h2 - h0) * t2) / e;
         vec3 No = normalize(p - uBump * 0.08 * landMask * grad);
         N = normalize(uRot * No);

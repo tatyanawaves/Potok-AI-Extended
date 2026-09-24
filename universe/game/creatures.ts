@@ -3,11 +3,10 @@
 // scrap-hermit. Meshes are built in kilometres and scaled into the scene.
 
 import * as THREE from 'three';
-import { Labels } from '../common';
 import { mulberry32 } from '../mandelbrot';
 import { ACCEPT, Conversation, CreatureMind, DECLINE, describeAccess, DialogueTurn, QuestOffer, WorldBrief } from './dialogue';
 
-export type Species = 'medusa' | 'whale' | 'oracle' | 'swarm' | 'scavenger';
+export type Species = 'medusa' | 'whale' | 'oracle' | 'swarm' | 'scavenger' | 'manta' | 'serpent' | 'mycelium' | 'ghost' | 'nebula';
 
 export interface CreatureSpec extends CreatureMind {
     id: string;
@@ -33,53 +32,69 @@ const TEMPLATES: Template[] = [
         name: 'Ойра', species: 'медуза пустоты, древняя, как пояс астероидов',
         persona: 'говорит медленно и поэтично, светится, когда волнуется; питается солнечным ветром; зовёт пилота «маленький огонёк»',
         script: {
+            hail: 'Маленький огонёк… подлети ближе, я давно ни с кем не говорила.',
             greet: 'Маленький огонёк… ты летишь так быстро. Остановись, послушай, как поёт солнечный ветер.',
             lore: [
                 'Я пью свет вашей звезды уже миллион оборотов. Мои щупальца помнят времена, когда ваша Луна была ближе.',
                 'Мы, медузы, не умираем — мы растворяемся в свете и собираемся снова, когда звезда зовёт.',
+                'Когда-то нас было тысячи. Мы окутывали Луну, как облако, и ваши предки принимали нас за призраков.',
             ],
+            ask: 'А ты, огонёк… зачем ты летаешь? Что ищешь среди холодных звёзд?',
+            rumor: 'Ветер шепчет мне многое.',
             trouble: 'Но теперь пришли холодные машины. Их глаза-дроны режут мою стаю лучами, чтобы измерить.',
         },
         wish: { type: 'kill', enemy: 'drone', count: 4, title: 'Тишина для стаи', reward: 450, why: 'Уничтожь дронов, что кружат над моим домом, и стая снова запоёт.' },
     },
     {
         id: 'thal', kind: 'whale', color: 0x5fe0c0, emoji: '🐋', altitude: 3.5, angle: 2.4,
-        name: 'Великий Тхал', species: 'звёздный кит, длиной в шесть километров',
+        name: 'Великий Тхал', species: 'звёздный кит длиной в тридцать километров',
         persona: 'добродушный гигант, говорит низко и неторопливо, иногда напевает; тоскует по родичам, которых преследует левиафан',
         script: {
+            hail: 'Мммм… Слышу мотор. Малёк, плыви сюда, не бойся.',
             greet: 'Мммм… Крошечный кораблик. Не бойся, я ем только пыль комет. Как тебя зовут, звёздный малёк?',
             lore: [
                 'Мои песни слышно на три световых минуты. Когда-то мне отвечали десятки голосов.',
                 'Мы плывём по течениям гравитации, от планеты к планете, и храним в памяти карты всех орбит.',
+                'Однажды я проглотил комету целиком. Три года потом чихал хвостом. Мммм-ха-ха.',
             ],
-            trouble: 'Теперь отвечает только тишина. Левиафан пришёл из тёмного края системы и глотает моих родичей.',
+            ask: 'Скажи, малёк, у тебя есть стая? Кто-то ждёт тебя дома?',
+            rumor: 'Мммм, течения приносят новости.',
+            trouble: 'Теперь на мои песни отвечает только тишина. Левиафан пришёл из тёмного края системы и глотает моих родичей.',
         },
         wish: { type: 'kill', enemy: 'leviathan', count: 1, title: 'Песня Тхала', reward: 1500, why: 'Прогони левиафана — убей его, и я спою тебе песню, которую не слышал ни один человек.' },
     },
     {
         id: 'kepler0', kind: 'oracle', color: 0xc8a0ff, emoji: '🔮', altitude: 2.8, angle: 4.1,
         name: 'Оракул Кеплер-Ноль', species: 'кристаллический разум',
-        persona: 'говорит загадками и числами, одержим эллипсами, множеством Мандельброта и третьим законом Кеплера; холодно-вежлив',
+        persona: 'говорит загадками и числами, одержим эллипсами, множеством Мандельброта и третьим законом Кеплера; холодно-вежлив, но любит поспорить',
         script: {
+            hail: 'Вычисляю… Вероятность нашей встречи: единица. Приблизься.',
             greet: 'Квадрат периода твоего полёта пропорционален кубу твоего любопытства. Приветствую, пилот.',
             lore: [
                 'Я — решение уравнения z → z² + c, которое не ушло в бесконечность. Я осталось. Я думаю.',
                 'Каждая орбита — эллипс, каждый эллипс — обещание вернуться. Я считаю обещания этой системы.',
+                'Моя грань номер 17 хранит число π до десяти миллиардов знаков. Грань 18 — рецепт твоего любимого супа. Шутка. Или нет.',
             ],
-            trouble: 'Но одна орбита сбилась. Где-то вдали что-то исказило мои вычисления, и я не вижу, что именно.',
+            ask: 'Вопрос: что для тебя важнее — точность или смысл? Отвечай, я записываю.',
+            rumor: 'Мои вычисления фиксируют аномалии.',
+            trouble: 'Одна орбита сбилась. Где-то вдали что-то исказило мои вычисления, и я не вижу, что именно.',
         },
         wish: { type: 'reach', title: 'Проверка эллипса', reward: 500, why: 'Долети до дальнего мира, что я назову, и вернись с наблюдениями — твой путь исправит мои расчёты.' },
     },
     {
         id: 'vivi', kind: 'swarm', color: 0xffd166, emoji: '✨', altitude: 1.8, angle: 5.5,
         name: 'Рой Ви-Ви', species: 'коллективный разум светлячков-плазмоидов',
-        persona: 'говорят хором, о себе — «мы», перебивают сами себя, игривые, любопытные, обожают блестящее',
+        persona: 'говорят хором, о себе — «мы», перебивают сами себя, игривые, любопытные, обожают блестящее и задают кучу вопросов',
         script: {
+            hail: 'Эй-эй-эй! Блестяшка! Сюда-сюда-сюда!',
             greet: 'Мы видим тебя! Мы видим! Блестящий кораблик — можно мы посидим на твоих крыльях? Нет? Жаль!',
             lore: [
                 'Нас восемьсот сорок два — нет, сорок три, Ви-Ви-младший только родился из искры.',
                 'Мы танцуем в магнитных полях и рисуем узоры. Одни узоры — это слова, другие — просто красиво!',
+                'Венера тёплая-тёплая! Мы греемся в её облаках, а потом вылетаем охладиться. Уиии!',
             ],
+            ask: 'А у тебя есть друзья? А какого они цвета? А они светятся? А почему нет?',
+            rumor: 'Мы всё-всё слышим, мы летаем везде!',
             trouble: 'Но злые острые кристаллиды таранят наш танец! Они не умеют танцевать, они только бьются!',
         },
         wish: { type: 'kill', enemy: 'crystal', count: 8, title: 'Танец без таранов', reward: 550, why: 'Разбей кристаллидов, пожалуйста-пожалуйста, и мы нарисуем в небе твоё имя!' },
@@ -87,16 +102,110 @@ const TEMPLATES: Template[] = [
     {
         id: 'skrip', kind: 'scavenger', color: 0xff9a5a, emoji: '🦀', altitude: 1.5, angle: 3.2,
         name: 'Скрипун', species: 'механический краб-отшельник, живущий в обломках спутников',
-        persona: 'ворчливый, торгуется за каждую гайку, обожает металлолом, называет пилота «жестянкой»; честный, если ему заплатить',
+        persona: 'ворчливый, торгуется за каждую гайку, обожает металлолом, называет пилота «жестянкой»; честный, если ему заплатить; любит жаловаться',
         script: {
+            hail: 'Эй, жестянка! Да-да, ты! Лети сюда, дело есть.',
             greet: 'Эй, жестянка! Не подлетай так близко, поцарапаешь мою раковину. Это, между прочим, корпус спутника связи.',
             lore: [
                 'Сорок лет собираю ваш мусор. Спутники, болты, панели — всё сгодится. Вы, люди, щедро сорите на орбитах.',
                 'Моя клешня — из манипулятора старой станции. Работает лучше, чем у вас, между прочим.',
+                'Видишь ту панель? Солнечная батарея, 2031 год. Коллекционная. Не трогай.',
             ],
+            ask: 'Слушай, жестянка, а у тебя в трюме случайно не завалялось титановых болтов? Нет? Тьфу.',
+            rumor: 'На орбите болтают всякое, а я всё слышу.',
             trouble: 'А тут пираты повадились. Налетают на штурмовиках и обчищают мои склады. Мои!',
         },
         wish: { type: 'kill', enemy: 'fighter', count: 3, title: 'Склады Скрипуна', reward: 700, why: 'Сбей пиратские штурмовики у моих складов — заплачу, честно, гайкой к гайке.' },
+    },
+    {
+        id: 'helios', kind: 'manta', color: 0xff7a3a, emoji: '🔥', altitude: 2.5, angle: 1.4,
+        name: 'Гелиос', species: 'плазменный скат, серфингист солнечного ветра',
+        persona: 'горячий, быстрый, азартный, говорит как спортсмен и серфер, обожает скорость и вызовы, хвастлив, но щедр',
+        script: {
+            hail: 'Эй, гонщик! Давай наперегонки до Солнца! Ну или хоть поболтаем.',
+            greet: 'Йо, пилот! Видел, как я прошёл по протуберанцу? Нет? Эх, лучший заезд за век!',
+            lore: [
+                'Я ловлю вспышки на Солнце, как вы ловите волны. Чем злее звезда — тем лучше заезд.',
+                'Моя шкура — чистая плазма, миллион градусов. Не трогай — сгоришь, дружище.',
+                'Раз в одиннадцать лет Солнце бушует сильнее. Мы, скаты, называем это Большим сезоном.',
+            ],
+            ask: 'Скажи честно, пилот: какая у тебя максималка? Ты вообще разгонялся по-настоящему?',
+            rumor: 'На такой скорости многое замечаешь.',
+            trouble: 'Только вот дроны повадились сидеть у Меркурия и сканировать вспышки. Лезут прямо на мою трассу!',
+        },
+        wish: { type: 'kill', enemy: 'drone', count: 5, title: 'Чистая трасса', reward: 500, why: 'Сбей дронов, что торчат у Меркурия, — и трасса снова наша!' },
+    },
+    {
+        id: 'irr', kind: 'serpent', color: 0x9fe8ff, emoji: '🐍', altitude: 3, angle: 4.8,
+        name: 'Ирр', species: 'ледяной змей гейзеров Энцелада',
+        persona: 'шипит на «с», медлительный философ, говорит о холоде, воде и времени; немного обидчив, но благодарен за внимание',
+        script: {
+            hail: 'Сссс… Тёплый кораблик… подлетай, погрейссся рядом.',
+            greet: 'Сссс… Давно никто не залетал к гейзерам. Ты пахнешь теплом и железом, пилот.',
+            lore: [
+                'Подо льдом Энцелада — океан. Я родилсся в нём, а потом гейзер выбросил меня к звёздам.',
+                'Мои чешуйки — это лёд, которому миллион лет. Каждая помнит своё лето.',
+                'Сатурн поёт в радиодиапазоне. Я сслушаю его песни, когда не сплю.',
+            ],
+            ask: 'А ты когда-нибудь плавал в насстоящем океане, пилот? Какой он — ваш, земной?',
+            rumor: 'Лёд слышит далеко, ссс.',
+            trouble: 'Но кто-то раскалывает гейзеры — кристаллиды вылупляютсся из трещин и ломают мой дом.',
+        },
+        wish: { type: 'kill', enemy: 'crystal', count: 6, title: 'Трещины во льду', reward: 600, why: 'Разбей кристаллидов у колец, сссс, и я покажу тебе, где гейзеры бьют выше всего.' },
+    },
+    {
+        id: 'mycel', kind: 'mycelium', color: 0x9dff7a, emoji: '🍄', altitude: 3, angle: 0.2,
+        name: 'Мицелий-7', species: 'разумная грибница, дрейфующая колония спор',
+        persona: 'говорит спокойно, по-научному, немного занудно, всё сравнивает с ростом и гниением; дружелюбна и любит делиться «рецептами»',
+        script: {
+            hail: 'Приветственные споры выпущены. Пожалуйста, приблизьтесь для обмена данными.',
+            greet: 'Здравствуйте. Я — седьмая колония Мицелия. Не волнуйтесь, споры безопасны для металла. Почти.',
+            lore: [
+                'Мы проросли на Фобосе из одной споры, прилетевшей с метеоритом. Теперь нас триллионы.',
+                'Мы едим камень очень медленно. Через десять тысяч лет Фобос будет пушистым.',
+                'Каждая наша нить — это нейрон. Вместе мы думаем примерно как вы. Только дольше.',
+            ],
+            ask: 'Разрешите вопрос: из чего сделаны люди? Мы слышали про углерод, но хотим уточнить.',
+            rumor: 'По сети нитей до нас доходят сведения.',
+            trouble: 'К сожалению, пиратские штурмовики используют Фобос как укрытие и выжигают наши колонии двигателями.',
+        },
+        wish: { type: 'kill', enemy: 'fighter', count: 2, title: 'Сад на Фобосе', reward: 650, why: 'Устраните пиратские штурмовики у Марса — и колония вырастет вам в благодарность целую рощу.' },
+    },
+    {
+        id: 'noa', kind: 'ghost', color: 0xb8c8ff, emoji: '👻', altitude: 2.5, angle: 3.9,
+        name: 'Ноа', species: 'призрак первого пилота, дошедшего до края системы',
+        persona: 'меланхоличный, мягкий, говорит тихо и тепло, вспоминает Землю и свой последний полёт; немного шутит о своей бестелесности',
+        script: {
+            hail: 'Тише… ты тоже слышишь, как звенит тишина на краю? Подлети, пилот.',
+            greet: 'Здравствуй, коллега. Давно ко мне не залетали живые. Я тоже был пилотом… когда-то.',
+            lore: [
+                'Мой корабль назывался «Заря». Я долетел до Тритона и понял, что возвращаться не хочу.',
+                'Здесь, на краю, Солнце — просто яркая звезда. Но я всё равно каждый день ищу его глазами.',
+                'Я не мёрзну и не голодаю. Плохо только, что кофе больше не пахнет. Скучаю по кофе.',
+            ],
+            ask: 'Расскажи, как там Земля? Всё ещё идут дожди? Пахнет ли весной?',
+            rumor: 'На краю всё слышно, как в пустом соборе.',
+            trouble: 'Но за орбитой что-то появилось. Портал… и из него сочится холод чужой галактики. Я боюсь, пилот.',
+        },
+        wish: { type: 'reach', title: 'Последний маршрут Ноа', reward: 800, why: 'Пролети мой последний маршрут — до дальнего мира, что я назову, — и посмотри, что там. Я не могу, а ты сможешь.' },
+    },
+    {
+        id: 'nebula', kind: 'nebula', color: 0xff66cc, emoji: '🌌', altitude: 4, angle: 5.9,
+        name: 'Мать-Туманность', species: 'живое облако газа и пыли, в котором рождаются звёзды',
+        persona: 'говорит как заботливая, немного властная мать, зовёт пилота «дитя», мыслит миллионами лет, ласкова и строга',
+        script: {
+            hail: 'Дитя… иди ко мне, согрейся в моих облаках.',
+            greet: 'Здравствуй, дитя. Не удивляйся — все вы, звёздное вещество, в какой-то мере мои дети.',
+            lore: [
+                'В моём сердце сейчас сгущаются три будущие звезды. Самой маленькой я пою колыбельную.',
+                'Я пришла к Юпитеру за теплом Ио. Её вулканы кормят меня серой, как молоком.',
+                'Когда-то я была огромной и светилась на полнеба. Теперь я стара и помещаюсь у одной планеты.',
+            ],
+            ask: 'Скажи мне, дитя, ты хорошо ешь? Спишь достаточно? Кто о тебе заботится?',
+            rumor: 'Мои облака дотягиваются далеко и слышат многое.',
+            trouble: 'Но пираты с их грубыми двигателями и дроны с их лучами рвут мои облака. Мои звёздочки плачут.',
+        },
+        wish: { type: 'kill', enemy: 'drone', count: 6, title: 'Колыбель звёзд', reward: 700, why: 'Защити моих звёздочек, дитя: сбей дронов у Юпитера, и я назову одну звезду в твою честь.' },
     },
 ];
 
@@ -106,13 +215,18 @@ function fromTemplate(t: Template, home: string, far: string): CreatureSpec {
 
 /** The Solar System's residents. */
 export function solarCreatures(): CreatureSpec[] {
-    const [oira, thal, oracle, vivi, skrip] = TEMPLATES;
+    const t = (id: string) => TEMPLATES.find(x => x.id === id)!;
     return [
-        fromTemplate(oira, 'Луна', 'Нептун'),
-        fromTemplate(skrip, 'Земля', 'Нептун'),
-        fromTemplate(vivi, 'Венера', 'Нептун'),
-        fromTemplate(oracle, 'Европа', 'Нептун'),
-        fromTemplate(thal, 'Титан', 'Нептун'),
+        fromTemplate(t('oira'), 'Луна', 'Нептун'),
+        fromTemplate(t('skrip'), 'Земля', 'Нептун'),
+        fromTemplate(t('vivi'), 'Венера', 'Нептун'),
+        fromTemplate(t('helios'), 'Меркурий', 'Нептун'),
+        fromTemplate(t('mycel'), 'Фобос', 'Нептун'),
+        fromTemplate(t('nebula'), 'Ио', 'Нептун'),
+        fromTemplate(t('kepler0'), 'Европа', 'Нептун'),
+        fromTemplate(t('irr'), 'Энцелад', 'Уран'),
+        fromTemplate(t('thal'), 'Титан', 'Нептун'),
+        fromTemplate(t('noa'), 'Тритон', 'Уран'),
     ];
 }
 
@@ -120,7 +234,7 @@ export function solarCreatures(): CreatureSpec[] {
 export function generatedCreatures(planets: string[], seed: number): CreatureSpec[] {
     if (!planets.length) return [];
     const rng = mulberry32(seed ^ 0xc4ea);
-    const pool = [...TEMPLATES].sort(() => rng() - 0.5).slice(0, Math.min(3, planets.length + 1));
+    const pool = [...TEMPLATES].sort(() => rng() - 0.5).slice(0, Math.min(5, planets.length + 2));
     const far = planets[planets.length - 1];
     return pool.map((t, i) => fromTemplate(t, planets[Math.min(planets.length - 1, Math.floor(rng() * planets.length) + (i === 0 ? 0 : 0))], far));
 }
@@ -349,8 +463,196 @@ function makeScavenger(color: number): Animated {
     };
 }
 
+/** A plasma manta: a broad wing that ripples as it glides, trailing sparks. */
+function makeManta(color: number): Animated {
+    const g = new THREE.Group();
+    const geo = new THREE.PlaneGeometry(6, 4, 40, 20);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const base = Float32Array.from(pos.array as Float32Array);
+    // Diamond outline: fold the corners of the sheet in towards the body.
+    for (let i = 0; i < pos.count; i++) {
+        const x = base[i * 3], z = base[i * 3 + 2];
+        const w = 3 * (1 - Math.abs(z) / 2.2) + 0.3;
+        base[i * 3] = THREE.MathUtils.clamp(x, -w, w);
+        base[i * 3 + 2] = z * (1 - 0.15 * Math.abs(x) / 3);
+    }
+    const wingMat = glowMaterial(color, 2.2);
+    const wing = new THREE.Mesh(geo, wingMat);
+    g.add(wing);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.6, 20, 12), light(color, 2.5));
+    body.scale.set(1, 0.5, 2.2);
+    g.add(body);
+    const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.12, 5, 6).rotateX(Math.PI / 2).translate(0, 0, 3.4), light(color, 2));
+    g.add(tail);
+    return {
+        group: g, materials: [wingMat],
+        tick: t => {
+            for (let i = 0; i < pos.count; i++) {
+                const x = base[i * 3], z = base[i * 3 + 2];
+                pos.setXYZ(i, x, Math.sin(t * 2.2 - Math.abs(x) * 0.9 + z * 0.3) * 0.25 * Math.abs(x), z);
+            }
+            pos.needsUpdate = true;
+            tail.rotation.y = Math.sin(t * 1.4) * 0.2;
+        },
+    };
+}
+
+/** An ice serpent: a chain of frosted segments swimming in a travelling wave. */
+function makeSerpent(color: number): Animated {
+    const g = new THREE.Group();
+    const skin = new THREE.MeshStandardMaterial({ color: 0xcfeeff, emissive: new THREE.Color(color).multiplyScalar(0.25), roughness: 0.25, metalness: 0.1 });
+    const segs: THREE.Mesh[] = [];
+    for (let k = 0; k < 22; k++) {
+        const r = 0.55 * (1 - k / 26);
+        const seg = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), skin);
+        segs.push(seg);
+        g.add(seg);
+    }
+    const eyes = new THREE.Group();
+    for (const x of [-0.25, 0.25]) {
+        const e = new THREE.Mesh(new THREE.SphereGeometry(0.1, 8, 6), light(color, 3));
+        e.position.set(x, 0.2, -0.35);
+        eyes.add(e);
+    }
+    segs[0].add(eyes);
+    return {
+        group: g, materials: [],
+        tick: t => {
+            segs.forEach((seg, k) => {
+                const z = k * 0.75 - 6;
+                seg.position.set(Math.sin(t * 1.3 - k * 0.45) * (0.3 + k * 0.06), Math.sin(t * 0.7 - k * 0.3) * 0.4, z);
+            });
+            segs[0].lookAt(segs[1].position.clone().multiplyScalar(2).sub(segs[2].position));
+        },
+    };
+}
+
+/** A drifting fungal colony: pale stalks with glowing caps, and spores puffing off. */
+function makeMycelium(color: number): Animated {
+    const g = new THREE.Group();
+    const flesh = new THREE.MeshStandardMaterial({ color: 0xd8d0b8, roughness: 0.9, emissive: 0x0a0a04 });
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.2, 2), flesh);
+    g.add(core);
+    const caps: THREE.Mesh[] = [];
+    const capMat = light(color, 1.6);
+    for (let k = 0; k < 16; k++) {
+        const dir = new THREE.Vector3(Math.sin(k * 2.4) * Math.cos(k), Math.cos(k * 1.7), Math.sin(k) * Math.cos(k * 2.4)).normalize();
+        const len = 1 + (k % 4) * 0.5;
+        const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.1, len, 6).translate(0, len / 2, 0), flesh);
+        stalk.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        stalk.position.copy(dir).multiplyScalar(1.1);
+        const cap = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), capMat);
+        cap.position.y = len;
+        stalk.add(cap);
+        caps.push(cap);
+        g.add(stalk);
+    }
+    const N = 160;
+    const sp = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    const spores = new THREE.Points(sp, new THREE.PointsMaterial({ color: new THREE.Color(color).multiplyScalar(2), size: 2, sizeAttenuation: false, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
+    spores.frustumCulled = false;
+    g.add(spores);
+    return {
+        group: g, materials: [],
+        tick: t => {
+            caps.forEach((c, k) => c.scale.setScalar(1 + 0.15 * Math.sin(t * 1.5 + k)));
+            const a = sp.attributes.position as THREE.BufferAttribute;
+            for (let i = 0; i < N; i++) {
+                const life = (t * 0.15 + i / N) % 1;
+                const r = 1.5 + life * 5;
+                a.setXYZ(i, Math.sin(i * 12.3) * r, Math.cos(i * 7.1) * r + life, Math.sin(i * 3.7 + 1) * r);
+            }
+            a.needsUpdate = true;
+            g.rotation.y = t * 0.05;
+        },
+    };
+}
+
+/** The ghost of a pilot: a human shape made of pale drifting sparks, flickering. */
+function makeGhost(color: number): Animated {
+    const g = new THREE.Group();
+    // Points sampled over a figure in a spacesuit: head, body, arms, legs.
+    const parts: [number, number, number, number, number, number][] = [
+        // cx, cy, cz, rx, ry, rz (ellipsoids)
+        [0, 2.2, 0, 0.45, 0.5, 0.45], [0, 1.1, 0, 0.6, 0.8, 0.4], [-0.85, 1.2, 0, 0.18, 0.7, 0.18], [0.85, 1.2, 0, 0.18, 0.7, 0.18],
+        [-0.3, -0.3, 0, 0.2, 0.8, 0.2], [0.3, -0.3, 0, 0.2, 0.8, 0.2],
+    ];
+    const N = 900;
+    const base = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+        const [cx, cy, cz, rx, ry, rz] = parts[i % parts.length];
+        const d = new THREE.Vector3().randomDirection().multiplyScalar(Math.cbrt(Math.random()));
+        base.set([cx + d.x * rx, cy + d.y * ry, cz + d.z * rz], i * 3);
+    }
+    const geo = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(base.slice(), 3));
+    const mat = new THREE.PointsMaterial({ color: new THREE.Color(color).multiplyScalar(0.7), size: 2, sizeAttenuation: false, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+    const pts = new THREE.Points(geo, mat);
+    pts.frustumCulled = false;
+    g.add(pts);
+    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 8), light(0x88aaff, 1.5));
+    visor.position.set(0, 2.25, -0.3);
+    visor.scale.set(1, 0.6, 0.4);
+    g.add(visor);
+    return {
+        group: g, materials: [],
+        tick: t => {
+            const a = geo.attributes.position as THREE.BufferAttribute;
+            for (let i = 0; i < N; i++) {
+                const w = Math.sin(t * 1.3 + i * 0.37) * 0.06;
+                a.setXYZ(i, base[i * 3] + w, base[i * 3 + 1] + Math.sin(t * 0.8 + i) * 0.05, base[i * 3 + 2] + w);
+            }
+            a.needsUpdate = true;
+            mat.opacity = 0.55 + 0.3 * Math.sin(t * 0.9) * Math.sin(t * 2.3);
+        },
+    };
+}
+
+/** A small living nebula: coloured gas swirling round a bright newborn star, with one watchful eye. */
+function makeNebula(color: number): Animated {
+    const g = new THREE.Group();
+    const N = 1400;
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
+    const c1 = new THREE.Color(color), c2 = new THREE.Color(0x66aaff), tmp = new THREE.Color();
+    const seed = Array.from({ length: N }, (_, i) => [Math.random() * Math.PI * 2, 0.5 + Math.random() * 5, (Math.random() - 0.5) * 1.6]);
+    for (let i = 0; i < N; i++) {
+        tmp.copy(c1).lerp(c2, Math.random()).multiplyScalar(1.2);
+        col.set([tmp.r, tmp.g, tmp.b], i * 3);
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const cloud = new THREE.Points(geo, new THREE.PointsMaterial({ vertexColors: true, size: 3, sizeAttenuation: false, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+    cloud.frustumCulled = false;
+    g.add(cloud);
+    g.add(new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 10), light(0xfff2d0, 4)));
+    const halo = glowMaterial(color, 0.5);
+    g.add(new THREE.Mesh(new THREE.SphereGeometry(3.5, 32, 16), halo));
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 10), light(0xffffff, 1.5));
+    eye.position.set(1.2, 1.4, -2.5);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 8), new THREE.MeshBasicMaterial({ color: 0x220011 }));
+    pupil.position.z = -0.35;
+    eye.add(pupil);
+    g.add(eye);
+    return {
+        group: g, materials: [halo],
+        tick: t => {
+            const a = geo.attributes.position as THREE.BufferAttribute;
+            for (let i = 0; i < N; i++) {
+                const [a0, r, h] = seed[i];
+                const ang = a0 + t * (0.25 / r);
+                const arm = Math.sin(ang * 2 + r) * 0.5;
+                a.setXYZ(i, Math.cos(ang) * (r + arm), h * (1 + r * 0.15), Math.sin(ang) * (r + arm));
+            }
+            a.needsUpdate = true;
+            eye.scale.y = Math.sin(t * 0.7) > 0.97 ? 0.1 : 1; // it blinks
+        },
+    };
+}
+
 const BUILDERS: Record<Species, (color: number) => Animated> = {
     medusa: makeMedusa, whale: makeWhale, oracle: makeOracle, swarm: makeSwarm, scavenger: makeScavenger,
+    manta: makeManta, serpent: makeSerpent, mycelium: makeMycelium, ghost: makeGhost, nebula: makeNebula,
 };
 
 // ---------------------------------------------------------------------------
@@ -363,7 +665,6 @@ interface Creature {
     spec: CreatureSpec;
     body: Animated;
     beacon: THREE.Points;
-    label: import('../common').Label;
     pos: THREE.Vector3;
     present: boolean;
     /** The errand it gave, while that is still open. */
@@ -373,10 +674,8 @@ interface Creature {
 
 export class Creatures {
     private list: Creature[] = [];
-    private labels: Labels;
 
-    constructor(private scene: THREE.Scene, layer: HTMLElement, specs: CreatureSpec[], private KM: number) {
-        this.labels = new Labels(layer);
+    constructor(private scene: THREE.Scene, specs: CreatureSpec[], private KM: number) {
         for (const spec of specs) {
             const body = BUILDERS[spec.kind](spec.color);
             body.group.scale.setScalar(KM * SIZE_KM);
@@ -388,8 +687,7 @@ export class Creatures {
             );
             beacon.frustumCulled = false;
             scene.add(beacon);
-            const label = this.labels.add(`${spec.emoji} ${spec.name}`, 'creature');
-            this.list.push({ spec, body, beacon, label, pos: new THREE.Vector3(), present: false, greeted: false });
+            this.list.push({ spec, body, beacon, pos: new THREE.Vector3(), present: false, greeted: false });
         }
     }
 
@@ -410,29 +708,34 @@ export class Creatures {
         }
     }
 
+    /** A creature that has just noticed the ship (within a few thousand km), once per visit. */
+    hailed: Creature | null = null;
+
     /** Animate everyone (placed by place()); returns the nearest creature within talking range. */
-    update(time: number, pilot: THREE.Vector3, camera: THREE.Camera, w: number, h: number): { c: Creature; km: number } | null {
+    update(time: number, pilot: THREE.Vector3): { c: Creature; km: number } | null {
         let near: { c: Creature; km: number } | null = null;
+        this.hailed = null;
         for (const c of this.list) {
-            c.body.group.visible = c.present;
-            if (!c.present) { c.beacon.visible = c.label.visible = false; continue; }
-            // Named and marked only within a few million km, not across the whole system.
-            c.beacon.visible = c.label.visible = c.pos.distanceTo(pilot) / this.KM < 4e6;
+            const far = c.pos.distanceTo(pilot) / this.KM;
+            // Beyond a couple of hundred thousand km a 30 km creature is not even a pixel: skip it.
+            c.body.group.visible = c.present && far < 200_000;
+            if (!c.present) { c.beacon.visible = false; continue; }
+            if (far < 6000 && !c.greeted) { c.greeted = true; this.hailed = c; }
+            if (far > 60_000) c.greeted = false;
+            // A faint marker within a few million km, not across the whole system; no name tag.
+            c.beacon.visible = c.pos.distanceTo(pilot) / this.KM < 4e6;
             c.body.group.position.copy(c.pos);
             c.beacon.position.copy(c.pos);
             // Face the pilot, lazily.
             const want = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(c.pos, pilot, new THREE.Vector3(0, 1, 0)));
             c.body.group.quaternion.slerp(want, 0.01);
-            c.body.tick(time);
+            if (c.body.group.visible) c.body.tick(time);
             for (const m of c.body.materials) m.uniforms.uTime.value = time;
-            c.label.position.copy(c.pos);
             const km = c.pos.distanceTo(pilot) / this.KM;
-            c.label.el.dataset.near = km < TALK_KM ? '1' : '';
             // The beacon fades as the creature itself becomes visible.
             (c.beacon.material as THREE.PointsMaterial).opacity = Math.min(0.9, km / 400);
             if (km < TALK_KM && (!near || km < near.km)) near = { c, km };
         }
-        this.labels.update(camera, w, h);
         return near;
     }
 
@@ -448,7 +751,6 @@ export class Creatures {
             this.scene.remove(c.body.group, c.beacon);
             c.body.group.traverse(o => { (o as THREE.Mesh).geometry?.dispose(); });
         }
-        this.labels.dispose();
     }
 }
 

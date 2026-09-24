@@ -272,10 +272,8 @@ void main() {
     vec3 albedo = mix(vec3(0.09, 0.085, 0.08), vec3(0.24, 0.21, 0.18), smoothstep(-0.4, 0.5, n)) * (1.0 - 0.35 * pits);
     // Comet ice: bright, bluish, streaked with dark dust.
     albedo = mix(albedo, mix(vec3(0.25, 0.27, 0.3), vec3(0.75, 0.85, 0.95), smoothstep(-0.2, 0.6, n)), uIce);
-    // Bump from the same noise, via screen-space derivatives of object-space detail.
+    // The lumpy mesh carries the shape; no screen-space bump (it sparkled as the rock moved).
     vec3 N = normalize(vNormalW);
-    float h = n + 0.3 * pits;
-    N = normalize(N - 0.8 * (dFdx(h) * normalize(dFdx(vWorld) + 1e-9) + dFdy(h) * normalize(dFdy(vWorld) + 1e-9)));
     float ndl = max(dot(N, uSunDir), 0.0);
     vec3 V = normalize(cameraPosition - vWorld);
     float rim = pow(1.0 - max(dot(N, V), 0.0), 4.0) * 0.08;
@@ -325,8 +323,9 @@ export class DebrisField {
         this.material = new THREE.ShaderMaterial({ vertexShader: ROCK_VERT, fragmentShader: ROCK_FRAG, uniforms: uniforms(0) });
         // Comet fragments: dirty ice, sharper, with a faint blue glow of outgassing.
         this.iceMaterial = new THREE.ShaderMaterial({ vertexShader: ROCK_VERT, fragmentShader: ROCK_FRAG, uniforms: uniforms(1) });
-        const shard = new THREE.OctahedronGeometry(1000, 1);
-        shard.scale(0.7, 1.4, 0.8);
+        // A long lump of dirty ice, not a faceted crystal (those read as stray triangles).
+        const shard = geo.clone();
+        shard.scale(0.75, 1.5, 0.8);
         // Junk: a satellite bus with a torn solar wing, lit like the ship.
         const junk = new THREE.BoxGeometry(900, 700, 1100);
         const wing = new THREE.BoxGeometry(2600, 40, 800).translate(1700, 0, 0);

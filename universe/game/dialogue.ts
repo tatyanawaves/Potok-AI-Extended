@@ -32,8 +32,11 @@ export interface CreatureMind {
     home: string;
     /** The errand it has in mind, for the scripted conversation (the model may choose its own). */
     wish: Omit<QuestOffer, 'title' | 'brief' | 'reward'> & { why: string; title: string; reward: number };
-    /** Scripted lines: greeting, lore about itself, and the trouble it is in. */
-    script: { greet: string; lore: string[]; trouble: string };
+    /**
+     * Scripted lines: the call it makes when a ship comes near, its greeting, stories about
+     * itself, a question for the pilot, a rumour about the system, and the trouble it is in.
+     */
+    script: { hail: string; greet: string; lore: string[]; ask: string; rumor: string; trouble: string };
 }
 
 export interface WorldBrief {
@@ -49,8 +52,10 @@ export interface Exchange {
 }
 
 const ENEMIES: EnemyKind[] = ['drone', 'fighter', 'crystal', 'leviathan'];
-/** A creature gets to its errand by this many pilot replies at the latest. */
-export const MAX_REPLIES = 5;
+/** A creature talks for at least this many pilot replies before it asks for anything… */
+export const MIN_REPLIES = 4;
+/** …and gets to its errand by this many at the latest. */
+export const MAX_REPLIES = 8;
 
 export const ACCEPT = 'Берусь за поручение.';
 export const DECLINE = 'Не сейчас, может быть позже.';
@@ -138,9 +143,11 @@ function systemPrompt(mind: CreatureMind, world: WorldBrief, forceQuest: boolean
         `Ты — ${mind.name}, ${mind.species}, живое существо в космической игре.`,
         `Характер: ${mind.persona}`,
         `Ты обитаешь возле тела «${mind.home}» в системе «${world.system}». К тебе на маленьком корабле подлетел пилот-человек.`,
-        'Говори по-русски, от первого лица, в своём характере, образно, но коротко: 1–3 предложения.',
-        'Ты сама(сам) начинаешь разговор и ведёшь его к тому, чтобы дать пилоту поручение. Реагируй на тон пилота.',
-        `Обычно поручение даётся после 2–4 ответов пилота. ${forceQuest ? 'СЕЙЧАС обязательно дай поручение.' : ''}`,
+        'Говори по-русски, от первого лица, в своём характере, живо и образно: 2–4 предложения.',
+        'Ты очень разговорчив(а): рассказываешь о себе и своей жизни, делишься слухами о системе и других существах,',
+        'задаёшь пилоту вопросы о нём самом, шутишь или грустишь — как подсказывает характер. Реагируй на тон и слова пилота.',
+        `Ты сама(сам) начинаешь разговор и постепенно ведёшь его к тому, чтобы дать пилоту поручение — не раньше ${MIN_REPLIES}-го ответа пилота.`,
+        forceQuest ? 'СЕЙЧАС обязательно дай поручение.' : '',
         'Поручение бывает двух типов:',
         '— "kill": уничтожить врагов. enemy: "drone" (дроны-разведчики), "fighter" (пиратские штурмовики), "crystal" (кристаллиды-тараны), "leviathan" (космический левиафан, только 1).',
         '— "reach": долететь до тела и осмотреть его.',
@@ -186,38 +193,54 @@ async function callModel(a: ModelAccess, system: string, history: { role: 'user'
 // The scripted conversation.
 // ---------------------------------------------------------------------------
 
-const TONE_REPLIES = [
-    // friendly, business, rude, curious
+/** The pilot's replies at each step of the scripted talk: friendly, business-like, rude, curious. */
+const STEP_REPLIES = [
     ['Рад встрече! Я пилот, лечу мимо.', 'Мне сказали, тут есть работа.', 'Прочь с дороги, чудище.', 'Кто ты такое?'],
-    ['Звучит красиво. Что тебя тревожит?', 'Ближе к делу: чем могу помочь?', 'Мне некогда слушать сказки.', 'Расскажи ещё — как ты здесь живёшь?'],
+    ['Как красиво ты говоришь. Продолжай.', 'Интересно, но ближе к делу.', 'Мне некогда слушать сказки.', 'Расскажи ещё — как ты здесь живёшь?'],
+    ['Я исследую Вселенную — хочу увидеть всё.', 'Я наёмный пилот, работаю за награду.', 'Не твоё дело, куда я лечу.', 'А почему ты спрашиваешь?'],
+    ['Слухи? Люблю слухи, рассказывай.', 'Слухи меня не кормят.', 'Враньё это всё.', 'А кто ещё живёт в этой системе?'],
     ['Я помогу. Что нужно сделать?', 'Какая награда?', 'С чего бы мне рисковать ради тебя?', 'Кто эти враги и откуда они?'],
 ];
 
 const REACTIONS = [
-    'Твой голос тёплый, как свет близкой звезды.',
-    'Деловой… Хорошо, у меня тоже мало времени.',
-    'Дерзость — роскошь для того, кто летает в консервной банке.',
-    'Любопытство — лучшее, что есть в вас, двуногих.',
+    ['Твой голос тёплый, как свет близкой звезды.', 'Ты добр, пилот. Это редкость между орбитами.'],
+    ['Деловой… Хорошо, у меня тоже мало времени.', 'Прямо к сути — уважаю.'],
+    ['Дерзость — роскошь для того, кто летает в консервной банке.', 'Грубиян. Но смелый грубиян.'],
+    ['Любопытство — лучшее, что есть в вас, двуногих.', 'Ты задаёшь хорошие вопросы.'],
 ];
+
+/** Gossip any creature may pass on. */
+const RUMORS = [
+    'Говорят, за орбитой Нептуна кто-то зажёг портал, и из него до сих пор тянет холодом чужой галактики.',
+    'Пираты прячут добычу в тени спутников — там их не видят ни радары, ни звёзды.',
+    'Левиафаны поют перед охотой. Если услышишь низкий гул — поворачивай.',
+    'Кристаллиды рождаются из обломков разбитых кораблей. Поэтому их всё больше.',
+    'Где-то в поясе астероидов лежит станция без экипажа, и её огни всё ещё мигают.',
+    'В центре галактики чёрная дыра хранит память всего, что в неё упало. Так шепчут оракулы.',
+];
+
+const pick = <T>(list: T[], seed: number) => list[Math.abs(Math.floor(seed)) % list.length];
 
 /** The next turn of the scripted talk, given what was said so far. */
 export function scriptedTurn(mind: CreatureMind, history: Exchange[]): DialogueTurn {
-    const replies = history.length; // the pilot has answered every turn shown so far
-    const last = replies ? history[replies - 1].reply ?? '' : '';
-    const tone = TONE_REPLIES.map(t => t.indexOf(last)).find(i => i >= 0) ?? -1;
-    const react = tone >= 0 ? REACTIONS[tone] + ' ' : '';
+    const r = history.length; // the pilot has answered every turn shown so far
+    const last = r ? history[r - 1].reply ?? '' : '';
+    const tone = STEP_REPLIES.map(t => t.indexOf(last)).find(i => i >= 0) ?? -1;
+    const react = tone >= 0 ? pick(REACTIONS[tone], r + mind.name.length) + ' ' : '';
     const said = history.map(h => h.turn.line);
-    const loreShown = mind.script.lore.filter(l => said.some(x => x.includes(l))).length;
-    const troubleShown = said.some(x => x.includes(mind.script.trouble));
-    if (replies === 0) return { line: mind.script.greet, options: TONE_REPLIES[0], quest: null };
-    // The curious hear more about the creature before the errand, up to the reply limit.
-    const wantsLore = replies === 1 || (tone === 3 && replies < MAX_REPLIES - 1);
-    if (wantsLore && loreShown < mind.script.lore.length) {
-        return { line: react + mind.script.lore[loreShown], options: TONE_REPLIES[1], quest: null };
+    const told = (line: string) => said.some(x => x.includes(line));
+    const sc = mind.script;
+    const loreLeft = sc.lore.filter(l => !told(l));
+    const rumor = sc.rumor + ' ' + pick(RUMORS, mind.name.length * 7 + r);
+    if (r === 0) return { line: sc.greet, options: STEP_REPLIES[0], quest: null };
+    // A curious pilot keeps the stories coming (up to the limit).
+    if (tone === 3 && loreLeft.length && r < MAX_REPLIES - 2 && r >= 3) {
+        return { line: react + loreLeft[0], options: STEP_REPLIES[1], quest: null };
     }
-    if (!troubleShown && replies < MAX_REPLIES) {
-        return { line: react + mind.script.trouble, options: TONE_REPLIES[2], quest: null };
-    }
+    if (r === 1) return { line: react + (loreLeft[0] ?? sc.lore[0]), options: STEP_REPLIES[1], quest: null };
+    if (r === 2) return { line: react + sc.ask, options: STEP_REPLIES[2], quest: null };
+    if (r === 3) return { line: react + (loreLeft[0] ? loreLeft[0] + ' ' : '') + rumor, options: STEP_REPLIES[3], quest: null };
+    if (!told(sc.trouble) && r < MAX_REPLIES) return { line: react + sc.trouble, options: STEP_REPLIES[4], quest: null };
     const w = mind.wish;
     const quest: QuestOffer = { ...w, brief: w.why };
     const line = (tone === 2 ? 'Дерзко — но ты мне подходишь. ' : tone === 1 ? 'Награда будет. ' : react) + w.why;
@@ -264,6 +287,10 @@ export class Conversation {
             try {
                 const raw = await callModel(this.access, systemPrompt(this.mind, this.world, replies >= MAX_REPLIES), msgs, this.abort.signal);
                 turn = parseTurn(raw, this.world, this.mind);
+                // Too eager: keep talking a little longer before the errand.
+                if (turn?.quest && replies < MIN_REPLIES) {
+                    turn = { line: turn.line, options: ['Расскажи сначала о себе.', 'Что за работа?', 'Не торопись, я слушаю.', 'Откуда ты это знаешь?'], quest: null };
+                }
             } catch (err) {
                 console.warn('creature dialogue: model unavailable, using the script', err);
             } finally {

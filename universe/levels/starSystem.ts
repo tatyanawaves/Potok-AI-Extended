@@ -97,7 +97,7 @@ function lookFor(kind: Kind, name: string, seed: number): Look {
 /** Kinematic model of the ship: cruise speed from the chosen scale, and a brisk but finite acceleration. */
 const ACCEL = 6; // scene units per s²  (the whole speed-up takes under half a second)
 /** Autopilot time constant: beyond cruise range it closes the distance as e^(−t/τ). */
-const AUTO_TAU = 5;
+const AUTO_TAU = 3;
 const toThree = (e: number[], out: THREE.Vector3) => out.set(e[0], e[2], -e[1]);
 
 export class StarSystemLevel implements Level {
@@ -823,7 +823,9 @@ export class StarSystemLevel implements Level {
                 // And never when the camera is close to the ellipse itself: the ring would pass through the view.
                 const rc = b.parent ? this.camera.position.distanceTo(b.parent.pos) : 0;
                 const onOrbit = !!b.el && Math.abs(rc - b.el.a) < b.el.a * 0.2;
-                if (b.orbitLine) b.orbitLine.visible = (overview || b === this.target) && !onOrbit;
+                // In free flight the rings are hidden altogether: seen from near the ecliptic they are
+                // lines slicing across the view. They show in the overview, far from every body.
+                if (b.orbitLine) b.orbitLine.visible = overview && !onOrbit;
             }
             b.label.position.copy(b.pos);
             b.label.el.classList.toggle('target', b === this.target);
@@ -863,13 +865,15 @@ export class StarSystemLevel implements Level {
      * The body whose motion the ship shares: near a planet you orbit along with
      * it instead of being left behind at tens of km/s.
      */
-    private frameBody(): Body | null {
+    private frameBody(beforeMove = false): Body | null {
         const p = this.pilot.position;
         let best: Body | null = null, bestD = Infinity;
         for (const b of this.bodies) {
             if (b.kind === 'star') continue;
-            const d = p.distanceTo(b.pos);
-            if (d < b.radius * 80 && d < bestD) { bestD = d; best = b; }
+            // Before carrying the ship along, compare with where the body was: a fast little moon
+            // moves farther in a frame than its own reach, and would drop the ship it carries.
+            const d = p.distanceTo(beforeMove ? b.prev : b.pos);
+            if (d < Math.max(b.radius * 80, 5000 / UNIT_KM) && d < bestD) { bestD = d; best = b; }
         }
         return best;
     }
@@ -931,7 +935,6 @@ export class StarSystemLevel implements Level {
             cam.quaternion.slerp(new THREE.Quaternion().setFromRotationMatrix(m), 1 - Math.exp(-4 * dt));
             this.keepOutside(cam.position);
             if (!n.through && remaining <= 1 / UNIT_KM) {
-                this.host.toast(`${n.name} рядом — нажмите T, чтобы поговорить`);
                 // Turned a little aside, so the creature is framed beside the hull rather than behind it.
                 const toIt = p.clone().sub(cam.position);
                 const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), toIt).setLength(toIt.length() * 0.25); // on the right, clear of the target list
@@ -943,7 +946,7 @@ export class StarSystemLevel implements Level {
             return;
         }
         // Free flight. Near a surface the ship slows down, the way SpaceEngine does.
-        const frame = this.frameBody();
+        const frame = this.frameBody(true);
         if (frame) cam.position.addScaledVector(frame.vel, dt);
         const near = this.nearestSurface(cam.position);
         const limit = Math.min(Math.max(near.dist * 0.8, 1e-7), this.game.speedLimit(cam.position, this.ctl.boosted));

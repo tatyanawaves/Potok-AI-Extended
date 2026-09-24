@@ -126,7 +126,7 @@ export class ShipGame {
             this.combat.extraTargets = () => this.field!.targets();
         }
         if (social?.creatures.length) {
-            this.creatures = new Creatures(scene, labelLayer, social.creatures, this.KM);
+            this.creatures = new Creatures(scene, social.creatures, this.KM);
             this.world = social.world;
             this.dialog = new DialogBox();
             this.dialog.onQuest = (q, spec) => this.takeErrand(q, spec);
@@ -316,9 +316,12 @@ export class ShipGame {
 
         if (this.creatures) {
             const was = this.near?.c;
-            this.near = this.creatures.update(this.time, f.pilot.position, f.camera, f.width, f.height);
+            this.near = this.creatures.update(this.time, f.pilot.position);
             const c = this.near?.c;
-            if (c && c !== was && !this.talking) this.toast(`${c.spec.emoji} ${c.spec.name} рядом — нажмите T, чтобы поговорить`);
+            const h = this.creatures.hailed;
+            // It calls out as the ship comes near, and again (with the key to press) in talking range.
+            if (c && c !== was && !this.talking) this.toast(`${c.spec.emoji} ${c.spec.name}: «${c.spec.script.hail}» — T, поговорить`);
+            else if (h && !this.talking) this.toast(`${h.spec.emoji} ${h.spec.name}: «${h.spec.script.hail}»`);
         }
 
         // Missions: ambushes spring when the ship nears the mission's body.
