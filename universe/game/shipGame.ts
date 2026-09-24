@@ -6,13 +6,36 @@ import type { Action } from '../common';
 import { virtualKeys } from '../flight';
 import { UNIT_KM } from '../physics';
 import { Combat, CombatOptions } from './combat';
+import { progress } from './progress';
 import { kill, mission, Mission, MissionLog, objectiveText, reach } from './missions';
-import { Creatures, CreatureSpec, DialogBox, TALK_KM } from './creatures';
+import { Creatures, CreatureSpec, DialogBox } from './creatures';
 import type { QuestOffer, WorldBrief } from './dialogue';
 import { makeShip } from './models';
 
-/** Mission progress per place (a system, or a planet's surface) survives leaving and coming back. */
+/** Mission progress per place (a system, or a planet's surface) survives leaving and coming back, and reloads. */
 const logs = new Map<string, MissionLog>();
+
+function openLog(key: string, missions: () => Mission[]): MissionLog {
+    let log = logs.get(key);
+    if (log) return log;
+    const saved = progress.data.logs[key];
+    log = new MissionLog(saved ? saved.missions : missions());
+    if (saved?.activeId) {
+        log.active = log.missions.find(m => m.id === saved.activeId) ?? null;
+        // Its ambush has to spring again after a reload.
+        if (log.active) log.active.spawned = false;
+    }
+    logs.set(key, log);
+    return log;
+}
+
+/** Copy every mission log into the save (called before saving). */
+export function snapshotLogs() {
+    for (const [k, log] of logs) progress.data.logs[k] = { missions: log.missions, activeId: log.active?.id ?? null };
+}
+
+/** The creature an errand came from: its id is side-<creature id>[-n]. */
+const errandOf = (m: Mission) => (m.side && m.id.startsWith('side-') ? m.id.slice(5).replace(/-\d+$/, '') : null);
 
 export interface BodyLike { name: string; pos: THREE.Vector3; radius: number }
 
@@ -58,7 +81,8 @@ export class ShipGame {
     wantsFree = false;
     readonly combat: Combat;
     readonly log: MissionLog;
-    private ship = makeShip();
+    private ship = makeShip(progress.data.look);
+    private offLook: () => void;
     private sun = new THREE.DirectionalLight(0xffffff, 2.2);
     private fill = new THREE.HemisphereLight(0x7d8aa8, 0x2a2018, 0.7);
     // Animation state of the hull: bank and lean.
@@ -116,6 +140,8 @@ export class ShipGame {
         this.M = this.KM / 1000;
         this.ship.scale.setScalar(this.M);
         this.ship.visible = false;
+        // The ship editor's changes show at once.
+        this.offLook = progress.onChange(() => this.rebuildShip());
         scene.add(this.ship, this.sun, this.sun.target, this.fill);
         this.combat = new Combat(scene, labelLayer, combat);
         if (social?.creatures.length) {
@@ -124,8 +150,7 @@ export class ShipGame {
             this.dialog = new DialogBox();
             this.dialog.onQuest = (q, spec) => this.takeErrand(q, spec);
         }
-        if (!logs.has(key)) logs.set(key, new MissionLog(missions()));
-        this.log = logs.get(key)!;
+        this.log = openLog(key, missions);
         this.combat.onKill = kind => this.log.kill(kind);
         this.combat.onPlayerHit = () => {
             this.hud.flash.classList.remove('on');
@@ -138,10 +163,12 @@ export class ShipGame {
         };
         this.log.onComplete = m => {
             this.combat.player.score += m.reward;
+            this.rememberErrand(m, 'done');
             this.toast(`Миссия выполнена: «${m.title}» (+${m.reward})`);
             this.renderPanel();
         };
         this.log.onFail = m => {
+            this.rememberErrand(m, 'failed');
             this.toast(`Миссия провалена: «${m.title}»`);
             this.renderPanel();
         };
@@ -230,8 +257,34 @@ export class ShipGame {
     private world: WorldBrief = { system: '', bodies: [] };
     /** The creature within talking range, if any. */
     private near: ReturnType<Creatures['update']> = null;
-    /** Errands handed out, by creature id: the mission they became. */
-    private errands = new Map<string, Mission>();
+    /** The latest errand a creature gave, if any. */
+    private errandFrom(creatureId: string): Mission | undefined {
+        return [...this.log.missions].reverse().find(m => errandOf(m) === creatureId);
+    }
+
+    /** A creature hears how its errand went: it warms to a pilot who delivers. */
+    private rememberErrand(m: Mission, state: 'done' | 'failed') {
+        const id = errandOf(m);
+        if (!id) return;
+        const mem = progress.memory(id);
+        const e = [...mem.errands].reverse().find(x => x.title === m.title && x.state === 'active');
+        if (e) e.state = state;
+        mem.mood = Math.max(-3, Math.min(3, mem.mood + (state === 'done' ? 1 : -1)));
+        if (state === 'done') progress.data.stats.errands++;
+        progress.save();
+    }
+
+    private rebuildShip() {
+        const next = makeShip(progress.data.look);
+        next.scale.copy(this.ship.scale);
+        next.position.copy(this.ship.position);
+        next.quaternion.copy(this.ship.quaternion);
+        next.visible = this.ship.visible;
+        this.scene.remove(this.ship);
+        this.ship.traverse(o => (o as THREE.Mesh).geometry?.dispose());
+        this.ship = next;
+        this.scene.add(next);
+    }
 
     /** Creatures of this system and where they are now (positions update in place). */
     get residents(): { name: string; emoji: string; pos: THREE.Vector3 }[] {
@@ -249,10 +302,8 @@ export class ShipGame {
     talk() {
         if (!this.dialog || !this.near || this.dialog.open) return;
         const spec = this.near.c.spec;
-        const m = this.errands.get(spec.id);
-        const state = !m ? 'none' : m.state === 'active' ? 'active' : m.state === 'done' ? 'done' : 'none';
-        if (state === 'done') this.errands.delete(spec.id);
-        this.dialog.start(spec, this.world, state);
+        const m = this.errandFrom(spec.id);
+        this.dialog.start(spec, this.world, m?.state === 'active' ? 'active' : 'none', progress.memory(spec.id));
     }
 
     private takeErrand(q: QuestOffer, spec: CreatureSpec) {
@@ -261,7 +312,8 @@ export class ShipGame {
             : mission(`side-${spec.id}`, q.title, q.brief, q.body, [], [reach(q.body, 30_000)], q.reward);
         m.giver = spec.name;
         this.log.addSide(m, this.lastNow);
-        this.errands.set(spec.id, m);
+        progress.memory(spec.id).errands.push({ title: m.title, state: 'active' });
+        progress.save();
         this.renderPanel();
         this.toast(`Поручение от ${spec.name}: «${m.title}». Цель — ${m.location}`);
     }
@@ -274,14 +326,20 @@ export class ShipGame {
     }
 
     /** Speed cap while enemies are close, km/s → scene units/s. */
+    /**
+     * Speed cap in a dogfight (km/s → scene units/s), so a fight is a fight rather than a blur.
+     * Holding the afterburner lifts it: the pilot can always break away, and enemies left far
+     * enough behind give up. (There is no cap near creatures: the autopilot brakes for those.)
+     */
     speedLimit(pilotPos: THREE.Vector3, boosted: boolean): number {
+        if (boosted) return Infinity;
         const local = this.combat.toLocal(pilotPos);
-        let limit = this.combat.engaged(local) ? (boosted ? 40 : 4) * this.KM : Infinity;
-        // Easing in towards a creature, the way the ship slows near a surface, so it is not overshot.
-        const km = this.creatures?.nearestKm(pilotPos) ?? Infinity;
-        if (km < 50_000) limit = Math.min(limit, Math.max(1, (km - TALK_KM * 0.3) * 0.7) * this.KM * (boosted ? 5 : 1));
-        return limit;
+        if (!this.combat.engaged(local)) return Infinity;
+        if (!this.cappedToast) { this.cappedToast = true; this.toast('Враги рядом — скорость боя. Shift (форсаж) — оторваться'); }
+        return 4 * this.KM;
     }
+
+    private cappedToast = false;
 
     actions(): Action[] {
         const active = this.log.active?.state === 'active';
@@ -471,6 +529,7 @@ export class ShipGame {
         this.creatures?.dispose();
         this.dialog?.dispose();
         this.hud.root.remove();
+        this.offLook();
         this.scene.remove(this.ship, this.sun, this.sun.target, this.fill);
     }
 }

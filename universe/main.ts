@@ -11,6 +11,10 @@ import { GalaxyLevel } from './levels/galaxy';
 import { StarSystemLevel } from './levels/starSystem';
 import { BlackHoleLevel } from './levels/blackHole';
 import { PlanetLevel } from './levels/planet';
+import { progress } from './game/progress';
+import { pilotState } from './game/combat';
+import { snapshotLogs } from './game/shipGame';
+import { GameMenu } from './game/menu';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -63,11 +67,39 @@ const host: LevelHost = {
     },
 };
 
-let path: LevelRequest[] = [
+const START: LevelRequest[] = [
     { kind: 'web' },
     { kind: 'galaxy', galaxy: MILKY_WAY },
     { kind: 'system', galaxy: MILKY_WAY, star: 'sun' },
 ];
+// Carry on from where the pilot was, if the game was saved.
+let path: LevelRequest[] = progress.data.path?.length ? progress.data.path : START;
+
+// ---------------------------------------------------------------------------
+// Saving: the pilot, missions, creatures' memories and the place (with the camera there).
+// ---------------------------------------------------------------------------
+let resetting = false;
+function saveGame() {
+    if (resetting) return;
+    snapshotLogs();
+    progress.data.hull = pilotState.hull;
+    progress.data.shield = pilotState.shield;
+    const here = path[path.length - 1];
+    const state = level?.saveState?.();
+    if (here && state) here.resume = state;
+    progress.data.path = path;
+    progress.save();
+}
+window.addEventListener('beforeunload', saveGame);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveGame(); });
+
+const menu = new GameMenu();
+menu.onSave = () => { saveGame(); host.toast('Игра сохранена'); };
+menu.onNewGame = () => {
+    resetting = true;
+    progress.reset();
+    location.reload();
+};
 let level: Level | null = null;
 let busy = false;
 
@@ -83,8 +115,8 @@ function crumbName(r: LevelRequest): string {
 
 function create(r: LevelRequest): Level {
     switch (r.kind) {
-        case 'web': return new CosmicWebLevel(host);
-        case 'galaxy': return new GalaxyLevel(host, r.galaxy);
+        case 'web': return new CosmicWebLevel(host, r.from);
+        case 'galaxy': return new GalaxyLevel(host, r.galaxy, r.from);
         case 'system': return new StarSystemLevel(host, r.galaxy, r.star);
         case 'blackhole': return new BlackHoleLevel(host, r.galaxy);
         case 'planet': return new PlanetLevel(host, r.visit);
@@ -102,6 +134,11 @@ async function navigate(next: LevelRequest[]) {
     await nextFrame();
     level?.dispose();
     level = null;
+    // Going up the path: the map one level up marks where the pilot was.
+    if (next.length < path.length && next[next.length - 1] === path[next.length - 1]) {
+        const child = path[next.length];
+        next[next.length - 1].from = { ...child, resume: undefined, from: undefined };
+    }
     path = next;
     try {
         const req = path[path.length - 1];
@@ -130,6 +167,7 @@ async function navigate(next: LevelRequest[]) {
     resize();
     ui.fade.classList.remove('on');
     busy = false;
+    saveGame();
 }
 
 function renderCrumbs() {
@@ -160,7 +198,8 @@ let lastActions = '';
 let currentActions: Action[] = [];
 function renderActions() {
     if (!level) return;
-    const actions = level.actions();
+    // The menu is always there, first in the row.
+    const actions = [{ label: '☰ Меню (Tab)', title: 'Навыки, корабль, миссии, сохранение', run: () => menu.toggle() }, ...level.actions()];
     const sig = actions.map(a => `${a.label}:${a.active?.() ? 1 : 0}`).join('|');
     currentActions = actions;
     if (sig === lastActions) return;
@@ -226,7 +265,7 @@ document.addEventListener('pointerlockchange', () => { if (!document.pointerLock
 window.addEventListener('keydown', e => {
     if (e.code === 'KeyH') document.body.classList.toggle('hud-off');
     // Esc first releases a captured mouse; only a free Esc goes up a level.
-    if (e.code === 'Escape' && path.length > 1 && !document.pointerLockElement && performance.now() - unlockedAt > 400) navigate(path.slice(0, -1));
+    if (e.code === 'Escape' && path.length > 1 && !document.pointerLockElement && performance.now() - unlockedAt > 400 && !menu.isOpen) navigate(path.slice(0, -1));
 });
 $('toggle-panel').addEventListener('click', () => {
     ui.panel.classList.toggle('collapsed');
@@ -248,6 +287,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-key]').forEach(b => {
 const clock = new THREE.Clock();
 let hudTimer = 0;
 let fps = 60;
+let saveTimer = 15;
 renderer.setAnimationLoop(() => {
     const raw = clock.getDelta();
     const dt = Math.min(raw, 0.1);
@@ -256,6 +296,9 @@ renderer.setAnimationLoop(() => {
     if (!busy && !document.hidden && raw < 0.5) adapt(raw); // a long gap is a hidden tab or a level load, not a slow GPU
     level.update(dt);
     composer.render(dt);
+    progress.data.stats.seconds += dt;
+    saveTimer -= dt;
+    if (saveTimer <= 0 && !busy) { saveTimer = 15; saveGame(); }
     hudTimer -= dt;
     if (hudTimer <= 0) {
         hudTimer = 0.2;

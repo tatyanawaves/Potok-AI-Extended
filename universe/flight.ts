@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { effects } from './game/progress';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 /** Keys held on the on-screen pad of touch devices; every controller reads them too. */
@@ -228,7 +229,7 @@ export class FlyController {
             this.held(BACK) - this.held(FORWARD),
         );
         this.strafe = this.held(RIGHT) - this.held(LEFT);
-        const max = Math.min(this.speed * (this.boosted ? 10 : 1), limit);
+        const max = Math.min(this.speed * (this.boosted ? effects.boost : 1), limit);
         if (dir.lengthSq() > 0) dir.normalize().applyQuaternion(cam.quaternion).multiplyScalar(max);
         // Ease towards the wanted velocity: quick to respond, no jerk, and a glide to a stop.
         this.velocity.lerp(dir, 1 - Math.exp(-5 * dt));

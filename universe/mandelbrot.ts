@@ -187,6 +187,8 @@ export interface GalaxySpec {
     /** Julia parameter for irregular galaxies. */
     juliaC: [number, number];
     isMilkyWay: boolean;
+    /** Its place in the cosmic web's list, to mark it on the map. */
+    webIndex?: number;
 }
 
 const GALAXY_TYPE_RU: Record<GalaxyType, string> = {
@@ -239,6 +241,7 @@ export function galaxyFromWeb(index: number, x: number, y: number, z: number, tr
         bhMassSun: Math.pow(10, bhLog),
         juliaC: [jx * 1.02, jy * 1.02],
         isMilkyWay: false,
+        webIndex: index,
     };
 }
 

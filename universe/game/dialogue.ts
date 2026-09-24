@@ -4,8 +4,9 @@
 // Potok (their own key, from this browser's storage); without one, or when
 // the model fails, the creature falls back on a scripted conversation.
 
-import { secureStorage } from '../../services/encryption';
+import { secureStorage } from '../storage';
 import type { EnemyKind } from './models';
+import type { CreatureMemory } from './progress';
 
 export interface QuestOffer {
     title: string;
@@ -133,13 +134,37 @@ export function modelAccess(): ModelAccess | null {
     }
 }
 
+export type Provider = ModelAccess['provider'];
+
+/** Keep the pilot's own key in this browser (encrypted, as Potok keeps it), and make it the one used. */
+export function saveModelKey(provider: Provider, key: string) {
+    const name = provider === 'openrouter' ? 'openRouterKey' : provider === 'groq' ? 'groqKey' : 'geminiKey';
+    secureStorage.setItem(name, key.trim());
+    let settings: Record<string, unknown> = {};
+    try { settings = JSON.parse(localStorage.getItem('ai_settings') || '{}'); } catch { /* start afresh */ }
+    delete settings[name]; // never in the plain blob
+    localStorage.setItem('ai_settings', JSON.stringify({ ...settings, aiProvider: provider }));
+}
+
 export function describeAccess(a: ModelAccess | null): string {
-    if (!a) return 'сценарий (ключ ИИ не найден — добавьте его в настройках Потока)';
+    if (!a) return 'сценарий (ИИ не подключён)';
     return `ИИ: ${a.provider === 'openrouter' ? 'OpenRouter' : a.provider === 'groq' ? 'Groq' : 'Gemini'} · ${a.model}`;
 }
 
-function systemPrompt(mind: CreatureMind, world: WorldBrief, forceQuest: boolean): string {
+function memoryPrompt(mem?: CreatureMemory): string[] {
+    if (!mem || mem.talks <= 1) return ['Это ваша первая встреча.'];
+    const errands = mem.errands.map(e => `«${e.title}» — ${e.state === 'done' ? 'выполнено' : e.state === 'failed' ? 'провалено' : 'ещё не выполнено'}`);
     return [
+        `Вы уже встречались: это ваш ${mem.talks}-й разговор. Твоё отношение к пилоту: ${moodText(mem.mood)}.`,
+        mem.said.length ? `Раньше пилот говорил тебе: ${mem.said.slice(-4).map(x => `«${x}»`).join(', ')}.` : '',
+        errands.length ? `Твои поручения ему: ${errands.join('; ')}.` : '',
+        'Начни с того, что узнаёшь пилота и вспоминаешь прошлое (поблагодари за выполненное, упрекни за проваленное или грубость).',
+    ];
+}
+
+function systemPrompt(mind: CreatureMind, world: WorldBrief, forceQuest: boolean, mem?: CreatureMemory): string {
+    return [
+        ...memoryPrompt(mem),
         `Ты — ${mind.name}, ${mind.species}, живое существо в космической игре.`,
         `Характер: ${mind.persona}`,
         `Ты обитаешь возле тела «${mind.home}» в системе «${world.system}». К тебе на маленьком корабле подлетел пилот-человек.`,
@@ -221,8 +246,33 @@ const RUMORS = [
 
 const pick = <T>(list: T[], seed: number) => list[Math.abs(Math.floor(seed)) % list.length];
 
+/** How the pilot's reply shifts the creature's mood: options come friendly, business, rude, curious. */
+export const TONE_MOOD = [1, 0, -1, 0.5];
+
+/** Mood in words, for the model. */
+const moodText = (m: number) => m >= 2 ? 'очень тёплое, ты рада(рад) пилоту' : m >= 0.5 ? 'доброе' : m > -0.5 ? 'нейтральное' : m > -2 ? 'настороженное, пилот бывал груб' : 'обиженное';
+
+/** The first words to a pilot met before, from what the creature remembers. */
+export function memoryGreeting(mem: CreatureMemory): string {
+    const last = mem.errands[mem.errands.length - 1];
+    const parts: string[] = [];
+    if (last?.state === 'done') parts.push(`Ты вернулся! Я не забыла, как ты справился с «${last.title}». Спасибо.`);
+    else if (last?.state === 'failed') parts.push(`Помню, «${last.title}» у тебя тогда не вышло. Ничего, бывает.`);
+    else if (mem.mood >= 1) parts.push('Рада снова видеть тебя, пилот!');
+    else if (mem.mood <= -1) parts.push('А, это ты… В прошлый раз ты был не слишком вежлив.');
+    else parts.push('Снова ты? Мы ведь уже говорили — помнишь?');
+    const said = mem.said[mem.said.length - 1];
+    if (said) parts.push(`Ты тогда сказал: «${said}».`);
+    parts.push('О чём поговорим на этот раз?');
+    return parts.join(' ');
+}
+
+/** Hurt enough, a creature will not talk until the pilot apologises. */
+export const REFUSE_MOOD = -2.5;
+export const APOLOGY = 'Прости, я был груб.';
+
 /** The next turn of the scripted talk, given what was said so far. */
-export function scriptedTurn(mind: CreatureMind, history: Exchange[]): DialogueTurn {
+export function scriptedTurn(mind: CreatureMind, history: Exchange[], memory?: CreatureMemory): DialogueTurn {
     const r = history.length; // the pilot has answered every turn shown so far
     const last = r ? history[r - 1].reply ?? '' : '';
     const tone = STEP_REPLIES.map(t => t.indexOf(last)).find(i => i >= 0) ?? -1;
@@ -232,7 +282,7 @@ export function scriptedTurn(mind: CreatureMind, history: Exchange[]): DialogueT
     const sc = mind.script;
     const loreLeft = sc.lore.filter(l => !told(l));
     const rumor = sc.rumor + ' ' + pick(RUMORS, mind.name.length * 7 + r);
-    if (r === 0) return { line: sc.greet, options: STEP_REPLIES[0], quest: null };
+    if (r === 0) return { line: memory && memory.talks > 1 ? memoryGreeting(memory) : sc.greet, options: STEP_REPLIES[0], quest: null };
     // A curious pilot keeps the stories coming (up to the limit).
     if (tone === 3 && loreLeft.length && r < MAX_REPLIES - 2 && r >= 3) {
         return { line: react + loreLeft[0], options: STEP_REPLIES[1], quest: null };
@@ -258,7 +308,7 @@ export class Conversation {
     offline = !this.access;
     private abort = new AbortController();
 
-    constructor(readonly mind: CreatureMind, readonly world: WorldBrief) {}
+    constructor(readonly mind: CreatureMind, readonly world: WorldBrief, readonly memory?: CreatureMemory) {}
 
     get current(): DialogueTurn | null { return this.history[this.history.length - 1]?.turn ?? null; }
 
@@ -268,7 +318,15 @@ export class Conversation {
     /** The pilot answers the current turn; returns the creature's next one. */
     answer(reply: string): Promise<DialogueTurn> {
         const cur = this.history[this.history.length - 1];
-        if (cur) cur.reply = reply;
+        if (cur) {
+            cur.reply = reply;
+            // The creature remembers what was said, and how.
+            if (this.memory) {
+                const tone = cur.turn.options.indexOf(reply);
+                if (tone >= 0 && tone < 4) this.memory.mood = Math.max(-3, Math.min(3, this.memory.mood + TONE_MOOD[tone] * 0.5));
+                this.memory.said = [...this.memory.said, reply].slice(-6);
+            }
+        }
         return this.advance();
     }
 
@@ -285,7 +343,7 @@ export class Conversation {
             }
             const timer = setTimeout(() => this.abort.abort(), 30_000);
             try {
-                const raw = await callModel(this.access, systemPrompt(this.mind, this.world, replies >= MAX_REPLIES), msgs, this.abort.signal);
+                const raw = await callModel(this.access, systemPrompt(this.mind, this.world, replies >= MAX_REPLIES, this.memory), msgs, this.abort.signal);
                 turn = parseTurn(raw, this.world, this.mind);
                 // Too eager: keep talking a little longer before the errand.
                 if (turn?.quest && replies < MIN_REPLIES) {
@@ -304,7 +362,7 @@ export class Conversation {
             const w = this.mind.wish;
             turn = { line: turn.line + ' ' + w.why, options: [ACCEPT, DECLINE], quest: { ...w, brief: w.why } };
         }
-        if (!turn) turn = scriptedTurn(this.mind, this.history);
+        if (!turn) turn = scriptedTurn(this.mind, this.history, this.memory);
         this.history.push({ turn });
         return turn;
     }

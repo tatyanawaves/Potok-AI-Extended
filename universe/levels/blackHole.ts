@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { ShipAvatar } from '../game/avatar';
+import type { CameraState } from '../common';
 import { FLY_HELP, Navigator } from '../flight';
 import { Action, blackbodyTexture, Level, LevelHost, ProximityTrigger, row } from '../common';
 import { GalaxySpec } from '../mandelbrot';
@@ -20,6 +22,7 @@ export class BlackHoleLevel implements Level {
     readonly maxPixelRatio = 1;
     readonly help = `${FLY_HELP} · улетите дальше 150 rₛ — вернётесь в галактику · «Квантовое ядро» — что может быть вместо сингулярности`;
     private nav: Navigator;
+    private avatar: ShipAvatar;
     private leave = new ProximityTrigger(30);
     private material: THREE.ShaderMaterial;
     private time = 0;
@@ -52,13 +55,17 @@ export class BlackHoleLevel implements Level {
         });
         const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material);
         quad.frustumCulled = false;
+        quad.renderOrder = -1; // the sky first: it has no depth, the ship draws over it
         this.scene.add(quad);
 
         this.camera.position.set(0, 2.2, 22);
         this.nav = new Navigator(this.camera, host.canvas, { speed: 2, minSpeed: 0.02, maxSpeed: 60 }, { min: 1.6, max: 140 });
         this.nav.orbit.enablePan = false;
         this.nav.orbit.autoRotateSpeed = 0.3;
-        this.nav.setOrbit(new THREE.Vector3(), true);
+        // Arrive at the controls, looking at the hole: fly in; «⟳ Облёт» for the slow tour.
+        this.camera.lookAt(0, 0, 0);
+        this.nav.setFree();
+        this.avatar = new ShipAvatar(this.scene, this.camera, 0.35);
     }
 
     actions(): Action[] {
@@ -103,6 +110,10 @@ export class BlackHoleLevel implements Level {
         return html;
     }
 
+    saveState(): CameraState {
+        return { position: this.camera.position.toArray(), quaternion: this.camera.quaternion.toArray() };
+    }
+
     resumed() {
         this.nav.setFree();
     }
@@ -115,7 +126,8 @@ export class BlackHoleLevel implements Level {
 
     update(dt: number) {
         this.time += dt;
-        this.nav.update(dt);
+        const v = this.nav.update(dt);
+        this.avatar.update(dt, this.nav.mode === 'free', Math.min(1, v / Math.max(this.nav.fly.speed, 1e-9)));
         // Free flight may not cross the horizon: nothing would come back out to show.
         if (this.camera.position.length() < 1.3) this.camera.position.setLength(1.3);
         if (this.nav.mode === 'free' && this.leave.check(dt, () => 180 - this.camera.position.length())) {
@@ -144,6 +156,7 @@ export class BlackHoleLevel implements Level {
 
     dispose() {
         this.nav.dispose();
+        this.avatar.dispose();
         this.scene.traverse(o => {
             const m = o as THREE.Mesh;
             m.geometry?.dispose();

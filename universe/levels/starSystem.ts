@@ -4,7 +4,7 @@ import {
     spriteMaterial, starfield,
 } from '../common';
 import {
-    galaxyFromWeb, GalaxySpec, galaxyTypeName, generateSystem, hash32, kroupaMass, MILKY_WAY, mulberry32, PlanetKind, SystemSpec,
+    GalaxySpec, generateSystem, hash32, MILKY_WAY, mulberry32, PlanetKind, starName, SystemSpec,
 } from '../mandelbrot';
 import type { LevelRequest } from '../common';
 import {
@@ -19,6 +19,8 @@ import { ShipGame } from '../game/shipGame';
 import { Comet, makeBelt, makeComet, updateComet } from '../game/spaceObjects';
 import { generatedMissions, solarMissions } from '../game/missions';
 import { generatedCreatures, solarCreatures, TALK_KM } from '../game/creatures';
+import { galaxyStar, STARS as GALAXY_STARS } from './galaxy';
+import { COUNT as WEB_GALAXIES, webGalaxy } from './cosmicWeb';
 import { generatedSatellites, PortalSpec, Portals, Satellites, SOLAR_SATELLITES } from '../game/stations';
 import { AtmosphereParams, landable, surfaceFor } from '../atmosphere';
 import { ATMO_SHELL_FRAG } from '../planetShaders';
@@ -603,9 +605,18 @@ export class StarSystemLevel implements Level {
                 this.pilot.lookAt(this.pilot.position.clone().add(new THREE.Vector3(0, 1, 0).cross(out)));
                 this.target = b;
             }
+        } else if (d && d.tDays !== undefined) {
+            // A saved game: the same moment, so the worlds are where the pilot left them.
+            this.tDays = Number(d.tDays);
+            this.timeScale = Number(d.timeScale ?? this.timeScale);
+            this.updatePositions(0);
         }
         this.mode = 'orbit';
         this.goFree();
+    }
+
+    saveState(): CameraState {
+        return { position: this.pilot.position.toArray(), quaternion: this.pilot.quaternion.toArray(), data: { tDays: this.tDays, timeScale: this.timeScale } };
     }
 
     /** The body L would land on: the selected one, or the nearest solid world within 40 of its radii. */
@@ -645,18 +656,24 @@ export class StarSystemLevel implements Level {
         const inGalaxy = (g: GalaxySpec, last: LevelRequest): LevelRequest[] => [web, { kind: 'galaxy', galaxy: g }, last];
         const specs: PortalSpec[] = [];
 
-        const seed = hash32(this.galaxy.seed, Math.floor(rng() * 1e9));
-        const mass = kroupaMass(rng, 0.5, 2.2);
-        const other = generateSystem(seed, mass);
+        // Real places on the maps: a star of this galaxy, and a galaxy of the cosmic web, so the
+        // maps can mark where the pilot went. Their stars are built only when the portal is used.
+        const k = Math.floor(rng() * GALAXY_STARS);
+        const starHere = starName(hash32(this.galaxy.seed, k));
         specs.push({
-            title: `Система ${other.name} · ${this.galaxy.name}`, near: at(this.system ? 0 : 2), distRadii: 7, angle: 0.9, color: 0x44e0ff,
-            go: () => this.warp(`система ${other.name}`, inGalaxy(this.galaxy, { kind: 'system', galaxy: this.galaxy, star: { seed, mass } })),
+            title: `Система ${starHere} · ${this.galaxy.name}`, near: at(this.system ? 0 : 2), distRadii: 7, angle: 0.9, color: 0x44e0ff,
+            go: () => this.warp(`система ${starHere}`, () => inGalaxy(this.galaxy, { kind: 'system', galaxy: this.galaxy, star: galaxyStar(this.galaxy, k) })),
         });
-        const g2 = galaxyFromWeb(Math.floor(rng() * 1e6), rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1, rng());
-        const seed2 = hash32(g2.seed, 1 + Math.floor(rng() * 1e6)), mass2 = kroupaMass(rng, 0.6, 2);
+        let gk = Math.floor(rng() * WEB_GALAXIES);
+        if (gk === this.galaxy.webIndex) gk++;
+        const gName = `PGC ${(100_000 + (hash32(gk, 0x9a1a) % 900_000)).toString()}`;
+        const sk = Math.floor(rng() * GALAXY_STARS);
         specs.push({
-            title: `Галактика ${g2.name} (${galaxyTypeName(g2.type)})`, near: at(this.system ? 1 : 4), distRadii: 4, angle: -0.7, color: 0xc070ff,
-            go: () => this.warp(`галактика ${g2.name}`, inGalaxy(g2, { kind: 'system', galaxy: g2, star: { seed: seed2, mass: mass2 } })),
+            title: `Галактика ${gName}`, near: at(this.system ? 1 : 4), distRadii: 4, angle: -0.7, color: 0xc070ff,
+            go: () => this.warp(`галактика ${gName}`, () => {
+                const g2 = webGalaxy(gk);
+                return inGalaxy(g2, { kind: 'system', galaxy: g2, star: galaxyStar(g2, sk) });
+            }),
         });
         const bh = this.galaxy.isMilkyWay ? 'Стрелец A*' : `ядро ${this.galaxy.name}`;
         specs.push({
@@ -677,9 +694,10 @@ export class StarSystemLevel implements Level {
         return specs;
     }
 
-    private warp(where: string, path: LevelRequest[]) {
+    private warp(where: string, path: LevelRequest[] | (() => LevelRequest[])) {
         this.host.toast(`Портал: прыжок — ${where}`);
-        this.host.warp(path);
+        // Building the destination (a galaxy's stars, the web) takes a moment: let the toast show first.
+        setTimeout(() => this.host.warp(typeof path === 'function' ? path() : path), 60);
     }
 
     /** Autopilot to a portal (through it) or to a creature (to talking range). */

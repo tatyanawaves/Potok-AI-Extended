@@ -29,10 +29,14 @@ export interface CameraState {
 export type LevelRequest = (
     | { kind: 'web' }
     | { kind: 'galaxy'; galaxy: import('./mandelbrot').GalaxySpec }
-    | { kind: 'system'; galaxy: import('./mandelbrot').GalaxySpec; star: { seed: number; mass: number } | 'sun' }
+    | { kind: 'system'; galaxy: import('./mandelbrot').GalaxySpec; star: { seed: number; mass: number; index?: number } | 'sun' }
     | { kind: 'blackhole'; galaxy: import('./mandelbrot').GalaxySpec }
     | { kind: 'planet'; galaxy: import('./mandelbrot').GalaxySpec; visit: import('./levels/planet').PlanetVisit }
-) & { resume?: CameraState };
+) & {
+    resume?: CameraState;
+    /** The place one level down that the pilot came up from: a map marks it «вы здесь». */
+    from?: LevelRequest;
+};
 
 export interface Action {
     label: string;
@@ -62,6 +66,8 @@ export interface Level {
     click?(x: number, y: number): void;
     /** The camera was put back where the pilot left it; controllers should take it over. */
     resumed?(state: CameraState): void;
+    /** Where the pilot is, for the saved game (null: start this place afresh). */
+    saveState?(): CameraState | null;
     dispose(): void;
 }
 

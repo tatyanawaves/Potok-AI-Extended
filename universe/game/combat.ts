@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { UNIT_KM } from '../physics';
 import { EnemyKind, makeEnemy } from './models';
+import { effects, progress } from './progress';
 
 
 export interface Anchor { name: string; pos: THREE.Vector3 }
@@ -41,9 +42,8 @@ const CATCH_UP_KM = 10;
 const ESCAPE_KM = 150;
 
 export const PLAYER_BOLT_SPEED = 8; // km/s relative to the ship: slow enough to watch a burst fly
-const PLAYER_BOLT_DAMAGE = 20;
+const PLAYER_BOLT_DAMAGE = 20; // × the damage upgrade
 const PLAYER_HIT_KM = 0.04;
-const FIRE_INTERVAL = 0.12;
 
 interface Enemy {
     kind: EnemyKind;
@@ -146,7 +146,19 @@ const HALO: Map<THREE.Material, THREE.Material> = new Map([
     [friendlyMat, haloMat(0x44bbff)], [hostileMat, haloMat(0xff2233)], [plasmaMat, haloMat(0xaa33ff)],
 ]);
 
-export const pilotState: PlayerState = { hull: 100, maxHull: 100, shield: 100, maxShield: 100, score: 0, sinceHit: 99, dead: false };
+/**
+ * The one pilot across every level. Score is the saved game's (it is also the currency for
+ * upgrades), and the upgrades set the maxima.
+ */
+export const pilotState: PlayerState = {
+    hull: Math.min(progress.data.hull, effects.maxHull),
+    shield: Math.min(progress.data.shield, effects.maxShield),
+    get maxHull() { return effects.maxHull; },
+    get maxShield() { return effects.maxShield; },
+    get score() { return progress.data.score; },
+    set score(v: number) { progress.data.score = v; },
+    sinceHit: 99, dead: false,
+};
 
 export class Combat {
     readonly group = new THREE.Group();
@@ -246,7 +258,7 @@ export class Combat {
      */
     fire(shipWorld: THREE.Vector3, dirWorld: THREE.Vector3, shipVelKmS: THREE.Vector3): boolean {
         if (!this.anchor || this.fireCooldown > 0 || this.player.dead) return false;
-        this.fireCooldown = FIRE_INTERVAL;
+        this.fireCooldown = effects.fireInterval;
         const from = this.toLocal(shipWorld)!;
         const ray = dirWorld.clone().normalize();
         let dir = ray.clone();
@@ -265,7 +277,7 @@ export class Combat {
         const vel = dir.multiplyScalar(PLAYER_BOLT_SPEED).add(shipVelKmS);
         // Seen from the chase camera the first hundred metres of a shot lie over the hull, so the
         // bolt starts beyond them.
-        this.addBolt(from.addScaledVector(vel.clone().normalize(), 0.12), vel, PLAYER_BOLT_DAMAGE, true, 0.006, friendlyMat, 3);
+        this.addBolt(from.addScaledVector(vel.clone().normalize(), 0.12), vel, PLAYER_BOLT_DAMAGE * effects.damage, true, 0.006, friendlyMat, 3);
         return true;
     }
 
@@ -365,7 +377,7 @@ export class Combat {
         this.fireCooldown -= dt;
         const p = this.player;
         p.sinceHit += dt;
-        if (!p.dead && p.sinceHit > 3) p.shield = Math.min(p.maxShield, p.shield + 10 * dt);
+        if (!p.dead && p.sinceHit > 3) p.shield = Math.min(p.maxShield, p.shield + effects.regen * dt);
         if (!this.anchor) return;
         const me = this.toLocal(shipWorld)!;
 
@@ -415,6 +427,7 @@ export class Combat {
             this.explode(e.local, e.kind === 'leviathan' ? 1.2 : 0.3, e.kind === 'crystal' ? 0x66ffff : 0xffaa44);
             p.score += e.def.score;
             this.removeEnemy(e);
+            progress.data.stats.kills++;
             this.onKill?.(e.kind);
             return false;
         });

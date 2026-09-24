@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { CameraState, LevelRequest } from '../common';
 import {
     Action, disposeObject, Label, Labels, Level, LevelHost, particleMaterial, pickPoint, pixelScale, ProximityTrigger, row,
     spriteMaterial,
@@ -7,9 +8,18 @@ import { FLY_HELP, Navigator } from '../flight';
 import { CosmicWeb, cosmicWeb, galaxyFromWeb, GalaxySpec, galaxyTypeName, mandelbrot, mulberry32, MILKY_WAY } from '../mandelbrot';
 import { blackbodyFast, fmtNum } from '../physics';
 
-const COUNT = 45_000;
+export const COUNT = 45_000;
 const SCALE = 300; // Mpc: the sampled cube is ≈ 600 Mpc across, a patch of the observable universe
 let cached: { web: CosmicWeb; colors: Float32Array; sizes: Float32Array; home: number } | null = null;
+
+/** Galaxy `k` of the web, as the map would open it (the Milky Way at its home spot). */
+export function webGalaxy(k: number): GalaxySpec {
+    const { web, home } = build();
+    const i = ((k % web.count) + web.count) % web.count;
+    if (i === home) return MILKY_WAY;
+    const p = web.positions;
+    return galaxyFromWeb(i, p[i * 3], p[i * 3 + 1], p[i * 3 + 2], web.traps[i]);
+}
 
 function build() {
     if (cached) return cached;
@@ -58,7 +68,7 @@ export class CosmicWebLevel implements Level {
     private onKey = (e: KeyboardEvent) => { if (e.key === 'Enter') this.enter(); };
     private onDbl = () => this.enter();
 
-    constructor(private host: LevelHost) {
+    constructor(private host: LevelHost, from?: LevelRequest) {
         const { web, colors, sizes, home } = this.data;
         const g = new THREE.BufferGeometry();
         const pos = new Float32Array(web.positions.length);
@@ -82,8 +92,15 @@ export class CosmicWebLevel implements Level {
         this.scene.add(this.marker);
 
         this.labels = new Labels(host.labelLayer);
-        this.homeLabel = this.labels.add('Млечный Путь — мы здесь', 'home', () => this.host.open({ kind: 'galaxy', galaxy: MILKY_WAY }));
+        // Where the pilot is: the galaxy they came up from (the Milky Way unless a portal took them away).
+        const here = from?.kind === 'galaxy' ? (from.galaxy.isMilkyWay ? home : from.galaxy.webIndex ?? -1) : home;
+        this.homeLabel = this.labels.add(here === home ? 'Млечный Путь — вы здесь' : 'Млечный Путь', here === home ? 'home' : 'star',
+            () => this.host.open({ kind: 'galaxy', galaxy: MILKY_WAY }));
         this.homeLabel.position.fromArray(pos, home * 3);
+        if (here >= 0 && here !== home && from?.kind === 'galaxy') {
+            const l = this.labels.add(`Вы здесь — ${from.galaxy.name}`, 'home', () => this.host.open({ kind: 'galaxy', galaxy: this.spec(here) }));
+            l.position.fromArray(pos, here * 3);
+        }
         this.selLabel = this.labels.add('', 'sel', () => this.enter());
         this.selLabel.visible = false;
 
@@ -91,6 +108,11 @@ export class CosmicWebLevel implements Level {
         this.nav = new Navigator(this.camera, host.canvas, { speed: 20, minSpeed: 0.02, maxSpeed: 3000 }, { min: 5, max: 2000 });
         this.nav.orbit.autoRotateSpeed = 0.25;
         this.nav.lookAt(new THREE.Vector3());
+        if (here >= 0) {
+            const at = new THREE.Vector3().fromArray(pos, here * 3);
+            this.camera.position.copy(at).add(new THREE.Vector3(0, 160, 480)); // back from the filament, the marked galaxy in view
+            this.nav.lookAt(at);
+        }
         window.addEventListener('keydown', this.onKey);
         host.canvas.addEventListener('dblclick', this.onDbl);
     }
@@ -113,6 +135,10 @@ export class CosmicWebLevel implements Level {
         const back = new THREE.Vector3(0, 0, 1).applyQuaternion(this.camera.quaternion).multiplyScalar(6);
         this.host.saveCamera(this.camera.position.clone().add(back), this.camera.quaternion);
         this.host.open({ kind: 'galaxy', galaxy: this.spec(i) });
+    }
+
+    saveState(): CameraState {
+        return { position: this.camera.position.toArray(), quaternion: this.camera.quaternion.toArray() };
     }
 
     resumed() {
