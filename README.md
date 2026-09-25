@@ -18,3 +18,23 @@ View your app in AI Studio: https://ai.studio/apps/drive/1ODisxldLkQddIlUhXkHtTu
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Test mode (no real accounts, no API key)
+
+Runs the app against the Firebase emulators under the throwaway project
+`demo-potok` and a mock model, so boards, bots, meetings, tools, messages and
+forwarding can be tried end to end without touching production or spending
+tokens. Three terminals:
+
+1. `npm run emulators` — Auth and Firestore emulators with the real
+   `firestore.rules`. Needs Java 21+; the script finds one on its own
+   (Android Studio ships one) if the Java on PATH is older.
+2. `npm run mock:llm` — mock model at `http://127.0.0.1:8787/v1` and a mock
+   MCP tool server at `http://127.0.0.1:8787/mcp` (tools `get_time`,
+   `add_numbers`).
+3. `npm run dev:test` — the app in emulator mode.
+
+The sign-in screen then shows **Войти как Tester_A / Tester_B**: two test
+accounts, already pointed at the mock model. Give a bot the tool server
+`http://127.0.0.1:8787/mcp` to exercise tool calls. Emulator data is kept in
+memory and disappears when the emulators stop.

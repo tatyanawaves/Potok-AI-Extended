@@ -17,13 +17,32 @@ import {
     subscribeToMessages, sendMessage, deleteMessage, parseMentions, isBot
 } from '../services/boards';
 import {
-    triggerAgentReplies, runBotDiscussion,
+    triggerAgentReplies, runBotDiscussion, designBot, probeToolServer, toolServersOf,
     MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, MAX_REQUESTS_PER_TURN, ToolPolicy
 } from '../services/boardAgent';
+import {
+    runOrchestration, estimateOrchestrationRequests, MAX_ORCHESTRATED_STEPS, OrchestrationProgress
+} from '../services/orchestrator';
+import { updateBot } from '../services/boards';
+import MemoryPanel from './MemoryPanel';
+import CodeSaveDialog from './CodeSaveDialog';
+import ToolAdvisor from './ToolAdvisor';
+import { Hint } from './Learning';
+import { cloudBrowserUrl, connectedMcpUrl, startOAuthConnection, OAUTH_PRESETS, sandboxUrl, cloudRunUrl } from '../services/connectors';
+import { extractCodeFiles, toFile, CodeFile } from '../services/codeSave';
+import {
+    serverTasksAvailable, startServerTask, cancelServerTask, subscribeToTasks,
+    isActive, isLocalUrl, ServerTask, STALE_AFTER_MS
+} from '../services/serverTasks';
 import {
     isPipedreamConfigured, listConnectedAccounts, toolServerUrlFor, ConnectedAccount
 } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
+import { ForwardButton, ForwardedLabel } from './Forward';
+
+/** Tool server URLs typed one per line (or separated by spaces or commas). */
+const splitUrls = (text: string): string[] =>
+    [...new Set(text.split(/[\s,]+/).map(u => u.trim()).filter(Boolean))];
 
 interface BoardsProps {
     settings: AISettings;
@@ -80,6 +99,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         | { kind: 'createBot' }
         | { kind: 'cloneAgent' }
         | { kind: 'discussion' }
+        | { kind: 'editBot', botId: string, botName: string }
         | { kind: 'deleteBoard', boardId: string, boardName: string }
         | { kind: 'deleteChannel', channelId: string, channelName: string };
 
@@ -109,20 +129,58 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [toolPolicy, setToolPolicy] = useState<ToolPolicy>('ask');
     const stopDiscussionRef = useRef(false);
 
+    // Meetings: the orchestrator plans and checks the work; "round" is the
+    // older fixed circle of turns.
+    const [meetingMode, setMeetingMode] = useState<'orchestrator' | 'round'>('orchestrator');
+    const [maxSteps, setMaxSteps] = useState(4);
+    const [orchestration, setOrchestration] = useState<OrchestrationProgress | null>(null);
+
+    // Bot creation helpers: a persona written from a plain description, and a
+    // check that the tool servers actually answer before the bot is saved.
+    const [botDescription, setBotDescription] = useState('');
+    const [designing, setDesigning] = useState(false);
+    const [toolHint, setToolHint] = useState('');
+    const [toolProbe, setToolProbe] = useState<{ state: 'idle' | 'loading' | 'ok' | 'error', text: string }>({ state: 'idle', text: '' });
+    const [showMemory, setShowMemory] = useState(false);
+
+    // Server tasks: meetings the worker runs, which outlive this tab.
+    const [runOnServer, setRunOnServer] = useState(false);
+    const [codeToSave, setCodeToSave] = useState<CodeFile[] | null>(null);
+    const [advisorTask, setAdvisorTask] = useState<string | null>(null);
+
+    /** Keeps the files in the board's storage, as a message in this channel. */
+    const saveCodeToBoard = async (files: CodeFile[]) => {
+        if (!activeBoard || !activeChannelId || !currentUid) throw new Error('Откройте канал');
+        const attachments = await Promise.all(files.map(f => uploadAttachment({ boardId: activeBoard.id! }, toFile(f))));
+        await sendMessage({
+            channelId: activeChannelId,
+            boardId: activeBoard.id!,
+            authorId: currentUid,
+            authorName: settings.agentName || 'User',
+            authorType: settings.userType === 'agent' ? 'agent' : 'human',
+            content: `💾 ${files.map(f => f.path).join(', ')}`,
+            attachments
+        });
+    };
+    const [serverTasks, setServerTasks] = useState<ServerTask[]>([]);
+
     /**
      * Pending tool approval. The promise is resolved by the dialog's buttons,
      * which suspends the bot's turn until the operator decides.
      */
-    const [pendingTool, setPendingTool] = useState<
-        { bot: string, tool: string, args: Record<string, any>, resolve: (ok: boolean) => void } | null
-    >(null);
+    // A queue, not a single slot: steps of a meeting run in parallel, and two
+    // bots may ask at the same moment — one request must not replace the other.
+    const [toolQueue, setToolQueue] = useState<
+        Array<{ bot: string, tool: string, args: Record<string, any>, resolve: (ok: boolean) => void }>
+    >([]);
+    const pendingTool = toolQueue[0] || null;
 
     const requestToolApproval = (bot: string, tool: string, args: Record<string, any>) =>
-        new Promise<boolean>(resolve => setPendingTool({ bot, tool, args, resolve }));
+        new Promise<boolean>(resolve => setToolQueue(queue => [...queue, { bot, tool, args, resolve }]));
 
     const answerToolApproval = (allowed: boolean) => {
         pendingTool?.resolve(allowed);
-        setPendingTool(null);
+        setToolQueue(queue => queue.slice(1));
     };
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -136,7 +194,17 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setBotToolUrl('');
         setSelectedClone(null);
         setError(null);
+        setBotDescription('');
+        setToolHint('');
+        setToolProbe({ state: 'idle', text: '' });
         setModal(state);
+
+        if (state.kind === 'editBot') {
+            const bot = activeBoard?.members.find(m => m.id === state.botId);
+            setBotPrompt(bot?.systemPrompt || '');
+            setBotToolUrl(bot ? toolServersOf(bot).join('\n') : '');
+            setModalInput(state.botName);
+        }
 
         if (state.kind === 'discussion') {
             // Preselect the bots on the board, capped at what one run allows.
@@ -147,7 +215,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             );
         }
 
-        if (state.kind === 'createBot' && isPipedreamConfigured()) {
+        if ((state.kind === 'createBot' || state.kind === 'editBot') && isPipedreamConfigured()) {
             listConnectedAccounts()
                 .then(setPipedreamAccounts)
                 .catch(() => setPipedreamAccounts([]));
@@ -211,6 +279,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         if (!currentUid) return;
         return subscribeToReadState(currentUid, setReads);
     }, [currentUid]);
+
+    useEffect(() => {
+        if (!activeBoardId || !serverTasksAvailable()) { setServerTasks([]); return; }
+        return subscribeToTasks(activeBoardId, setServerTasks);
+    }, [activeBoardId]);
 
     useEffect(() => {
         if (!currentUid) return;
@@ -352,7 +425,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             name,
             systemPrompt,
             ownerId: currentUid,
-            toolServerUrl: botToolUrl.trim() || undefined
+            toolServerUrls: splitUrls(botToolUrl)
         });
     };
 
@@ -397,6 +470,40 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         });
 
         try {
+            if (meetingMode === 'orchestrator' && runOnServer) {
+                // Handed to the worker; progress arrives through the task
+                // document, the same way for every member of the board.
+                await startServerTask({
+                    boardId: activeBoard.id!,
+                    channelId: activeChannelId,
+                    channelName: activeChannel.name,
+                    task: task.trim(),
+                    maxSteps,
+                    botIds: bots.map(b => b.id),
+                    toolPolicy: toolPolicy === 'off' ? 'off' : 'auto',
+                    settings
+                });
+                return;
+            }
+
+            if (meetingMode === 'orchestrator') {
+                await runOrchestration({
+                    boardId: activeBoard.id!,
+                    channelId: activeChannelId,
+                    channelName: activeChannel.name,
+                    bots,
+                    task: task.trim(),
+                    maxSteps,
+                    settings,
+                    author: { id: currentUid, name: settings.agentName || 'User' },
+                    toolPolicy,
+                    approveTool: requestToolApproval,
+                    onProgress: setOrchestration,
+                    shouldStop: () => stopDiscussionRef.current
+                });
+                return;
+            }
+
             await runBotDiscussion({
                 boardId: activeBoard.id!,
                 channelId: activeChannelId,
@@ -414,7 +521,44 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             setError(e instanceof Error ? e.message : String(e));
         } finally {
             setDiscussionProgress(null);
+            setOrchestration(null);
         }
+    };
+
+    /** Writes a persona from the description in the create-bot dialog. */
+    const handleDesignBot = async () => {
+        if (!botDescription.trim() || designing) return;
+        setDesigning(true);
+        setError(null);
+        try {
+            const design = await designBot(botDescription, settings);
+            if (!modalInput.trim()) setModalInput(design.name);
+            setBotPrompt(design.systemPrompt);
+            setToolHint(design.toolHint && !/^none$/i.test(design.toolHint) ? design.toolHint : '');
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        } finally {
+            setDesigning(false);
+        }
+    };
+
+    /** Connects to each tool server and lists what it offers. */
+    const handleProbeTools = async () => {
+        const urls = splitUrls(botToolUrl);
+        if (urls.length === 0) return;
+        setToolProbe({ state: 'loading', text: '' });
+        const lines: string[] = [];
+        let failed = false;
+        for (const url of urls) {
+            try {
+                const tools = await probeToolServer(url, settings);
+                lines.push(`${new URL(url).host}: ${tools.length} — ${tools.slice(0, 8).map(t => t.name).join(', ')}${tools.length > 8 ? '…' : ''}`);
+            } catch (e) {
+                failed = true;
+                lines.push(`${url}: ${e instanceof Error ? e.message : String(e)}`);
+            }
+        }
+        setToolProbe({ state: failed ? 'error' : 'ok', text: lines.join('\n') });
     };
 
     /** Runs the action behind the currently open modal. */
@@ -436,6 +580,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             } else if (modal.kind === 'cloneAgent') {
                 if (!selectedClone) throw new Error(t.pickAgent || 'Выберите персону');
                 await handleCloneAgent(selectedClone, modalInput || selectedClone.agentName);
+            } else if (modal.kind === 'editBot') {
+                if (!activeBoardId) return;
+                await updateBot(activeBoardId, modal.botId, {
+                    systemPrompt: botPrompt.trim(),
+                    toolServerUrls: splitUrls(botToolUrl)
+                });
             } else if (modal.kind === 'discussion') {
                 // Closes the modal itself: the run continues after it is gone.
                 await handleStartDiscussion(botPrompt);
@@ -519,17 +669,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             setIsAgentThinking(true);
             try {
                 await triggerAgentReplies(
-                    {
-                        id: sent.id,
-                        channelId: activeChannelId,
-                        boardId: activeBoard.id!,
-                        authorId: currentUid,
-                        authorName: settings.agentName || 'User',
-                        authorType: 'human',
-                        content,
-                        mentions: parseMentions(content),
-                        timestamp: Date.now()
-                    },
+                    mentionedNames,
+                    currentUid,
                     activeChannelId,
                     activeBoard.id!,
                     activeChannel.name,
@@ -580,7 +721,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             <aside className={`${activeBoardId ? 'hidden md:flex' : 'flex'} w-full md:w-56 shrink-0 border-r border-slate-800 bg-slate-900/40 flex-col`}>
                 <div className="p-4 border-b border-slate-800 flex items-center justify-between">
                     <span className="font-mono text-[10px] uppercase tracking-widest text-cyan-500 font-bold">
-                        {t.boards || 'Доски'}
+                        {t.boards || 'Доски'} <Hint id="boards" />
                     </span>
                     <button
                         onClick={() => openModal({ kind: 'createBoard' })}
@@ -744,15 +885,29 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     </button>
                                 )}
 
-                                {activeBoard.members.some(isBot) && activeChannelId && (
+                                {activeChannelId && (
+                                    <button
+                                        onClick={() => setShowMemory(v => !v)}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showMemory
+                                            ? 'bg-amber-950/30 border-amber-500/30 text-amber-300'
+                                            : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'}`}
+                                        title={t.memoryHint || 'Что боты помнят о канале и доске'}
+                                    >
+                                        {t.memory || 'Память'}
+                                    </button>
+                                )}
+                                {activeChannelId && <Hint id="memory" />}
+
+                                {activeChannelId && (
                                     <button
                                         onClick={() => openModal({ kind: 'discussion' })}
-                                        disabled={Boolean(discussionProgress)}
+                                        disabled={Boolean(discussionProgress || orchestration)}
                                         className="px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border border-indigo-500/30 bg-indigo-950/30 text-indigo-300 hover:bg-indigo-900/40 transition-all disabled:opacity-40"
                                     >
                                         {t.discussion || 'Совещание'}
                                     </button>
                                 )}
+                                {activeChannelId && <Hint id="meeting" />}
 
                                 <button
                                     onClick={() => setShowMembers(!showMembers)}
@@ -773,7 +928,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             </div>
                         )}
 
-                        <div className="flex-1 flex min-h-0">
+                        {/* relative: on a phone the members panel overlays this
+                            area. Positioned against the whole screen instead, it
+                            covered the channel header — and with it the only
+                            button that closes the panel. */}
+                        <div className="flex-1 flex min-h-0 relative">
                             <div className="flex-1 overflow-y-auto p-5 space-y-4 min-w-0">
                                 {messages.length === 0 ? (
                                     <p className="text-center text-slate-600 text-xs py-12 leading-relaxed">
@@ -786,7 +945,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                             ? 'bg-indigo-950/60 text-indigo-300 border border-indigo-500/30'
                                             : 'bg-slate-800 text-slate-300 border border-slate-700'
                                             }`}>
-                                            {msg.authorName.charAt(0).toUpperCase()}
+                                            {(Array.from(String(msg.authorName))[0] || '?').toUpperCase()}
                                         </div>
 
                                         <div className="min-w-0 flex-1">
@@ -805,6 +964,31 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 <span className="text-[10px] text-slate-600 font-mono">
                                                     {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                 </span>
+                                                {msg.content.includes('```') && (
+                                                    <button
+                                                        onClick={() => setCodeToSave(extractCodeFiles(msg.content))}
+                                                        className="text-[11px] text-slate-500 hover:text-cyan-300 md:opacity-0 md:group-hover:opacity-100"
+                                                        title={t.saveCode || 'Сохранить код'}
+                                                    >
+                                                        💾
+                                                    </button>
+                                                )}
+                                                <ForwardButton
+                                                    title={t.forward || 'Переслать'}
+                                                    className="md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+                                                    payload={() => ({
+                                                        text: msg.content,
+                                                        attachments: msg.attachments,
+                                                        // A copy of a copy still credits the original author.
+                                                        origin: msg.forwardedFrom || {
+                                                            kind: 'board',
+                                                            authorName: msg.authorName,
+                                                            authorId: msg.authorId,
+                                                            place: `#${activeChannel?.name || ''} · ${activeBoard.name}`,
+                                                            timestamp: msg.timestamp
+                                                        }
+                                                    })}
+                                                />
                                                 {msg.authorId === currentUid && (
                                                     <button
                                                         onClick={async () => {
@@ -819,7 +1003,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                     </button>
                                                 )}
                                             </div>
-                                            <p className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
+                                            {msg.forwardedFrom && (
+                                                <div className="mt-1 -mb-0.5">
+                                                    <ForwardedLabel origin={msg.forwardedFrom} language={settings.language} />
+                                                </div>
+                                            )}
+                                            <p className={`text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5 ${msg.forwardedFrom ? 'border-l-2 border-cyan-500/30 pl-2' : ''}`}>
                                                 {msg.content}
                                             </p>
 
@@ -854,6 +1043,73 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     </div>
                                 ))}
 
+                                {serverTasks
+                                    .filter(task => task.channelId === activeChannelId
+                                        && (isActive(task) || Date.now() - (task.updatedAt || 0) < 10 * 60_000))
+                                    .map(task => {
+                                        const stale = isActive(task) && Date.now() - (task.updatedAt || 0) > STALE_AFTER_MS;
+                                        return (
+                                            <div key={task.id} className="flex items-center justify-between pl-11 pr-2 py-2 gap-3">
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-center space-x-2 text-sky-300 text-xs font-mono">
+                                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isActive(task) && !stale ? 'bg-sky-400 animate-pulse' : task.status === 'failed' ? 'bg-rose-500' : 'bg-slate-500'}`}></span>
+                                                        <span className="truncate" title={task.task}>
+                                                            🛰 {t.onServer || 'сервер'} ·{' '}
+                                                            {stale ? (t.taskStale || 'нет вестей больше 20 минут')
+                                                                : task.status === 'done' ? `${t.taskDone || 'готово'} · ${task.progress}%`
+                                                                    : task.status === 'stopped' ? (t.taskStopped || 'остановлено')
+                                                                        : task.status === 'failed' ? `${t.taskFailed || 'ошибка'}: ${task.error || ''}`
+                                                                            : task.phase === 'waiting' ? `${t.taskWaiting || 'пауза до'} ${new Date(task.waitUntil || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                                                                            : task.phase === 'planning' ? (t.orchPlanning || 'план…')
+                                                                                : task.phase === 'checking' ? (t.orchChecking || 'проверка…')
+                                                                                    : task.phase === 'finishing' ? (t.orchFinishing || 'итог…')
+                                                                                        : `${t.step || 'шаг'} ${task.step}/${task.totalSteps} · ${task.bot || ''}`}
+                                                            {task.cancelRequested && isActive(task) ? ` · ${t.stopping || 'останавливается'}` : ''}
+                                                        </span>
+                                                    </div>
+                                                    {isActive(task) && (
+                                                        <div className="h-1 mt-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-sky-500 transition-all duration-500" style={{ width: `${task.progress || 0}%` }} />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {isActive(task) && !task.cancelRequested && (
+                                                    <button
+                                                        onClick={() => cancelServerTask(activeBoard.id!, task.id).catch(e => setError(e instanceof Error ? e.message : String(e)))}
+                                                        className="shrink-0 px-2.5 py-1 rounded-md border border-rose-500/30 bg-rose-950/20 text-rose-300 text-[10px] font-mono uppercase tracking-wider hover:bg-rose-900/30 transition-colors"
+                                                    >
+                                                        {t.stop || 'Стоп'}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+
+                                {orchestration && (
+                                    <div className="flex items-center justify-between pl-11 pr-2 py-2 gap-3">
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-center space-x-2 text-indigo-300 text-xs font-mono">
+                                                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse shrink-0"></span>
+                                                <span className="truncate">
+                                                    {orchestration.phase === 'planning' && (t.orchPlanning || 'оркестратор составляет план…')}
+                                                    {orchestration.phase === 'working' && `${t.step || 'шаг'} ${orchestration.step}/${orchestration.totalSteps} · ${orchestration.bot}`}
+                                                    {orchestration.phase === 'checking' && (t.orchChecking || 'проверка результата…')}
+                                                    {orchestration.phase === 'finishing' && (t.orchFinishing || 'сводка итога…')}
+                                                </span>
+                                            </div>
+                                            <div className="h-1 mt-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                                <div className="h-full bg-indigo-500 transition-all duration-500" style={{ width: `${orchestration.progress}%` }} />
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => { stopDiscussionRef.current = true; }}
+                                            className="shrink-0 px-2.5 py-1 rounded-md border border-rose-500/30 bg-rose-950/20 text-rose-300 text-[10px] font-mono uppercase tracking-wider hover:bg-rose-900/30 transition-colors"
+                                        >
+                                            {t.stop || 'Стоп'}
+                                        </button>
+                                    </div>
+                                )}
+
                                 {isAgentThinking && !discussionProgress && (
                                     <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono pl-11">
                                         <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
@@ -881,11 +1137,29 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 <div ref={messagesEndRef} />
                             </div>
 
+                            {showMemory && activeChannelId && (
+                                <MemoryPanel
+                                    boardId={activeBoard.id!}
+                                    channelId={activeChannelId}
+                                    isOwner={activeBoard.ownerId === currentUid}
+                                    language={settings.language}
+                                    settings={settings}
+                                    onClose={() => setShowMemory(false)}
+                                />
+                            )}
+
                             {/* Members panel */}
                             {showMembers && (
                                 <aside className="absolute md:relative inset-y-0 right-0 z-20 w-64 shrink-0 border-l border-slate-800 bg-slate-900 md:bg-slate-900/30 flex flex-col">
-                                    <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-slate-400">
+                                    <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-slate-400 flex items-center justify-between">
                                         {t.members || 'Участники'}
+                                        <button
+                                            onClick={() => setShowMembers(false)}
+                                            className="md:hidden text-slate-500 hover:text-white"
+                                            title={t.close || 'Закрыть'}
+                                        >
+                                            ✕
+                                        </button>
                                     </div>
 
                                     <div className="flex-1 overflow-y-auto p-2 space-y-1">
@@ -910,16 +1184,25 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                             ↳ {member.sourceAgentName}
                                                         </span>
                                                     )}
-                                                    {member.toolServerUrl && (
+                                                    {toolServersOf(member).length > 0 && (
                                                         <span
                                                             className="text-[9px] font-mono text-emerald-500/70 block truncate"
-                                                            title={member.toolServerUrl}
+                                                            title={toolServersOf(member).join('\n')}
                                                         >
-                                                            ⚒ {new URL(member.toolServerUrl).hostname}
+                                                            ⚒ {toolServersOf(member).map(u => { try { return new URL(u).hostname; } catch { return u; } }).join(', ')}
                                                         </span>
                                                     )}
                                                 </div>
 
+                                                {activeBoard.ownerId === currentUid && isBot(member) && (
+                                                    <button
+                                                        onClick={() => openModal({ kind: 'editBot', botId: member.id, botName: member.name })}
+                                                        className="text-slate-600 hover:text-indigo-300 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0 mr-2 text-xs"
+                                                        title={t.editBot || 'Изменить бота'}
+                                                    >
+                                                        ✎
+                                                    </button>
+                                                )}
                                                 {activeBoard.ownerId === currentUid && member.role !== 'owner' && (
                                                     <button
                                                         onClick={() => removeMember(activeBoard.id!, member.id).catch(e => setError(String(e)))}
@@ -1035,6 +1318,27 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 )}
             </section>
 
+            {advisorTask && activeBoard && currentUid && (
+                <ToolAdvisor
+                    task={advisorTask}
+                    bots={activeBoard.members.filter(isBot)}
+                    boardId={activeBoard.id!}
+                    ownerId={currentUid}
+                    settings={settings}
+                    onCodeFiles={files => setCodeToSave(files)}
+                    onClose={() => setAdvisorTask(null)}
+                />
+            )}
+
+            {codeToSave && codeToSave.length > 0 && (
+                <CodeSaveDialog
+                    files={codeToSave}
+                    settings={settings}
+                    onSaveToBoard={attachmentsAvailable() ? saveCodeToBoard : undefined}
+                    onClose={() => setCodeToSave(null)}
+                />
+            )}
+
             {lightbox && (
                 <ImageLightbox
                     url={lightbox.url}
@@ -1107,15 +1411,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
                     <form
                         onSubmit={(e) => { e.preventDefault(); handleModalSubmit(); }}
-                        className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-w-sm w-full p-6 animate-in fade-in zoom-in duration-200"
+                        className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-w-sm w-full p-6 max-h-[92vh] overflow-y-auto animate-in fade-in zoom-in duration-200"
                     >
                         <h3 className="text-lg font-bold font-display text-white mb-1">
                             {modal.kind === 'createBoard' && (t.createBoard || 'Создать доску')}
                             {modal.kind === 'createChannel' && (t.createChannel || 'Создать канал')}
                             {modal.kind === 'addHuman' && (t.addHuman || 'Добавить человека')}
-                            {modal.kind === 'createBot' && (t.createBot || 'Создать бота')}
+                            {modal.kind === 'createBot' && <>{t.createBot || 'Создать бота'} <Hint id="bots" always /></>}
                             {modal.kind === 'cloneAgent' && (t.cloneAgent || 'Бот из персоны')}
-                            {modal.kind === 'discussion' && (t.discussion || 'Совещание ботов')}
+                            {modal.kind === 'discussion' && <>{t.discussion || 'Совещание ботов'} <Hint id="meeting" always /></>}
+                            {modal.kind === 'editBot' && `${t.editBot || 'Изменить бота'} · ${modal.botName}`}
                             {modal.kind === 'deleteBoard' && (t.deleteBoard || 'Удалить доску')}
                             {modal.kind === 'deleteChannel' && (t.deleteChannel || 'Удалить канал')}
                         </h3>
@@ -1126,7 +1431,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {modal.kind === 'addHuman' && (t.memberPickHint || 'Найдите человека в Потоке и добавьте в доску')}
                             {modal.kind === 'createBot' && (t.botHint || 'Бот живёт только в этой доске и отвечает на @имя. Токены тратит тот, кто его упомянул.')}
                             {modal.kind === 'cloneAgent' && (t.cloneHint || 'Копия чужой персоны в вашей доске. Автору это ничего не стоит — платит тот, кто упомянул бота.')}
-                            {modal.kind === 'discussion' && (t.discussionHint || 'Боты выскажутся по очереди, по кругу. Каждый ход — один запрос к модели с вашего ключа.')}
+                            {modal.kind === 'discussion' && (meetingMode === 'orchestrator'
+                                ? (t.orchestratorHint || 'Оркестратор составит план, раздаст шаги подходящим ботам, после каждого шага проверит прогресс и закончит, когда задача выполнена. В конце — итог и степень выполнения.')
+                                : (t.discussionHint || 'Боты выскажутся по очереди, по кругу. Каждый ход — один запрос к модели с вашего ключа.'))}
+                            {modal.kind === 'editBot' && (t.editBotHint || 'Промпт и инструменты можно менять в любой момент — бот подхватит их со следующего ответа.')}
                             {modal.kind === 'deleteBoard' && `«${modal.boardName}» — ${t.boardDeleteConfirm || 'доска, каналы и все сообщения будут удалены безвозвратно.'}`}
                             {modal.kind === 'deleteChannel' && `#${modal.channelName} — ${t.channelDeleteConfirm || 'все сообщения и вложения канала будут удалены безвозвратно, у всех участников доски.'}`}
                         </p>
@@ -1161,6 +1469,41 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
                         {modal.kind === 'discussion' && (
                             <>
+                                <div className="flex space-x-1 mb-3">
+                                    {([
+                                        ['orchestrator', t.modeOrchestrator || 'Оркестратор'],
+                                        ['round', t.modeRound || 'По кругу']
+                                    ] as const).map(([value, label]) => (
+                                        <button
+                                            key={value}
+                                            type="button"
+                                            onClick={() => setMeetingMode(value)}
+                                            className={`flex-1 py-2 rounded-lg border text-[10px] font-mono uppercase tracking-wider transition-all ${meetingMode === value
+                                                ? 'bg-indigo-950/50 border-indigo-500/40 text-indigo-200'
+                                                : 'border-slate-700 text-slate-500 hover:border-slate-500'}`}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                                {/* A new board has no bots yet: say what to do instead of
+                                    showing an empty list and a disabled button. */}
+                                {!activeBoard?.members.some(isBot) && (
+                                    <div className="mb-4 p-3 rounded-lg border border-amber-500/30 bg-amber-950/10 space-y-2">
+                                        <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                                            {t.noBotsForMeeting || 'В доске пока нет ботов. Создайте их — или опишите задачу ниже и нажмите «Подобрать инструменты»: оркестратор предложит нужных ботов и создаст их по одному нажатию.'}
+                                        </p>
+                                        {activeBoard?.ownerId === currentUid && (
+                                            <button
+                                                type="button"
+                                                onClick={() => openModal({ kind: 'createBot' })}
+                                                className="w-full py-1.5 rounded-lg border border-indigo-500/30 text-indigo-200 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-950/40"
+                                            >
+                                                + {t.createBot || 'Создать бота'}
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
                                 <div className="mb-4 space-y-1 max-h-36 overflow-y-auto border border-slate-800 rounded-lg p-2">
                                     {activeBoard?.members.filter(isBot).map(bot => {
                                         const picked = discussionBots.includes(bot.id);
@@ -1185,6 +1528,47 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     })}
                                 </div>
 
+                                {meetingMode === 'orchestrator' ? (
+                                <div className="mb-4">
+                                    <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
+                                        {t.maxSteps || 'Шагов не больше'}: {maxSteps}
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min={1}
+                                        max={MAX_ORCHESTRATED_STEPS}
+                                        value={maxSteps}
+                                        onChange={(e) => setMaxSteps(Number(e.target.value))}
+                                        className="w-full accent-indigo-500"
+                                    />
+                                    <p className="text-[10px] text-slate-600 mt-1 font-mono leading-relaxed">
+                                        {t.orchCost || 'до'} {estimateOrchestrationRequests(maxSteps, toolPolicy !== 'off' ? MAX_REQUESTS_PER_TURN : 1)} {t.requestsCeiling || 'запросов в худшем случае; обычно меньше — оркестратор заканчивает, когда цель достигнута'}
+                                    </p>
+                                    {serverTasksAvailable() && (
+                                        <label className="mt-3 flex items-start gap-2 p-2 rounded-lg border border-sky-500/20 bg-sky-950/10 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={runOnServer}
+                                                onChange={(e) => {
+                                                    setRunOnServer(e.target.checked);
+                                                    // Nobody is there to approve calls on the server.
+                                                    if (e.target.checked) setToolPolicy(p => p === 'ask' ? 'auto' : p);
+                                                }}
+                                                className="mt-0.5 accent-sky-500"
+                                            />
+                                            <span className="text-[10px] leading-relaxed text-slate-400">
+                                                <span className="text-sky-300 font-bold block">{t.runOnServer || 'На сервере'} <Hint id="server-tasks" always /></span>
+                                                {t.runOnServerHint || 'Задача продолжится, даже если закрыть вкладку. Сервер получит ваш ключ API и право действовать от вашего имени на время задачи — в зашифрованном виде; подтверждать вызовы инструментов там некому.'}
+                                            </span>
+                                        </label>
+                                    )}
+                                    {runOnServer && activeBoard?.members.some(m => discussionBots.includes(m.id) && toolServersOf(m).some(isLocalUrl)) && (
+                                        <p className="text-[10px] text-amber-400/80 mt-2 leading-relaxed">
+                                            {t.localToolsWarning || 'Инструменты на 127.0.0.1 (мост, Docker) с сервера недоступны — боты их не увидят.'}
+                                        </p>
+                                    )}
+                                </div>
+                                ) : (
                                 <div className="mb-4">
                                     <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
                                         {t.rounds || 'Кругов'}: {discussionRounds}
@@ -1206,18 +1590,21 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         )}
                                     </p>
                                 </div>
+                                )}
 
-                                {activeBoard?.members.some(m => discussionBots.includes(m.id) && m.toolServerUrl) && (
+                                {activeBoard?.members.some(m => discussionBots.includes(m.id) && toolServersOf(m).length > 0) && (
                                     <div className="mb-4">
                                         <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
-                                            {t.toolAccess || 'Доступ к инструментам'}
+                                            {t.toolAccess || 'Доступ к инструментам'} <Hint id="tool-policy" always />
                                         </label>
                                         <div className="flex space-x-1">
                                             {([
                                                 ['off', t.toolsOff || 'Выключить'],
                                                 ['ask', t.toolsAsk || 'С подтверждением'],
                                                 ['auto', t.toolsAuto || 'Полный']
-                                            ] as [ToolPolicy, string][]).map(([value, label]) => (
+                                            ] as [ToolPolicy, string][])
+                                                .filter(([value]) => !(runOnServer && meetingMode === 'orchestrator' && value === 'ask'))
+                                                .map(([value, label]) => (
                                                 <button
                                                     key={value}
                                                     type="button"
@@ -1246,8 +1633,17 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     value={botPrompt}
                                     onChange={(e) => setBotPrompt(e.target.value)}
                                     placeholder={t.taskPlaceholder || 'Задача: собрать 3 варианта слогана для баннера и выбрать лучший, с обоснованием.'}
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-4 font-mono"
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-2 font-mono"
                                 />
+                                <button
+                                    type="button"
+                                    disabled={!botPrompt.trim()}
+                                    onClick={() => setAdvisorTask(botPrompt.trim())}
+                                    className="w-full mb-4 py-2 rounded-lg border border-dashed border-cyan-500/40 text-cyan-300 text-[10px] font-mono uppercase tracking-wider hover:bg-cyan-950/30 disabled:opacity-40"
+                                    title={t.toolAdvisorHint || 'Оркестратор проверит, каких инструментов не хватает, и предложит подключить их, создать бота или свой MCP'}
+                                >
+                                    🧩 {t.toolAdvisor || 'Подобрать инструменты'}
+                                </button>
                             </>
                         )}
 
@@ -1305,7 +1701,32 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             </>
                         )}
 
-                        {!isDestructiveModal(modal) && modal.kind !== 'discussion' && modal.kind !== 'addHuman' && (
+                        {modal.kind === 'createBot' && (
+                            <div className="mb-4 p-3 rounded-lg border border-indigo-500/20 bg-indigo-950/10">
+                                <label className="block text-[9px] font-mono uppercase tracking-widest text-indigo-300 mb-2">
+                                    ✨ {t.designFromDescription || 'Создать по описанию'}
+                                </label>
+                                <textarea
+                                    value={botDescription}
+                                    onChange={(e) => setBotDescription(e.target.value)}
+                                    placeholder={t.botDescriptionPlaceholder || 'Например: бот, который ищет свежие новости по теме и делает короткую сводку с источниками'}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 transition-colors text-xs h-16 resize-none mb-2"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={handleDesignBot}
+                                    disabled={!botDescription.trim() || designing}
+                                    className="w-full py-1.5 rounded-lg bg-indigo-700/60 hover:bg-indigo-600 text-white text-[10px] font-mono uppercase tracking-wider disabled:opacity-40 transition-colors"
+                                >
+                                    {designing ? (t.designing || 'пишу промпт…') : (t.designBot || 'Сгенерировать имя и промпт')}
+                                </button>
+                                {toolHint && (
+                                    <p className="text-[10px] text-emerald-400/80 mt-2 leading-relaxed">⚒ {toolHint}</p>
+                                )}
+                            </div>
+                        )}
+
+                        {!isDestructiveModal(modal) && modal.kind !== 'discussion' && modal.kind !== 'addHuman' && modal.kind !== 'editBot' && (
                             <input
                                 ref={modalInputRef}
                                 autoFocus={modal.kind !== 'cloneAgent'}
@@ -1323,7 +1744,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             />
                         )}
 
-                        {modal.kind === 'createBot' && (
+                        {(modal.kind === 'createBot' || modal.kind === 'editBot') && (
                             <>
                                 <textarea
                                     value={botPrompt}
@@ -1333,20 +1754,62 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 />
 
                                 <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
-                                    {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'}
+                                    {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'} <Hint id="oauth-connectors" always /> <Hint id="mcp" />
                                 </label>
+
+                                {/* Tools every user can have without installing anything. */}
+                                {isPipedreamConfigured() && (
+                                    <div className="flex flex-wrap items-center gap-1 mb-2">
+                                        {[
+                                            { name: '🌐 Облачный браузер', url: cloudBrowserUrl(), oauth: null as string | null },
+                                            { name: '🧪 E2B', url: sandboxUrl('e2b'), oauth: null as string | null },
+                                            { name: '🧪 Daytona', url: sandboxUrl('daytona'), oauth: null as string | null },
+                                            { name: '☁ Cloud Run', url: cloudRunUrl(), oauth: null as string | null },
+                                            ...OAUTH_PRESETS.map(p => ({ name: p.name, url: connectedMcpUrl(p.server), oauth: p.server }))
+                                        ].map(preset => {
+                                            const picked = splitUrls(botToolUrl).includes(preset.url);
+                                            return (
+                                                <span key={preset.url} className="inline-flex">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setBotToolUrl(prev => (picked
+                                                            ? splitUrls(prev).filter(u => u !== preset.url)
+                                                            : [...splitUrls(prev), preset.url]).join('\n'))}
+                                                        className={`text-[10px] font-mono px-2 py-1 rounded-l border transition-all ${picked
+                                                            ? 'bg-sky-950/50 border-sky-500/40 text-sky-200'
+                                                            : 'border-slate-700 text-slate-400 hover:border-slate-500'}`}
+                                                    >
+                                                        {picked ? '✓ ' : ''}{preset.name}
+                                                    </button>
+                                                    {preset.oauth && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => startOAuthConnection(preset.oauth!).catch(e => setError(e instanceof Error ? e.message : String(e)))}
+                                                            className="text-[10px] font-mono px-1.5 py-1 rounded-r border border-l-0 border-slate-700 text-amber-300/80 hover:text-amber-200"
+                                                            title={t.signInOnce || 'Войти один раз — дальше бот работает от вашего аккаунта'}
+                                                        >
+                                                            🔑
+                                                        </button>
+                                                    )}
+                                                </span>
+                                            );
+                                        })}
+                                    </div>
+                                )}
 
                                 {isPipedreamConfigured() && (
                                     <div className="flex flex-wrap items-center gap-1 mb-2">
                                         {pipedreamAccounts.filter(a => a.appSlug).map(account => {
                                             const url = toolServerUrlFor(account.appSlug!);
-                                            const picked = botToolUrl === url;
+                                            const picked = splitUrls(botToolUrl).includes(url);
 
                                             return (
                                                 <button
                                                     key={account.id}
                                                     type="button"
-                                                    onClick={() => setBotToolUrl(picked ? '' : url)}
+                                                    onClick={() => setBotToolUrl(prev => (picked
+                                                        ? splitUrls(prev).filter(u => u !== url)
+                                                        : [...splitUrls(prev), url]).join('\n'))}
                                                     className={`text-[10px] font-mono px-2 py-1 rounded border transition-all ${picked
                                                         ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-200'
                                                         : 'border-slate-700 text-slate-400 hover:border-slate-500'
@@ -1366,15 +1829,31 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         </button>
                                     </div>
                                 )}
-                                <input
-                                    type="text"
+                                <textarea
                                     value={botToolUrl}
-                                    onChange={(e) => setBotToolUrl(e.target.value)}
-                                    placeholder="https://mcp.deepwiki.com/mcp"
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs mb-2 font-mono"
+                                    onChange={(e) => { setBotToolUrl(e.target.value); setToolProbe({ state: 'idle', text: '' }); }}
+                                    placeholder={'https://mcp.deepwiki.com/mcp\nhttp://127.0.0.1:8931/mcp'}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs mb-2 font-mono h-16 resize-none"
                                 />
+                                {splitUrls(botToolUrl).length > 0 && (
+                                    <div className="mb-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleProbeTools}
+                                            disabled={toolProbe.state === 'loading'}
+                                            className="text-[10px] font-mono px-2 py-1 rounded border border-emerald-500/30 text-emerald-300 hover:bg-emerald-950/30 disabled:opacity-40"
+                                        >
+                                            {toolProbe.state === 'loading' ? (t.checking || 'проверяю…') : (t.checkTools || 'Проверить инструменты')}
+                                        </button>
+                                        {toolProbe.text && (
+                                            <pre className={`mt-2 text-[10px] whitespace-pre-wrap break-all leading-relaxed ${toolProbe.state === 'ok' ? 'text-emerald-400/90' : 'text-rose-300'}`}>
+                                                {toolProbe.text}
+                                            </pre>
+                                        )}
+                                    </div>
+                                )}
                                 <p className="text-[10px] text-slate-600 mb-4 leading-relaxed">
-                                    {t.toolServerHint || 'Подойдёт только сервер, разрешающий запросы из браузера (CORS). Проверено: mcp.deepwiki.com, mcp.linear.app, api.githubcopilot.com/mcp. Zapier и Composio так не умеют — им нужен сервер-посредник.'}
+                                    {t.toolServerHint || 'По одному адресу на строку. Подойдёт сервер, разрешающий запросы из браузера (CORS): mcp.deepwiki.com, mcp.linear.app, api.githubcopilot.com/mcp. Локальные серверы и Docker-контейнеры (браузер, файлы, код) подключаются через мост: npm run bridge — см. docs/agents.md.'}
                                 </p>
                             </>
                         )}
@@ -1424,7 +1903,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         ? (t.delete || 'Удалить')
                                         : modal.kind === 'discussion'
                                             ? (t.start || 'Запустить')
-                                            : (t.create || 'Создать')}
+                                            : modal.kind === 'editBot'
+                                                ? (t.save || 'Сохранить')
+                                                : (t.create || 'Создать')}
                             </button>
                             )}
                         </div>

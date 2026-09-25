@@ -1,7 +1,7 @@
 
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs, increment, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
-import { getAuth, GoogleAuthProvider, TwitterAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { getFirestore, connectFirestoreEmulator, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs, increment, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
+import { getAuth, connectAuthEmulator, GoogleAuthProvider, TwitterAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { getAnalytics } from "firebase/analytics";
 
 // TODO: Replace with your project's config object
@@ -16,11 +16,32 @@ const firebaseConfig = {
   measurementId: "G-ML9RYX1NPG"
 };
 
+/**
+ * Local test mode (`vite --mode emulator`, see .env.emulator).
+ *
+ * Everything goes to the Firebase emulators under a "demo-" project, which the
+ * emulators treat as offline-only: no request can reach production, so test
+ * accounts and test data never mix with real ones. The security rules are the
+ * real ones from firestore.rules.
+ */
+export const usingEmulators = import.meta.env.VITE_FIREBASE_EMULATORS === '1';
+
+const EMULATOR_PROJECT = 'demo-potok';
+
 // Initialize Firebase
-const app = initializeApp(firebaseConfig);
+const app = initializeApp(usingEmulators
+  ? { apiKey: 'demo-key', authDomain: `${EMULATOR_PROJECT}.firebaseapp.com`, projectId: EMULATOR_PROJECT }
+  : firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
-export const analytics = getAnalytics(app);
+
+if (usingEmulators) {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+}
+
+// Analytics has no emulator and would report test sessions as real traffic.
+export const analytics = usingEmulators ? null : getAnalytics(app);
 export const googleProvider = new GoogleAuthProvider();
 
 // Ask which account to use rather than silently reusing the one the browser
@@ -80,6 +101,20 @@ export const completeSocialSignIn = async () => {
         return null;
     }
 };
+
+/**
+ * Sends Firebase's password-reset email. Firebase answers the same whether or
+ * not the address has an account (email enumeration protection), so the UI
+ * says "if an account exists" rather than "sent".
+ */
+export const resetPassword = async (email: string): Promise<void> => {
+    auth.languageCode = 'ru';
+    await sendPasswordResetEmail(auth, email.trim());
+};
+
+/** Whether the signed-in account has a password at all (not Google or X only). */
+export const hasPasswordSignIn = (): boolean =>
+    Boolean(auth.currentUser?.providerData.some(p => p.providerId === 'password'));
 
 export const logout = async () => {
     await signOut(auth);

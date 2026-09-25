@@ -1,12 +1,17 @@
 name = "potok-pipedream"
-main = "src/index.ts"
+main = "src/main.ts"
 compatibility_date = "2025-09-01"
+# @cloudflare/puppeteer (the cloud browser) needs Node built-ins such as node:buffer.
+compatibility_flags = ["nodejs_compat"]
 
 # Public configuration. The only secret is PIPEDREAM_CLIENT_SECRET, set with
 #   wrangler secret put PIPEDREAM_CLIENT_SECRET
 # Neither the client id nor the project id is sensitive.
 [vars]
 FIREBASE_PROJECT_ID = "neon-extended"
+# The public Firebase web key (the same one shipped in the app): server tasks
+# use it to renew the starting user's sign-in. Not a secret.
+FIREBASE_WEB_API_KEY = "AIzaSyA7v4-9qGp-3rLSaATnLBqi46m_Wvliado"
 
 PIPEDREAM_PROJECT_ID = "proj_73sJdl7"
 PIPEDREAM_CLIENT_ID = "AlIRbtjBsD6mmQuM4_vrZ7HVl67Z9Bpg63Bij8pawI8"
@@ -22,3 +27,20 @@ ALLOWED_ORIGINS = "https://localhost:3000,http://localhost:3000,https://localhos
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "potok-files"
+
+# Server tasks: orchestrated meetings that run here and outlive the browser tab.
+# See src/agentTasks.ts. Task secrets are sealed with a key derived from
+# TASK_SEALING_SECRET, or PIPEDREAM_CLIENT_SECRET when that is not set.
+[[workflows]]
+name = "potok-agent-tasks"
+binding = "AGENT_TASKS"
+class_name = "AgentTaskWorkflow"
+
+# Cloud browser for bots (src/cloudBrowser.ts): Cloudflare Browser Rendering.
+[browser]
+binding = "BROWSER"
+
+# Per-user OAuth tokens of connected MCP servers (src/oauthConnect.ts), sealed.
+[[kv_namespaces]]
+binding = "CONNECTOR_TOKENS"
+id = "a6df5e01811e4cc692847cdca785d594"

@@ -83,7 +83,7 @@ const Profile: React.FC<ProfileProps> = ({
     const confirmGeneratePost = async () => {
         if (!postPrompt.trim()) return;
 
-        if (!settings.openRouterKey && !settings.geminiKey) {
+        if (!settings.openRouterKey || settings.openRouterKey === 'google-auth') {
             alert('Please add your API key in Settings first');
             return;
         }

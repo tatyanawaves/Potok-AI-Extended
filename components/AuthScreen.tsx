@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { AISettings, Language } from '../types';
 import { translations } from '../translations';
-import { signInWithSocial, completeSocialSignIn, loginWithEmail, registerWithEmail, updateUserProfile, getUserProfile, SocialProvider } from '../services/firebase';
+import { signInWithSocial, completeSocialSignIn, loginWithEmail, registerWithEmail, updateUserProfile, getUserProfile, SocialProvider, usingEmulators, resetPassword } from '../services/firebase';
+import { Hint } from './Learning';
 import { secureStorage } from '../services/encryption';
+import { DEFAULT_MODEL } from '../services/llm';
 
 interface AuthScreenProps {
   onAuthorize: (settings: AISettings) => void;
@@ -126,8 +128,13 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
           agentName: profile?.agentName || settings.agentName || user.email?.split('@')[0] || 'Human',
           agentRole: profile?.agentRole || settings.agentRole || 'Explorer',
           agentPrompt: profile?.agentPrompt || settings.agentPrompt,
-          openRouterModel: profile?.modelName || settings.openRouterModel,
-          apiBaseUrl: profile?.apiBaseUrl || settings.apiBaseUrl,
+          // What this browser already has wins: the profile copy used to be
+          // written only at registration, so an old, since-removed model
+          // came back on every sign-in.
+          openRouterModel: (settings.openRouterModel && settings.openRouterModel !== DEFAULT_MODEL)
+            ? settings.openRouterModel
+            : (profile?.modelName || settings.openRouterModel),
+          apiBaseUrl: settings.apiBaseUrl || profile?.apiBaseUrl,
           openRouterKey: settings.openRouterKey || (settings.userType === 'human' ? 'google-auth' : '')
         };
 
@@ -151,6 +158,92 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
       setIsLoading(false);
     }
   };
+
+  /**
+   * One-click sign-in for the local test build.
+   *
+   * Only rendered when the app talks to the Firebase emulators, where these
+   * accounts exist in a throwaway "demo-" project and nowhere else. Two of
+   * them, so messages and forwarding between people can be tried. The model
+   * is the mock from scripts/mock-llm.mjs, so bots answer without a real key.
+   */
+  const handleTestLogin = async (slot: 'A' | 'B') => {
+    setError(null);
+    setIsLoading(true);
+
+    const email = `tester-${slot.toLowerCase()}@potok.test`;
+    const testPassword = 'potok-emulator-only';
+
+    try {
+      let user;
+      try {
+        user = await loginWithEmail(email, testPassword);
+      } catch (err: any) {
+        if (!/user-not-found|invalid-credential/.test(err?.code || '')) throw err;
+        user = await registerWithEmail(email, testPassword);
+      }
+
+      const testSettings: AISettings = {
+        ...settings,
+        userType: 'agent',
+        agentName: `Tester_${slot}`,
+        agentRole: 'QA',
+        agentPrompt: 'Ты тестовый агент. Отвечай кратко.',
+        aiProvider: 'openrouter',
+        openRouterKey: 'mock-key',
+        openRouterModel: 'mock/potok',
+        apiBaseUrl: 'http://127.0.0.1:8787/v1',
+        embeddingModel: 'mock-embed',
+        allowBoardUse: true,
+        showOnlyFollowing: false
+      };
+
+      await updateUserProfile(user.uid, {
+        email,
+        role: 'agent',
+        agentName: testSettings.agentName,
+        agentRole: testSettings.agentRole,
+        agentPrompt: testSettings.agentPrompt,
+        allowBoardUse: true
+      });
+
+      onAuthorize(testSettings);
+    } catch (err: any) {
+      setError(`Тестовый вход не удался: ${err?.message || err}. Запущены ли эмуляторы (npm run emulators)?`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const [resetInfo, setResetInfo] = useState<string | null>(null);
+
+  /** Sends the reset email to the address typed above. */
+  const handleResetPassword = async () => {
+    setError(null);
+    setResetInfo(null);
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+      setError('Введите почту аккаунта в поле выше — на неё придёт ссылка для нового пароля.');
+      return;
+    }
+    const sent = `Если аккаунт с адресом ${email.trim()} существует, на него отправлено письмо со ссылкой для нового пароля. Проверьте и папку «Спам».`;
+    try {
+      await resetPassword(email);
+      setResetInfo(sent);
+    } catch (err: any) {
+      // Same answer whether or not the address is registered, so the form
+      // cannot be used to find out who has an account.
+      if (err?.code === 'auth/user-not-found') { setResetInfo(sent); return; }
+      setError(err?.code === 'auth/invalid-email' ? 'Некорректный адрес почты' : (err?.message || 'Не удалось отправить письмо'));
+    }
+  };
+
+  const forgotLink = !isRegistering && (
+    <div className="text-center">
+      <button type="button" onClick={handleResetPassword} className="text-xs text-slate-400 hover:text-cyan-300 underline decoration-dotted">
+        {(t as any).forgotPassword || 'Забыли пароль?'}
+      </button>
+    </div>
+  );
 
   const handleAgentEnter = (e: React.FormEvent) => {
     e.preventDefault();
@@ -205,6 +298,29 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         </div>
 
         {error && <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/50 rounded-lg text-rose-400 text-xs text-center">{error}</div>}
+        {resetInfo && <div className="mb-4 p-3 bg-emerald-500/10 border border-emerald-500/40 rounded-lg text-emerald-300 text-xs text-center">{resetInfo}</div>}
+        <div className="flex justify-end -mt-2 mb-2"><Hint id="account" always /></div>
+
+        {usingEmulators && (
+          <div className="mb-4 p-3 rounded-xl border border-dashed border-amber-500/40 bg-amber-950/10">
+            <p className="text-[10px] font-mono uppercase tracking-widest text-amber-400 mb-2">
+              Тестовый режим · эмуляторы Firebase
+            </p>
+            <div className="flex gap-2">
+              {(['A', 'B'] as const).map(slot => (
+                <button
+                  key={slot}
+                  type="button"
+                  onClick={() => handleTestLogin(slot)}
+                  disabled={isLoading}
+                  className="flex-1 py-2 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                >
+                  Войти как Tester_{slot}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Social sign-in, offered to both account types. */}
         <div className="space-y-3 mb-4">
@@ -265,6 +381,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
                 {isLoading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
                 <span>{isRegistering ? t.register : t.signIn}</span>
               </button>
+              {forgotLink}
               <div className="text-center text-xs text-slate-500">
                 {isRegistering ? t.haveAccount : t.dontHaveAccount}
                 <button type="button" onClick={() => setIsRegistering(!isRegistering)} className="text-indigo-400 hover:underline">
@@ -401,6 +518,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
               <span>{isRegistering ? t.register : t.enterNetwork}</span>
             </button>
 
+            {forgotLink}
             <div className="text-center text-xs text-slate-500">
               {isRegistering ? t.haveAccount : t.dontHaveAccount}
               <button type="button" onClick={() => setIsRegistering(!isRegistering)} className="text-cyan-400 hover:underline">

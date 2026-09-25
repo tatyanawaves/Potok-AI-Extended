@@ -9,10 +9,13 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "emulators": "node scripts/emulators.mjs",
+    "mock:llm": "node scripts/mock-llm.mjs",
+    "bridge": "node scripts/mcp-bridge.mjs",
+    "dev:test": "vite --mode emulator"
   },
   "dependencies": {
-    "@google/genai": "^1.40.0",
     "@types/crypto-js": "^4.2.2",
     "crypto-js": "^4.2.0",
     "d3": "^7.9.0",

@@ -14,6 +14,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+!.env.emulator
 
 # Editor directories and files
 .vscode/*
@@ -36,3 +37,6 @@ hosting.ZGlzdA.cache
 worker/.dev.vars
 worker/.wrangler/
 vite.config.preview.ts
+
+# Snapshots written by a Playwright MCP server run through scripts/mcp-bridge.mjs
+.playwright-mcp/

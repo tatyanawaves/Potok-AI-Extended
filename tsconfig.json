@@ -26,5 +26,13 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist",
+    "worker/src/agentWorkflow.ts",
+    "worker/src/main.ts",
+    "worker/node_modules",
+    ".claude"
+  ]
 }

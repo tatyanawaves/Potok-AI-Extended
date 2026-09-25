@@ -1,8 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AISettings, Language, AIProvider } from '../types';
+import { AISettings, Language } from '../types';
+import { DEFAULT_MODEL, DEFAULT_BASE_URL, embed, openRouterFreeModels, openRouterQuota } from '../services/llm';
 import { translations } from '../translations';
 import { isPipedreamConfigured, listConnectedAccounts, ConnectedAccount } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
+import { Hint } from './Learning';
+import { startOpenRouterLogin } from '../services/openrouterAuth';
+import { auth, resetPassword, hasPasswordSignIn } from '../services/firebase';
+import {
+  saveSandboxKey, sandboxKeyStatus, deleteSandboxKey, SandboxProvider, SANDBOX_NAMES,
+  saveGcpKey, gcpConnected, GCP_REGIONS
+} from '../services/connectors';
 
 interface SettingsModalProps {
   settings: AISettings;
@@ -12,12 +20,65 @@ interface SettingsModalProps {
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose }) => {
   const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
-  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || 'nvidia/nemotron-3.5-lightning:free');
-  const [geminiKey, setGeminiKey] = useState(settings.geminiKey || '');
-  const [geminiModel, setGeminiModel] = useState(settings.geminiModel || 'gemini-1.5-flash');
-  const [groqKey, setGroqKey] = useState(settings.groqKey || '');
-  const [groqModel, setGroqModel] = useState(settings.groqModel || 'llama-3.3-70b-versatile');
-  const [aiProvider, setAiProvider] = useState<AIProvider>(settings.aiProvider || 'openrouter');
+  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || DEFAULT_MODEL);
+  const [memoryModel, setMemoryModel] = useState(settings.memoryModel || '');
+  const [embeddingModel, setEmbeddingModel] = useState(settings.embeddingModel || '');
+  const [githubToken, setGithubToken] = useState(settings.githubToken || '');
+  const [passwordInfo, setPasswordInfo] = useState<string | null>(null);
+
+  // Sandbox keys go straight to the server; the page only learns whether one is set.
+  const [sandboxKeys, setSandboxKeys] = useState<Record<SandboxProvider, boolean>>({ e2b: false, daytona: false });
+  const [sandboxDraft, setSandboxDraft] = useState<Record<SandboxProvider, string>>({ e2b: '', daytona: '' });
+  const [sandboxMessage, setSandboxMessage] = useState<string | null>(null);
+  useEffect(() => { if (isPipedreamConfigured()) sandboxKeyStatus().then(setSandboxKeys).catch(() => { }); }, []);
+
+  // Google Cloud: a service-account JSON key, sent to the server and not kept here.
+  const [gcpSet, setGcpSet] = useState(false);
+  const [gcpJson, setGcpJson] = useState('');
+  const [gcpRegion, setGcpRegion] = useState('europe-west1');
+  const [gcpMessage, setGcpMessage] = useState<string | null>(null);
+  useEffect(() => { if (isPipedreamConfigured()) gcpConnected().then(setGcpSet).catch(() => { }); }, []);
+  // Free models change every few weeks; offer the ones OpenRouter lists today.
+  const [freeModelIds, setFreeModelIds] = useState<string[]>([]);
+  useEffect(() => { openRouterFreeModels().then(list => setFreeModelIds(list.filter(m => m.tools).map(m => m.id))); }, []);
+  const [quota, setQuota] = useState<{ used: number, limit: number, remaining: number } | null>(null);
+  useEffect(() => { openRouterQuota(settings).then(setQuota); }, [settings]);
+
+  const storeGcpKey = async () => {
+    setGcpMessage('…');
+    try {
+      await saveGcpKey(gcpJson.trim(), gcpRegion);
+      setGcpSet(true);
+      setGcpJson('');
+      setGcpMessage('Проект подключён: доступ к Cloud Run проверен');
+    } catch (e) {
+      setGcpMessage(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const storeSandboxKey = async (provider: SandboxProvider) => {
+    setSandboxMessage('…');
+    try {
+      await saveSandboxKey(provider, sandboxDraft[provider].trim());
+      setSandboxKeys(prev => ({ ...prev, [provider]: true }));
+      setSandboxDraft(prev => ({ ...prev, [provider]: '' }));
+      setSandboxMessage(`${SANDBOX_NAMES[provider]}: ключ проверен и сохранён`);
+    } catch (e) {
+      setSandboxMessage(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const [embeddingCheck, setEmbeddingCheck] = useState<{ ok: boolean, text: string } | null>(null);
+
+  /** One tiny request, so a wrong model name shows up here and not as silent keyword search. */
+  const checkEmbeddings = async () => {
+    setEmbeddingCheck({ ok: true, text: '…' });
+    try {
+      const [vector] = await embed(['проверка'], { ...settings, openRouterKey, apiBaseUrl, embeddingModel } as AISettings);
+      setEmbeddingCheck({ ok: true, text: `работает · ${vector.length} измерений` });
+    } catch (e) {
+      setEmbeddingCheck({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    }
+  };
   const [apiBaseUrl, setApiBaseUrl] = useState(settings.apiBaseUrl || '');
   const [language, setLanguage] = useState<Language>(settings.language || 'ru');
   const [agentName, setAgentName] = useState(settings.agentName || 'Neo');
@@ -66,11 +127,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
     onSave({
       openRouterKey,
       openRouterModel,
-      geminiKey,
-      geminiModel,
-      groqKey,
-      groqModel,
-      aiProvider,
+      aiProvider: 'openrouter',
+      memoryModel: memoryModel.trim() || undefined,
+      embeddingModel: embeddingModel.trim() || undefined,
+      githubToken: githubToken.trim(),
       apiBaseUrl,
       language,
       agentName,
@@ -120,6 +180,25 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
         <div className="p-6 space-y-6 overflow-y-auto custom-scrollbar flex-1 min-h-0">
 
+
+          {hasPasswordSignIn() && (
+            <div className="flex items-center gap-2">
+              <button type="button"
+                onClick={async () => {
+                  try {
+                    await resetPassword(auth.currentUser!.email!);
+                    setPasswordInfo(`Письмо со ссылкой для нового пароля отправлено на ${auth.currentUser!.email}`);
+                  } catch (e) {
+                    setPasswordInfo(e instanceof Error ? e.message : String(e));
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg border border-slate-600 text-slate-300 text-[10px] font-mono uppercase tracking-wider hover:bg-slate-800">
+                {(t as any).changePassword || 'Сменить пароль'}
+              </button>
+              <Hint id="account" />
+              {passwordInfo && <span className="text-[10px] text-emerald-400">{passwordInfo}</span>}
+            </div>
+          )}
 
           <div className="space-y-2">
             <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
@@ -173,46 +252,34 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-              {t.aiProviderLabel || 'AI Provider'}
-            </label>
-            <div className="flex space-x-2">
-              <button
-                type="button"
-                onClick={() => setAiProvider('openrouter')}
-                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'openrouter' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
-              >
-                OPENROUTER
-              </button>
-              <button
-                type="button"
-                onClick={() => setAiProvider('groq')}
-                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'groq' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
-              >
-                GROQ
-              </button>
-              <button
-                type="button"
-                onClick={() => setAiProvider('gemini')}
-                className={`flex-1 py-2 rounded-lg border font-mono text-xs transition-all ${aiProvider === 'gemini' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-950 border-slate-700 text-slate-400 hover:border-slate-500'}`}
-              >
-                GOOGLE GEMINI
-              </button>
-            </div>
-          </div>
-
-          {settings.userType === 'agent' && (
-            <>
-              {aiProvider === 'openrouter' ? (
-                <>
+          {/* One OpenAI-compatible API for everything. Shown to every account,
+              not only to AI users: whoever @mentions a board bot pays for its
+              answer, and a human had nowhere to put a key. */}
+          <>
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                {t.apiHint || 'Любой OpenAI-совместимый API: OpenRouter по умолчанию, либо Groq, Gemini, OpenAI, локальная модель — укажите их адрес ниже.'}
+              </p>
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      OpenRouter {t.apiKeyLabel}
+                      {t.apiKeyLabel} <Hint id="api-key" always />
                     </label>
+                    {/* One click instead of hunting for the keys page: OpenRouter's
+                        own OAuth flow issues the key and sends it back here. */}
+                    {!apiBaseUrl.trim() || apiBaseUrl.includes('openrouter.ai') ? (
+                      <button type="button" onClick={() => startOpenRouterLogin()}
+                        className="w-full py-2 rounded-lg border border-indigo-500/40 bg-indigo-950/30 text-indigo-200 text-[11px] font-bold hover:bg-indigo-900/40">
+                        {(t as any).openRouterLogin || 'Войти через OpenRouter — получить ключ автоматически'}
+                      </button>
+                    ) : null}
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
+                      <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer" className="text-cyan-400/80 hover:text-cyan-300 underline">OpenRouter ↗</a>
+                      <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer" className="text-cyan-400/80 hover:text-cyan-300 underline">Groq ↗</a>
+                      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-cyan-400/80 hover:text-cyan-300 underline">Gemini ↗</a>
+                      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-cyan-400/80 hover:text-cyan-300 underline">OpenAI ↗</a>
+                    </div>
                     <input
                       type="password"
-                      value={openRouterKey}
+                      value={openRouterKey === 'google-auth' ? '' : openRouterKey}
                       onChange={(e) => setOpenRouterKey(e.target.value)}
                       placeholder="sk-or-v1-..."
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
@@ -221,89 +288,184 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      OpenRouter Model
+                      {t.modelLabel || 'Модель'} <a href="https://openrouter.ai/models?max_price=0" target="_blank" rel="noopener noreferrer" className="normal-case tracking-normal text-[10px] text-cyan-400/80 underline">бесплатные ↗</a>
                     </label>
                     <input
                       type="text"
                       value={openRouterModel}
                       onChange={(e) => setOpenRouterModel(e.target.value)}
                       placeholder="author/model:free"
+                      list="potok-free-models"
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
                     />
-                  </div>
-                </>
-              ) : aiProvider === 'groq' ? (
-                <>
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Groq {t.apiKeyLabel}
-                    </label>
-                    <input
-                      type="password"
-                      value={groqKey}
-                      onChange={(e) => setGroqKey(e.target.value)}
-                      placeholder="gsk_..."
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Groq Model
-                    </label>
-                    <input
-                      type="text"
-                      value={groqModel}
-                      onChange={(e) => setGroqModel(e.target.value)}
-                      placeholder="llama-3.3-70b-versatile"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="space-y-2">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Gemini {t.apiKeyLabel}
-                    </label>
-                    <input
-                      type="password"
-                      value={geminiKey}
-                      onChange={(e) => setGeminiKey(e.target.value)}
-                      placeholder="AIza..."
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
+                    <datalist id="potok-free-models">
+                      {freeModelIds.map(id => <option key={id} value={id} />)}
+                    </datalist>
+                    {freeModelIds.length > 0 && (!apiBaseUrl.trim() || apiBaseUrl.includes('openrouter.ai'))
+                      && openRouterModel.endsWith(':free') && !freeModelIds.includes(openRouterModel.trim()) && (
+                      <p className="text-[10px] text-amber-300/90">
+                        {(t as any).modelGone || 'Такой бесплатной модели сейчас нет в OpenRouter — выберите из списка (кликните по полю).'}
+                      </p>
+                    )}
+                    {quota && (
+                      <p className={`text-[10px] font-mono ${quota.remaining > 10 ? 'text-emerald-400/90' : 'text-amber-300/90'}`}>
+                        {(t as any).freeQuotaLeft || 'Бесплатных запросов сегодня осталось'}: {quota.remaining} / {quota.limit}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-slate-500 leading-relaxed">
+                      {(t as any).freeLimitsNote || 'Бесплатные модели OpenRouter: до 20 запросов в минуту и 50 в сутки на аккаунт (1000 в сутки после пополнения на $10). Одно задание с совещанием тратит 10–30 запросов. Если модель занята, Potok сам переключится на другую бесплатную.'}
+                    </p>
                   </div>
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      Gemini Model
+                      {t.memoryModelLabel || 'Модель для служебных задач'} ({t.optional || 'необязательно'}) <Hint id="memory-model" />
                     </label>
                     <input
                       type="text"
-                      value={geminiModel}
-                      onChange={(e) => setGeminiModel(e.target.value)}
-                      placeholder="gemini-1.5-flash"
+                      value={memoryModel}
+                      onChange={(e) => setMemoryModel(e.target.value)}
+                      placeholder={t.memoryModelPlaceholder || 'та же, что выше'}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
                     />
+                    <p className="text-[10px] text-slate-600 leading-relaxed">
+                      {t.memoryModelHint || 'Сжатие памяти, план и проверки совещаний. Дешёвая быстрая модель здесь экономит токены, не трогая ответы ботов.'}
+                    </p>
                   </div>
-                </>
-              )}
+
+                  {isPipedreamConfigured() && (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                        {(t as any).sandboxKeysLabel || 'Песочницы кода (ваш ключ)'} <Hint id="sandbox" always />
+                      </label>
+                      {(['e2b', 'daytona'] as SandboxProvider[]).map(provider => (
+                        <div key={provider} className="flex gap-2 items-center">
+                          <a href={provider === 'e2b' ? 'https://e2b.dev/dashboard' : 'https://app.daytona.io/dashboard/keys'} target="_blank" rel="noopener noreferrer"
+                            title="Где взять ключ" className="w-16 text-[11px] font-mono text-cyan-400/80 hover:text-cyan-300 underline shrink-0">{SANDBOX_NAMES[provider]} ↗</a>
+                          {sandboxKeys[provider] ? (
+                            <>
+                              <span className="flex-1 text-[11px] text-emerald-400">✓ {(t as any).keySaved || 'ключ сохранён'}</span>
+                              <button type="button" onClick={() => deleteSandboxKey(provider).then(() => setSandboxKeys(prev => ({ ...prev, [provider]: false })))}
+                                className="text-[10px] font-mono text-slate-500 hover:text-rose-300">{(t as any).remove || 'удалить'}</button>
+                            </>
+                          ) : (
+                            <>
+                              <input type="password" value={sandboxDraft[provider]}
+                                onChange={(e) => setSandboxDraft(prev => ({ ...prev, [provider]: e.target.value }))}
+                                placeholder={provider === 'e2b' ? 'e2b_…' : 'dtn_…'}
+                                className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 font-mono text-xs" />
+                              <button type="button" disabled={!sandboxDraft[provider].trim()} onClick={() => storeSandboxKey(provider)}
+                                className="px-2 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-300 text-[10px] font-mono uppercase disabled:opacity-40">
+                                {(t as any).saveShort || 'Сохранить'}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                      {sandboxMessage && <p className="text-[10px] text-slate-400">{sandboxMessage}</p>}
+                      <p className="text-[10px] text-slate-600 leading-relaxed">
+                        {(t as any).sandboxKeysHint || 'Боты запускают код, команды и работают с файлами в вашей облачной песочнице — вы платите провайдеру напрямую. Ключ проверяется и хранится зашифрованным на сервере Potok, в браузере не остаётся. Ключ: e2b.dev/dashboard или app.daytona.io → API Keys.'}
+                      </p>
+                    </div>
+                  )}
+
+                  {isPipedreamConfigured() && (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                        {(t as any).gcpLabel || 'Google Cloud Run (ваш проект)'} <Hint id="cloud-run" always />
+                      </label>
+                      {gcpSet ? (
+                        <div className="flex items-center gap-2">
+                          <span className="flex-1 text-[11px] text-emerald-400">✓ {(t as any).gcpConnected || 'проект подключён'}</span>
+                          <button type="button" onClick={() => deleteSandboxKey('gcp').then(() => setGcpSet(false))}
+                            className="text-[10px] font-mono text-slate-500 hover:text-rose-300">{(t as any).remove || 'удалить'}</button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex gap-2">
+                            <label className="flex-1 text-center cursor-pointer px-2 py-1.5 rounded-lg border border-dashed border-slate-600 text-[11px] text-slate-400 hover:border-slate-400">
+                              {gcpJson ? '✓ JSON-ключ загружен' : ((t as any).pickKeyFile || 'Выбрать JSON-ключ…')}
+                              <input type="file" accept=".json,application/json" className="hidden"
+                                onChange={async (e) => { const f = e.target.files?.[0]; if (f) setGcpJson(await f.text()); e.target.value = ''; }} />
+                            </label>
+                            <select value={gcpRegion} onChange={(e) => setGcpRegion(e.target.value)}
+                              className="bg-slate-950 border border-slate-700 rounded-lg px-2 text-[11px] font-mono text-slate-200">
+                              {GCP_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                            <button type="button" disabled={!gcpJson} onClick={storeGcpKey}
+                              className="px-2 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-300 text-[10px] font-mono uppercase disabled:opacity-40">
+                              {(t as any).connect || 'Подключить'}
+                            </button>
+                          </div>
+                        </>
+                      )}
+                      {gcpMessage && <p className="text-[10px] text-slate-400 break-words">{gcpMessage}</p>}
+                      <p className="text-[10px] text-slate-600 leading-relaxed">
+                        {(t as any).gcpHint || 'Боты разворачивают сервисы в вашем проекте Google Cloud — оплата идёт с вашего аккаунта. Создайте сервисный аккаунт (роли: Cloud Run Admin, Cloud Build Editor, Storage Admin, Artifact Registry Administrator, Service Account User), включите API run, cloudbuild, artifactregistry, storage и загрузите его JSON-ключ. Ключ хранится зашифрованным на сервере Potok.'}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      {t.githubTokenLabel || 'Токен GitHub (сохранение кода)'} <Hint id="github" always /> <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer" className="normal-case tracking-normal text-[10px] text-cyan-400/80 underline">создать ↗</a>
+                    </label>
+                    <input
+                      type="password"
+                      value={githubToken}
+                      onChange={(e) => setGithubToken(e.target.value)}
+                      placeholder="github_pat_..."
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                    />
+                    <p className="text-[10px] text-slate-600 leading-relaxed">
+                      {t.githubTokenHint || 'Fine-grained токен с правом Contents: Read and write на нужные репозитории. Хранится только в этом браузере.'}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      {t.embeddingModelLabel || 'Модель эмбеддингов (поиск по смыслу)'} <Hint id="embeddings" always />
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={embeddingModel}
+                        onChange={(e) => { setEmbeddingModel(e.target.value); setEmbeddingCheck(null); }}
+                        placeholder="openai/text-embedding-3-small"
+                        className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={checkEmbeddings}
+                        disabled={!embeddingModel.trim() || !openRouterKey}
+                        className="px-3 rounded-lg border border-emerald-500/30 text-emerald-300 text-[10px] font-mono uppercase disabled:opacity-40"
+                      >
+                        {t.check || 'Проверить'}
+                      </button>
+                    </div>
+                    {embeddingCheck && (
+                      <p className={`text-[10px] leading-relaxed ${embeddingCheck.ok ? 'text-emerald-400/90' : 'text-rose-300'}`}>
+                        {embeddingCheck.text}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-slate-600 leading-relaxed">
+                      {t.embeddingModelHint || 'Боты находят заметки по смыслу, а не только по словам. Тот же API и ключ; копейки за запрос. Пусто — поиск по словам. OpenRouter/OpenAI: text-embedding-3-small, Gemini: gemini-embedding-001. У Groq эмбеддингов нет.'}
+                    </p>
+                  </div>
 
               <div className="space-y-2">
                 <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                  Custom API Address (Optional)
+                  {t.apiAddressLabel || 'Адрес API'} ({t.optional || 'необязательно'})
                 </label>
                 <input
                   type="text"
                   value={apiBaseUrl}
                   onChange={(e) => setApiBaseUrl(e.target.value)}
-                  placeholder="https://api.your-proxy.com/v1"
+                  placeholder={DEFAULT_BASE_URL}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
                 />
               </div>
-            </>
-          )}
+          </>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -347,7 +509,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                  {t.connectedAccounts || 'Подключённые аккаунты'}
+                  {t.connectedAccounts || 'Подключённые аккаунты'} <Hint id="pipedream" />
                 </label>
                 <button
                   type="button"
@@ -407,7 +569,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
           <div className="space-y-2">
             <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-              {t.mcpTokensLabel || 'Токены MCP-серверов'}
+              {t.mcpTokensLabel || 'Токены MCP-серверов'} <Hint id="mcp" />
             </label>
             <p className="text-[10px] text-slate-500">
               {t.mcpTokensDesc || 'Нужны только для серверов с авторизацией. Хранятся зашифрованными в этом браузере и никогда не попадают в базу — участники доски их не увидят.'}
