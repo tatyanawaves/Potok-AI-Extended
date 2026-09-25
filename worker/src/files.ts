@@ -92,14 +92,19 @@ export const boardOfKey = (key: string): string | null => {
  * Passing the user's own ID token makes Firestore enforce the board's read
  * rule, which already restricts reads to members. That keeps this worker free
  * of any credential that could read data on its own behalf.
+ *
+ * `emulatorHost` is the local Firestore emulator (npm run dev:emulator); asked
+ * of production instead, every test-mode upload was refused.
  */
 export const isBoardMember = async (
     projectId: string,
     boardId: string,
-    idToken: string
+    idToken: string,
+    emulatorHost?: string
 ): Promise<boolean> => {
+    const origin = emulatorHost ? `http://${emulatorHost}` : 'https://firestore.googleapis.com';
     const url =
-        `https://firestore.googleapis.com/v1/projects/${projectId}` +
+        `${origin}/v1/projects/${projectId}` +
         `/databases/(default)/documents/boards/${encodeURIComponent(boardId)}`;
 
     const response = await fetch(url, {

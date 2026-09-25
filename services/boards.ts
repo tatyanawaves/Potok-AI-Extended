@@ -5,6 +5,7 @@ import {
 import { db } from './firebase';
 import { isBot, parseMentions, botIdsOf, botIdsInSync } from './mentions';
 import { deleteAttachments } from './attachments';
+import { listenWithRetry } from './listen';
 import { Board, BoardChannel, BoardMember, BoardMessage } from '../types';
 
 /**
@@ -270,15 +271,13 @@ export const createChannel = async (boardId: string, name: string, topic: string
     });
 };
 
-export const subscribeToChannels = (boardId: string, callback: (channels: BoardChannel[]) => void) => {
-    return onSnapshot(query(channelsRefFor(boardId), limit(50)), (snapshot) => {
+export const subscribeToChannels = (boardId: string, callback: (channels: BoardChannel[]) => void) =>
+    // Retried: right after a board is created the server may not have it yet.
+    listenWithRetry(onError => onSnapshot(query(channelsRefFor(boardId), limit(50)), (snapshot) => {
         const channels = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as BoardChannel[];
         channels.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
         callback(channels);
-    }, (error) => {
-        console.error('[Boards] Channel subscription error:', error);
-    });
-};
+    }, onError), 'Boards/channels');
 
 export const deleteChannel = async (boardId: string, channelId: string) => {
     const messages = await getDocs(messagesRefFor(boardId, channelId));
@@ -303,13 +302,11 @@ export const subscribeToMessages = (
     // channel showed an arbitrary 200 messages and hid the latest ones.
     const q = query(messagesRefFor(boardId, channelId), orderBy('timestamp', 'desc'), limit(MESSAGE_WINDOW));
 
-    return onSnapshot(q, (snapshot) => {
+    return listenWithRetry(onError => onSnapshot(q, (snapshot) => {
         const messages = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as BoardMessage[];
         messages.reverse();
         callback(messages);
-    }, (error) => {
-        console.error('[Boards] Message subscription error:', error);
-    });
+    }, onError), 'Boards/messages');
 };
 
 export const sendMessage = async (message: Omit<BoardMessage, 'id' | 'timestamp' | 'mentions'>) => {
