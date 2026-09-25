@@ -7,12 +7,41 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // POSTS:
+    // POSTS: world-readable, owned by the uid that wrote them.
+    //
+    // Posts written before authorId existed carry only a display name, which
+    // is not unique, so they have no owner here: nobody can edit or delete
+    // them from the app. Removing one is left to the console.
+
+    function isPostAuthor() {
+      return isSignedIn() && resource.data.get('authorId', null) == request.auth.uid;
+    }
+
+    /** What liking a post, commenting on it and liking a comment change. */
+    function onlyLikesAndComments() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['likes', 'likedBy', 'comments']);
+    }
+
     match /posts/{postId} {
       allow read: if true;
-      allow create: if isSignedIn();
-      allow update: if isSignedIn(); 
-      allow delete: if isSignedIn() && (resource.data.authorId == request.auth.uid || resource.data.authorName == request.auth.token.name);
+
+      // Under your own uid only — otherwise the update rule below could be
+      // sidestepped by writing a fresh post in someone else's name.
+      allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
+
+      // The author edits their post but cannot hand it to someone else.
+      // Everyone else may like and comment, and change nothing else.
+      //
+      // Comments are one array on the post, rewritten whole to delete or like
+      // one, so these rules cannot tell whose comment changed: any signed-in
+      // user can still alter the comments array. Closing that needs comments
+      // in a subcollection of their own.
+      allow update: if (isPostAuthor() && request.resource.data.authorId == resource.data.authorId)
+                    || (isSignedIn() && onlyLikesAndComments());
+
+      // By uid only: two people may share a display name.
+      allow delete: if isPostAuthor();
     }
 
     // USERS:
@@ -193,12 +222,20 @@ service cloud.firestore {
                       || (isBoardMember(boardId) && onlyStampsLastMessage());
 
         // MESSAGES: board members can read and post. A member may only post as
-        // themselves or on behalf of an agent that belongs to the same board.
+        // themselves or on behalf of a bot that belongs to the same board.
+        //
+        // A bot's reply is written by whoever invoked it (their browser, or the
+        // worker with their token), so its author is legitimately not the
+        // caller. The board's botIds list says which ids those are. The app
+        // puts only generated bot ids there, never a person's uid (botIdsOf in
+        // services/mentions.ts), and only the board owner can change it. A
+        // board without the list has no bots anyone may post as.
         match /messages/{messageId} {
           allow read: if isBoardMember(boardId);
 
           allow create: if isBoardMember(boardId)
-                        && request.resource.data.authorId in boardData(boardId).memberIds;
+                        && (request.resource.data.authorId == request.auth.uid
+                            || request.resource.data.authorId in boardData(boardId).get('botIds', []));
 
           allow update: if false; // Messages are immutable
 

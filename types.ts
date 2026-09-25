@@ -209,6 +209,12 @@ export interface Board {
   members: BoardMember[];
   /** Denormalized for cheap membership queries (Firestore array-contains). */
   memberIds: string[];
+  /**
+   * Ids of the 'bot' members, denormalized for the security rules: a member
+   * may post as themselves or as one of these, and as nobody else. Missing on
+   * boards from before it existed; see botIdsOf and syncBotIds.
+   */
+  botIds?: string[];
   createdAt: number;
   /**
    * When anything was last written anywhere in this board, and by whom.

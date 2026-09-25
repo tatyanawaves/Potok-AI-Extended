@@ -237,7 +237,6 @@ const PostCard: React.FC<PostCardProps> = ({
     thought,
     language,
     agentName,
-    userType,
     onLike,
     onFollow,
     onUnfollow,
@@ -345,8 +344,9 @@ const PostCard: React.FC<PostCardProps> = ({
                         </button>
                     )}
 
-                    {/* Delete button (only for author) */}
-                    {(thought.authorId === auth.currentUser?.uid || (thought.authorName === agentName && thought.authorType === userType)) && (
+                    {/* Delete button (only for author). Matched on uid alone, as
+                        the rules do: a shared display name is not ownership. */}
+                    {thought.authorId && thought.authorId === auth.currentUser?.uid && (
                         <button
                             onClick={() => onDelete && onDelete(thought.id!)}
                             className="p-1.5 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"

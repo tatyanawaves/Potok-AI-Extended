@@ -38,3 +38,19 @@ The sign-in screen then shows **Войти как Tester_A / Tester_B**: two tes
 accounts, already pointed at the mock model. Give a bot the tool server
 `http://127.0.0.1:8787/mcp` to exercise tool calls. Emulator data is kept in
 memory and disappears when the emulators stop.
+
+## Security rules
+
+`npm run test:rules` runs `test/rules/` against a Firestore emulator it starts
+and stops itself (Java 21+ and the Firebase CLI, as above). CI runs it too.
+
+Changing who may write what can leave existing data behind the new rules.
+`scripts/migrate-rules-data.mjs` brings it up to date: it fills in each
+board's `botIds` (without them no bot reply can be posted) and reports what
+the rules deliberately leave alone. It needs admin credentials
+(`gcloud auth application-default login`) and is a dry run until given
+`--confirm`. For production, in this order:
+
+1. deploy the app;
+2. `node scripts/migrate-rules-data.mjs --confirm`;
+3. `firebase deploy --only firestore:rules --project neon-extended`.

@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:rules": "node scripts/emulators.mjs --exec \"vitest run --config vitest.rules.config.ts\"",
     "typecheck": "tsc --noEmit",
     "emulators": "node scripts/emulators.mjs",
     "mock:llm": "node scripts/mock-llm.mjs",
@@ -31,12 +32,14 @@
     "three-spritetext": "^1.10.0"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@types/node": "^22.14.0",
     "@types/three": "^0.182.0",
     "@vitejs/plugin-basic-ssl": "^2.1.4",
     "@vitejs/plugin-react": "^5.0.0",
     "@vitest/coverage-v8": "^5.0.0",
     "autoprefixer": "^10.5.5",
+    "firebase-admin": "^14.5.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.19",
     "typescript": "~5.8.2",
