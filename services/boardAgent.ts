@@ -11,12 +11,16 @@ import { ToolApprover, ToolPolicy } from './runtime/turn';
 
 export {
     MAX_TOOL_ROUNDS, MAX_REQUESTS_PER_TURN, MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS,
-    toolServersOf, resetToolConnections, buildSystemPrompt, replyOrNotice, designBot
+    toolServersOf, resetToolConnections, buildSystemPrompt, replyOrNotice, designBot, isDestructiveTool
 } from './runtime/turn';
 export type { ToolPolicy, ToolApprover, Assignment, DiscussionContext, BotDesign } from './runtime/turn';
 export { describeHttpError, isFatalProviderError } from './llm';
 
-/** Answers every bot the message mentions, on the mentioning user's key. */
+/**
+ * Answers every bot the message mentions, on the mentioning user's key.
+ * With `approveTool`, a destructive tool call is shown for a yes first even
+ * under "auto" — there is no policy picker on a plain message.
+ */
 export const triggerAgentReplies = (
     mentions: string[],
     authorId: string,
@@ -29,7 +33,8 @@ export const triggerAgentReplies = (
     approveTool?: ToolApprover
 ): Promise<void> => runtime.answerMentions({
     store: firestoreStore(settings),
-    mentions, authorId, boardId, channelId, channelName, members, settings, toolPolicy, approveTool
+    mentions, authorId, boardId, channelId, channelName, members, settings, toolPolicy, approveTool,
+    confirmDestructive: Boolean(approveTool)
 });
 
 export const runBotDiscussion = (options: Omit<runtime.DiscussionOptions, 'store'>): Promise<void> =>

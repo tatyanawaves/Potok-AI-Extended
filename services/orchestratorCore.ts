@@ -100,8 +100,14 @@ const rosterText = (roster: RosterEntry[]) => roster.map(r =>
     `- ${r.name}: ${clip(r.persona.replace(/\s+/g, ' '), 220) || 'general assistant'}${r.tools.length ? ` | tools: ${r.tools.slice(0, 15).join(', ')}` : ' | no external tools'}`
 ).join('\n');
 
-const logText = (log: StepLog[]) => log.length
-    ? log.map((s, i) => `${i + 1}. ${s.bot} — ${s.instruction}\n   RESULT: ${s.ok ? clip(s.result.replace(/\s+/g, ' '), 700) : 'FAILED: ' + clip(s.result, 200)}`).join('\n')
+/**
+ * The work so far, as the supervisor and the final writer see it. Each result
+ * is clipped to `perStep`; the final writer gets far more than the checks do,
+ * and line breaks intact, since it hands over the deliverable itself — code
+ * included — not a 700-character stump flattened onto one line.
+ */
+const logText = (log: StepLog[], perStep = 1200, verbatim = false) => log.length
+    ? log.map((s, i) => `${i + 1}. ${s.bot} — ${s.instruction}\n   RESULT: ${s.ok ? clip(verbatim ? s.result : s.result.replace(/\s+/g, ' '), perStep) : 'FAILED: ' + clip(s.result, 200)}`).join('\n')
     : '(nothing done yet)';
 
 export const planPrompt = (task: string, roster: RosterEntry[], maxSteps: number): string => `ORCHESTRATOR_PLAN
@@ -129,27 +135,38 @@ Respond ONLY in JSON: {"goal": "...", "criteria": ["..."], "steps": [{"bot": "Na
  */
 export const parsePlan = (raw: string | null, task: string, roster: RosterEntry[], maxSteps: number): Plan => {
     const data = parseObject(raw);
-    const kept: Array<{ original: number, bot: string, instruction: string, after: unknown }> = [];
+    let kept: Array<{ original: number, bot: string, instruction: string, after: unknown }> = [];
 
     if (Array.isArray(data?.steps)) {
         data.steps.forEach((s: any, index: number) => {
             const bot = matchBot(s?.bot, roster);
             const instruction = String(s?.instruction || '').trim();
-            if (bot && instruction && kept.length < maxSteps) {
-                kept.push({ original: index + 1, bot, instruction, after: s?.after });
-            }
+            if (bot && instruction) kept.push({ original: index + 1, bot, instruction, after: s?.after });
         });
+    }
+
+    // Over the limit, the middle gives way rather than the end: the planner is
+    // told to finish with the step that assembles the deliverable, and cutting
+    // the list short dropped exactly that one.
+    let finalStep: typeof kept[number] | undefined;
+    if (kept.length > maxSteps) {
+        finalStep = maxSteps > 1 ? kept[kept.length - 1] : undefined;
+        kept = [...kept.slice(0, maxSteps - (finalStep ? 1 : 0)), ...(finalStep ? [finalStep] : [])];
     }
 
     // The model numbers steps as it wrote them; dropped steps shift the rest.
     const idOf = new Map(kept.map((k, i) => [k.original, i + 1]));
     const steps: PlanStep[] = kept.map((k, i) => {
         const id = i + 1;
-        const after = Array.isArray(k.after)
+        let after = Array.isArray(k.after)
             ? [...new Set((k.after as unknown[])
                 .map(n => idOf.get(Number(n)))
                 .filter((n): n is number => n !== undefined && n < id))]
             : (id > 1 ? [id - 1] : []);
+        // The kept final step lost the steps it combined; it combines what is left.
+        if (k === finalStep && Array.isArray(k.after) && k.after.length && after.length === 0) {
+            after = Array.from({ length: id - 1 }, (_, j) => j + 1);
+        }
         return { id, bot: k.bot, instruction: k.instruction, after };
     });
 
@@ -174,9 +191,15 @@ export const parsePlan = (raw: string | null, task: string, roster: RosterEntry[
 export const readySteps = (steps: PlanStep[], done: Set<number>, limit = MAX_PARALLEL_STEPS): PlanStep[] =>
     steps.filter(s => !done.has(s.id) && s.after.every(d => done.has(d))).slice(0, limit);
 
-/** Results a step builds on, for its assignment. */
-export const inputsFor = (step: PlanStep, log: StepLog[]): Array<{ bot: string, result: string }> =>
-    log.filter(l => step.after.includes(l.stepId) && l.ok).map(l => ({ bot: l.bot, result: clip(l.result, 1500) }));
+/**
+ * Results a step builds on, for its assignment. A dependency that failed is
+ * passed as a failure: left out silently, the next bot filled the gap with
+ * invented data as if it had been handed it.
+ */
+export const inputsFor = (step: PlanStep, log: StepLog[]): Array<{ bot: string, result: string, failed?: boolean }> =>
+    log.filter(l => step.after.includes(l.stepId)).map(l => l.ok
+        ? { bot: l.bot, result: clip(l.result, 4000) }
+        : { bot: l.bot, result: clip(l.result, 300), failed: true });
 
 /** Turns a supervisor's request into a step that follows everything done so far. */
 export const appendStep = (steps: PlanStep[], request: StepRequest, done: Set<number>): PlanStep[] => [
@@ -227,9 +250,9 @@ CRITERIA:
 ${plan.criteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
 WORK DONE:
-${logText(log)}
+${logText(log, 3500, true)}
 
-Write "answer": the deliverable itself (not a description of the process), complete and ready to use, in the language of the goal, under 250 words.
+Write "answer": the deliverable itself (not a description of the process), complete and ready to use, in the language of the goal. If a step already produced the finished deliverable (code, a text, a table, a list), carry it over in full — do not shorten or paraphrase it. Otherwise combine the results; be concise, but never drop content the goal asks for. Use only what the steps actually produced: do not invent facts, links or numbers, and say plainly what is missing.
 Score "progress" 0-100 honestly: how fully the goal is achieved. For each criterion, say whether it is met.
 Respond ONLY in JSON: {"answer": "...", "progress": 0, "criteria": [{"text": "...", "met": true}]}`;
 

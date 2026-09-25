@@ -177,12 +177,14 @@ export class FirestoreRest {
 
 export const restAgentStore = (
     rest: FirestoreRest,
-    options: { toolToken: (url: string) => Promise<string | undefined> }
+    options: { toolToken: (url: string) => Promise<string | undefined>, scope?: string }
 ): AgentStore => {
     const summaryPath = (b: string, c: string) => `boards/${b}/channels/${c}/memory/summary`;
     let notesCache: { boardId: string, at: number, notes: MemoryNote[] } | null = null;
 
     return {
+        scope: options.scope,
+
         async getSummary(boardId, channelId) {
             const doc = await rest.get(summaryPath(boardId, channelId));
             return doc ? { ...EMPTY_SUMMARY, ...(doc.data as ChannelSummary) } : EMPTY_SUMMARY;

@@ -248,7 +248,20 @@ export const complete = async (
         body.model = candidates[i];
 
         for (let retry = 0; ; retry++) {
-            const response = await send();
+            let response: Response;
+            try {
+                response = await send();
+            } catch (error) {
+                // A dropped connection is as passing as a 503, but used to fail
+                // the step at once. A stop from the user is not retried.
+                if (request.signal?.aborted || (error as any)?.name === 'AbortError') throw error;
+                const detail = error instanceof Error ? error.message : String(error);
+                if (retry < 2) {
+                    await sleep(2000 * 2 ** retry, request.signal);
+                    continue;
+                }
+                throw new Error(`Нет связи с провайдером модели (${baseUrl}): ${detail}`);
+            }
             if (response.ok) {
                 const data: any = await response.json();
                 const message = data.choices?.[0]?.message;
