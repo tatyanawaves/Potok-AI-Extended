@@ -1,0 +1,4 @@
+# test/cloudrun.test.ts once built a PEM string from a key the test generates
+# at run time; the scanner matched the header template, not a real key. The
+# line has since been rewritten, this silences the old commit only.
+b457ffe906b5f6d06e9693f5dd6f9cb452e91430:test/cloudrun.test.ts:private-key:12
