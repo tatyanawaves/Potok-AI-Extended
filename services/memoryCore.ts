@@ -1,4 +1,5 @@
 import { BoardMessage } from '../types';
+import { textForBots } from './terminal';
 
 /**
  * Agent memory: the pure part.
@@ -29,6 +30,8 @@ export const WINDOW_MESSAGES = 6;
 export const WINDOW_TOKEN_BUDGET = 1500;
 /** Longest single message kept in the window, in characters. */
 export const MAX_MESSAGE_CHARS = 900;
+/** The same for a message with a terminal: its output is what a bot is asked about. */
+export const MAX_TERMINAL_MESSAGE_CHARS = 1600;
 /** Unsummarised messages beyond the window that trigger a compaction. */
 export const COMPACT_BATCH = 8;
 /** The running summary is kept under this many characters. */
@@ -90,7 +93,10 @@ export const selectWindow = (
     tokenBudget = WINDOW_TOKEN_BUDGET
 ): BoardMessage[] => {
     const recent = history.filter(m => !m.isPending).slice(-maxMessages)
-        .map(m => ({ ...m, content: clip(m.content || '', MAX_MESSAGE_CHARS) }));
+        .map(m => ({
+            ...m,
+            content: clip(textForBots(m), m.terminal?.length ? MAX_TERMINAL_MESSAGE_CHARS : MAX_MESSAGE_CHARS)
+        }));
 
     let total = recent.reduce((sum, m) => sum + estimateTokens(m.content), 0);
     while (recent.length > 1 && total > tokenBudget) {
@@ -118,7 +124,7 @@ export const compactionBatch = (
 };
 
 export const renderTranscript = (messages: BoardMessage[]): string =>
-    messages.map(m => `${m.authorName}: ${clip((m.content || '').replace(/\s+/g, ' '), 600)}`).join('\n');
+    messages.map(m => `${m.authorName}: ${clip(textForBots(m).replace(/\s+/g, ' '), 600)}`).join('\n');
 
 /** The prompt that folds a batch of messages into the running summary. */
 export const summaryPrompt = (previous: string, batch: BoardMessage[]): string => `MEMORY_SUMMARY

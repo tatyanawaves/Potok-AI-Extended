@@ -1,4 +1,4 @@
-import { AISettings, BoardMember, TokenUsage } from '../../types';
+import { AISettings, BoardMember, TerminalEntry, TokenUsage } from '../../types';
 import { addUsage, EMPTY_USAGE } from '../usage';
 import { connect, callTool, toOpenAITools, McpConnection, McpTool } from '../mcp';
 import { complete, ChatMessage, isFatalProviderError, modelOf, extractJson } from '../llm';
@@ -6,6 +6,7 @@ import { memoryBlock, selectTools, clip } from '../memoryCore';
 import { isBot, mentionableName } from '../mentions';
 import { AgentStore } from './store';
 import { loadTurnMemory, fileNote, findNotes } from './memory';
+import { terminalEntryOf, capEntries } from '../terminal';
 
 /**
  * One turn of one bot, and the two ways turns are started — an @mention and a
@@ -281,6 +282,8 @@ export interface TurnResult {
     reply: string;
     modelName: string;
     toolsUsed: string[];
+    /** Its sandbox calls, in the order they finished, for the terminal block. */
+    terminal: TerminalEntry[];
     usage: TokenUsage;
     /** Set when the bot asked to pause its step and come back later. */
     wait?: { seconds: number, note: string };
@@ -354,6 +357,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     // than variety; a chat reply can afford more.
     const temperature = assignment ? 0.3 : 0.7;
     const toolsUsed: string[] = [];
+    const terminal: TerminalEntry[] = [];
     // The same call with the same arguments inside one turn is answered from
     // here: models repeat lookups, and the answer has not changed.
     const resultCache = new Map<string, string>();
@@ -376,7 +380,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
         if (waitRequest) {
             return {
                 reply: `⏳ Жду ${waitRequest.seconds} с: ${waitRequest.note}`,
-                modelName: model, toolsUsed, usage, wait: waitRequest
+                modelName: model, toolsUsed, terminal, usage, wait: waitRequest
             };
         }
 
@@ -386,7 +390,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
         usage = addUsage(usage, completion.usage);
 
         if (completion.toolCalls.length === 0 || !offer) {
-            return { reply: replyOrNotice(completion.content), modelName: completion.model, toolsUsed, usage };
+            return { reply: replyOrNotice(completion.content), modelName: completion.model, toolsUsed, terminal, usage };
         }
 
         messages.push({
@@ -442,6 +446,10 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             // A failure is not remembered: the retry the model is invited to
             // make would otherwise get the same error back from the cache.
             if (!failed) resultCache.set(key, result);
+
+            // Sandbox work is shown on the reply as a terminal, failures too.
+            const entry = terminalEntryOf(call.name, args, result, failed);
+            if (entry) terminal.push(entry);
             return { role: 'tool', tool_call_id: call.id, content: result };
         };
 
@@ -455,7 +463,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
         messages.push(...results);
     }
 
-    return { reply: replyOrNotice(null), modelName: model, toolsUsed, usage };
+    return { reply: replyOrNotice(null), modelName: model, toolsUsed, terminal, usage };
 };
 
 export interface TurnSummary {
@@ -479,6 +487,7 @@ export const runAndPostTurn = async (options: TurnOptions): Promise<TurnSummary>
             isAgentReply: true,
             modelName: result.modelName,
             toolsUsed: result.toolsUsed.length ? result.toolsUsed : undefined,
+            terminal: result.terminal.length ? capEntries(result.terminal) : undefined,
             tokensUsed: result.usage.totalTokens || undefined
         });
         return { bot: agent.name, ok: true, result };

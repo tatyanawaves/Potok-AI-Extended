@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentStore } from '../services/runtime/store';
-import { runBotTurn, isDestructiveTool, replyOrNotice, resetToolConnections, probeToolServer } from '../services/runtime/turn';
+import { runBotTurn, runAndPostTurn, isDestructiveTool, replyOrNotice, resetToolConnections, probeToolServer } from '../services/runtime/turn';
 import { setMcpFetch } from '../services/mcp';
 import { isFatalProviderError } from '../services/llm';
 import { interleave, selectTools, EMPTY_SUMMARY } from '../services/memoryCore';
@@ -300,5 +300,44 @@ describe('my bots', () => {
         for (let i = 0; i < MAX_SAVED_BOTS + 5; i++) list = upsertSavedBot(list, toSavedBot({ ...member, name: `Bot${i}` }));
         expect(list).toHaveLength(MAX_SAVED_BOTS);
         expect(list[0].name).toBe(`Bot${MAX_SAVED_BOTS + 4}`);
+    });
+});
+
+describe('the terminal on a reply', () => {
+    it('keeps what the bot ran in its sandbox, and nothing from other tools', async () => {
+        const url = 'https://worker/tools/sandbox?provider=e2b';
+        fakeMcp({
+            [url]: {
+                tools: [{ name: 'sandbox_shell' }, { name: 'get_time' }],
+                call: name => name === 'sandbox_shell' ? 'exit 0\nreport.csv' : '2026-09-25T12:00:00Z'
+            }
+        });
+        fakeModel([
+            { tool_calls: [call('sandbox_shell', { command: 'ls' }), call('get_time', {})] },
+            { content: 'В песочнице лежит report.csv.' }
+        ]);
+        const posted: any[] = [];
+
+        await runAndPostTurn({
+            store: { ...store(), postMessage: async message => { posted.push(message); } },
+            agent: bot([url]), boardId: 'b', channelId: 'c', channelName: 'g', settings
+        });
+
+        expect(posted).toHaveLength(1);
+        expect(posted[0].terminal).toEqual([{ kind: 'shell', input: 'ls', output: 'exit 0\nreport.csv' }]);
+        expect(posted[0].toolsUsed).toEqual(expect.arrayContaining(['sandbox_shell', 'get_time']));
+    });
+
+    it('leaves the field off a reply that ran nothing', async () => {
+        fakeModel([{ content: 'Просто ответ.' }]);
+        const posted: any[] = [];
+
+        await runAndPostTurn({
+            store: { ...store(), postMessage: async message => { posted.push(message); } },
+            agent: bot([]), boardId: 'b', channelId: 'c', channelName: 'g', settings
+        });
+
+        // Firestore rejects a field set to undefined; sendMessage drops it.
+        expect(posted[0].terminal).toBeUndefined();
     });
 });

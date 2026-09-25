@@ -280,6 +280,16 @@ export interface ReadState {
   boards: Record<string, number>;
 }
 
+/** One command, program or file operation in a cloud sandbox, and what it printed. */
+export interface TerminalEntry {
+  kind: 'shell' | 'python' | 'javascript' | 'write_file' | 'read_file';
+  /** The command, the code, or the file's path. */
+  input: string;
+  output: string;
+  /** The sandbox refused or the command failed. */
+  failed?: boolean;
+}
+
 export interface BoardMessage {
   id?: string;
   channelId: string;
@@ -297,6 +307,11 @@ export interface BoardMessage {
   modelName?: string;
   /** Agent-only: MCP tools the bot called while composing this reply. */
   toolsUsed?: string[];
+  /**
+   * What ran in a cloud sandbox for this message — a bot's sandbox calls, or
+   * a person's /sh, /py, /js or ▶ — shown as a terminal (services/terminal.ts).
+   */
+  terminal?: TerminalEntry[];
   /**
    * Agent-only: tokens this reply consumed, from the mentioner's key.
    * Shown on the message so the cost sits where it was incurred.
