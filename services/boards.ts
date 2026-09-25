@@ -1,6 +1,6 @@
 import {
     collection, addDoc, query, where, onSnapshot, limit, orderBy,
-    doc, updateDoc, getDoc, getDocs, deleteDoc, arrayUnion, arrayRemove
+    doc, updateDoc, getDoc, getDocs, deleteDoc, arrayUnion, arrayRemove, runTransaction
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { isBot, parseMentions, botIdsOf, botIdsInSync } from './mentions';
@@ -174,31 +174,54 @@ export const addMember = async (boardId: string, member: Omit<BoardMember, 'adde
 };
 
 /**
- * Changes a bot after it was created: its prompt, its tools.
+ * Changes a bot after it was created: its name, prompt, model and tools.
  *
  * The roster is an array on the board, so the whole array is rewritten with
  * the one member replaced — the security rules let only the owner do that.
+ * In a transaction: rewriting from a copy read earlier dropped whatever
+ * changed in between, e.g. a second tool attached from the advisor a moment
+ * after the first.
  */
 export const updateBot = async (
     boardId: string,
     botId: string,
-    changes: { systemPrompt?: string, toolServerUrls?: string[] }
+    changes: {
+        name?: string,
+        systemPrompt?: string,
+        /** Empty string: back to the model in the user's settings. */
+        model?: string,
+        toolServerUrls?: string[],
+        /** Added to the bot's current servers, as they are at write time. */
+        addToolServerUrls?: string[]
+    }
 ) => {
-    const board = await getBoard(boardId);
-    if (!board) throw new Error('Доска не найдена');
+    const ref = doc(db, 'boards', boardId);
+    await runTransaction(db, async tx => {
+        const snapshot = await tx.get(ref);
+        if (!snapshot.exists()) throw new Error('Доска не найдена');
+        const board = snapshot.data() as Board;
 
-    const members = board.members.map(m => {
-        if (m.id !== botId) return m;
-        const urls = (changes.toolServerUrls ?? toolUrlsOf(m)).map(u => u.trim()).filter(Boolean);
-        const next: any = { ...m, systemPrompt: changes.systemPrompt ?? m.systemPrompt };
-        // One primary URL kept for older clients, the rest alongside.
-        if (urls.length) { next.toolServerUrl = urls[0]; next.toolServerUrls = urls.slice(1); }
-        else { delete next.toolServerUrl; delete next.toolServerUrls; }
-        Object.keys(next).forEach(k => next[k] === undefined && delete next[k]);
-        return next;
+        const name = changes.name?.trim();
+        if (name && board.members.some(m => m.id !== botId && m.name.toLowerCase() === name.toLowerCase())) {
+            throw new Error('Участник с таким именем уже есть — упоминания станут неоднозначными');
+        }
+
+        const members = board.members.map(m => {
+            if (m.id !== botId) return m;
+            const base = changes.toolServerUrls ?? toolUrlsOf(m);
+            const urls = [...new Set([...base, ...(changes.addToolServerUrls || [])].map(u => u.trim()).filter(Boolean))];
+            const next: any = { ...m, systemPrompt: changes.systemPrompt ?? m.systemPrompt };
+            if (name) next.name = name;
+            if (changes.model !== undefined) next.model = changes.model.trim() || undefined;
+            // One primary URL kept for older clients, the rest alongside.
+            if (urls.length) { next.toolServerUrl = urls[0]; next.toolServerUrls = urls.slice(1); }
+            else { delete next.toolServerUrl; delete next.toolServerUrls; }
+            Object.keys(next).forEach(k => next[k] === undefined && delete next[k]);
+            return next;
+        });
+
+        tx.update(ref, { members });
     });
-
-    await updateDoc(doc(db, 'boards', boardId), { members });
 };
 
 const toolUrlsOf = (m: BoardMember): string[] =>

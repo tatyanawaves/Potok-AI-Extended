@@ -24,6 +24,8 @@ import {
     runOrchestration, estimateOrchestrationRequests, MAX_ORCHESTRATED_STEPS, OrchestrationProgress
 } from '../services/orchestrator';
 import { updateBot } from '../services/boards';
+import { mentionableName, freeName } from '../services/mentions';
+import { subscribeToBotLibrary, saveBotToLibrary, removeBotFromLibrary, SavedBot } from '../services/botLibrary';
 import MemoryPanel from './MemoryPanel';
 import CodeSaveDialog from './CodeSaveDialog';
 import ToolAdvisor from './ToolAdvisor';
@@ -98,6 +100,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         | { kind: 'addHuman' }
         | { kind: 'createBot' }
         | { kind: 'cloneAgent' }
+        | { kind: 'library' }
         | { kind: 'discussion' }
         | { kind: 'editBot', botId: string, botName: string }
         | { kind: 'deleteBoard', boardId: string, boardName: string }
@@ -114,6 +117,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [modalInput, setModalInput] = useState('');
     const [botPrompt, setBotPrompt] = useState('');
     const [botToolUrl, setBotToolUrl] = useState('');
+    /** Per-bot model; empty means the one in the user's settings. */
+    const [botModel, setBotModel] = useState('');
+    // "My bots": configurations kept for reuse in any board.
+    const [savedBots, setSavedBots] = useState<SavedBot[]>([]);
+    const [saveToLibrary, setSaveToLibrary] = useState(true);
+    const [notice, setNotice] = useState<string | null>(null);
+    /** Bots the advisor just created, to tick in the open meeting once they appear. */
+    const [autoPick, setAutoPick] = useState<string[]>([]);
     const [pipedreamAccounts, setPipedreamAccounts] = useState<ConnectedAccount[]>([]);
     const [showCatalog, setShowCatalog] = useState(false);
     const [clonable, setClonable] = useState<Array<Record<string, any>>>([]);
@@ -192,6 +203,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setPeople([]);
         setBotPrompt('');
         setBotToolUrl('');
+        setBotModel('');
         setSelectedClone(null);
         setError(null);
         setBotDescription('');
@@ -203,6 +215,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             const bot = activeBoard?.members.find(m => m.id === state.botId);
             setBotPrompt(bot?.systemPrompt || '');
             setBotToolUrl(bot ? toolServersOf(bot).join('\n') : '');
+            setBotModel(bot?.model || '');
             setModalInput(state.botName);
         }
 
@@ -297,6 +310,29 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         if (!currentUid) return;
         return subscribeToSpend(currentUid, setSpend);
     }, [currentUid]);
+
+    useEffect(() => {
+        if (!currentUid) return;
+        return subscribeToBotLibrary(currentUid, setSavedBots);
+    }, [currentUid]);
+
+    useEffect(() => {
+        if (!notice) return;
+        const timer = window.setTimeout(() => setNotice(null), 3500);
+        return () => window.clearTimeout(timer);
+    }, [notice]);
+
+    // A bot created from the advisor during a meeting's setup joins the
+    // meeting: otherwise it sat unticked and the run went on without it.
+    useEffect(() => {
+        if (autoPick.length === 0 || !activeBoard) return;
+        const arrived = activeBoard.members.filter(m => isBot(m) && autoPick.includes(m.name));
+        if (arrived.length === 0) return;
+        if (modal?.kind === 'discussion') {
+            setDiscussionBots(prev => [...prev, ...arrived.map(b => b.id).filter(id => !prev.includes(id))].slice(0, MAX_DISCUSSION_BOTS));
+        }
+        setAutoPick(prev => prev.filter(name => !arrived.some(b => b.name === name)));
+    }, [activeBoard, autoPick, modal]);
 
     // Debounced so typing does not fire a query per keystroke. An empty term
     // lists everyone, which is what makes the picker usable before you type.
@@ -422,23 +458,59 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const nameIsTaken = (name: string): boolean =>
         Boolean(activeBoard?.members.some(m => m.name.toLowerCase() === name.trim().toLowerCase()));
 
-    const handleCreateBot = async (name: string, systemPrompt: string) => {
+    /** A bot name that works as an @mention; see mentionableName. */
+    const botNameOf = (typed: string): string => {
+        const name = mentionableName(typed);
+        if (!name) throw new Error(t.badBotName || 'Имя бота: буквы, цифры, «_» или «-» — по нему бота зовут через @');
+        return name;
+    };
+
+    const handleCreateBot = async (typedName: string, systemPrompt: string) => {
         if (!activeBoardId || !currentUid) return;
+        const name = botNameOf(typedName);
 
         if (nameIsTaken(name)) {
             throw new Error(t.nameTaken || 'Участник с таким именем уже есть — упоминания станут неоднозначными');
         }
 
-        await addBot(activeBoardId, {
+        const bot = {
             name,
             systemPrompt,
+            model: botModel.trim() || undefined,
             ownerId: currentUid,
             toolServerUrls: splitUrls(botToolUrl)
-        });
+        };
+        await addBot(activeBoardId, bot);
+
+        if (saveToLibrary) {
+            await saveBotToLibrary(currentUid, { ...bot, id: '', type: 'bot', role: 'member', addedAt: Date.now() })
+                .catch(e => console.warn('[Bots] Not saved to the library:', e));
+        }
     };
 
-    const handleCloneAgent = async (profile: Record<string, any>, name: string) => {
+    /** Adds a bot from "My bots" to this board, renamed if the name is taken here. */
+    const handleAddSavedBot = async (saved: SavedBot) => {
+        if (!activeBoardId || !activeBoard || !currentUid) return;
+        const name = freeName(saved.name, activeBoard.members.map(m => m.name));
+        await addBot(activeBoardId, {
+            name,
+            systemPrompt: saved.systemPrompt,
+            model: saved.model,
+            ownerId: currentUid,
+            toolServerUrls: saved.toolServerUrls
+        });
+        setNotice(`${t.botAdded || 'Бот добавлен'}: @${name}`);
+    };
+
+    const handleSaveBot = async (member: BoardMember) => {
+        if (!currentUid) return;
+        await saveBotToLibrary(currentUid, member);
+        setNotice(`${t.botSaved || 'Сохранён в «Мои боты»'}: ${member.name}`);
+    };
+
+    const handleCloneAgent = async (profile: Record<string, any>, typedName: string) => {
         if (!activeBoardId || !currentUid) return;
+        const name = botNameOf(typedName);
 
         if (nameIsTaken(name)) {
             throw new Error(t.nameTaken || 'Участник с таким именем уже есть — упоминания станут неоднозначными');
@@ -583,6 +655,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 await handleCreateChannel(modalInput);
             } else if (modal.kind === 'addHuman') {
                 throw new Error(t.pickPerson || 'Выберите человека из списка');
+            } else if (modal.kind === 'library') {
+                closeModal();
+                return;
             } else if (modal.kind === 'createBot') {
                 await handleCreateBot(modalInput, botPrompt);
             } else if (modal.kind === 'cloneAgent') {
@@ -591,7 +666,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             } else if (modal.kind === 'editBot') {
                 if (!activeBoardId) return;
                 await updateBot(activeBoardId, modal.botId, {
+                    name: botNameOf(modalInput),
                     systemPrompt: botPrompt.trim(),
+                    model: botModel,
                     toolServerUrls: splitUrls(botToolUrl)
                 });
             } else if (modal.kind === 'discussion') {
@@ -676,6 +753,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             // is what costs tokens, so the mentioner pays for it.
             setIsAgentThinking(true);
             try {
+                // Tools run freely, but anything that deletes or is marked
+                // unsafe waits for a yes in the approval dialog.
                 await triggerAgentReplies(
                     mentionedNames,
                     currentUid,
@@ -683,7 +762,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                     activeBoard.id!,
                     activeChannel.name,
                     activeBoard.members,
-                    settings
+                    settings,
+                    'auto',
+                    requestToolApproval
                 );
             } finally {
                 setIsAgentThinking(false);
@@ -933,6 +1014,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             <div className="mx-5 mt-3 px-3 py-2 rounded-lg bg-rose-950/30 border border-rose-500/30 text-rose-300 text-xs flex justify-between items-center">
                                 <span>{error}</span>
                                 <button onClick={() => setError(null)} className="text-rose-500 hover:text-rose-300 ml-3">✕</button>
+                            </div>
+                        )}
+                        {notice && (
+                            <div className="mx-5 mt-3 px-3 py-2 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-emerald-300 text-xs">
+                                {notice}
                             </div>
                         )}
 
@@ -1202,6 +1288,15 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                     )}
                                                 </div>
 
+                                                {isBot(member) && (
+                                                    <button
+                                                        onClick={() => handleSaveBot(member).catch(e => setError(e instanceof Error ? e.message : String(e)))}
+                                                        className={`${savedBots.some(b => b.name.toLowerCase() === member.name.toLowerCase()) ? 'text-amber-300/80' : 'text-slate-600 md:opacity-0 md:group-hover:opacity-100'} hover:text-amber-200 transition-opacity shrink-0 mr-2 text-xs`}
+                                                        title={t.saveBotHint || 'Сохранить в «Мои боты» — чтобы добавлять его в другие доски'}
+                                                    >
+                                                        {savedBots.some(b => b.name.toLowerCase() === member.name.toLowerCase()) ? '★' : '☆'}
+                                                    </button>
+                                                )}
                                                 {activeBoard.ownerId === currentUid && isBot(member) && (
                                                     <button
                                                         onClick={() => openModal({ kind: 'editBot', botId: member.id, botName: member.name })}
@@ -1232,6 +1327,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 className="w-full py-2 rounded-lg bg-indigo-900/30 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/50 transition-colors"
                                             >
                                                 + {t.createBot || 'Создать бота'}
+                                            </button>
+                                            <button
+                                                onClick={() => openModal({ kind: 'library' })}
+                                                className="w-full py-2 rounded-lg bg-amber-900/10 text-amber-200/90 border border-amber-500/20 text-[10px] font-mono uppercase tracking-wider hover:bg-amber-900/30 transition-colors"
+                                            >
+                                                + {t.fromMyBots || 'Из моих ботов'}{savedBots.length ? ` (${savedBots.length})` : ''}
                                             </button>
                                             <button
                                                 onClick={() => openModal({ kind: 'cloneAgent' })}
@@ -1334,6 +1435,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                     ownerId={currentUid}
                     settings={settings}
                     onCodeFiles={files => setCodeToSave(files)}
+                    onBotCreated={name => setAutoPick(prev => [...prev, name])}
                     onClose={() => setAdvisorTask(null)}
                 />
             )}
@@ -1407,8 +1509,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             listConnectedAccounts().then(setPipedreamAccounts).catch(() => { });
                         }
                     }}
-                    onPick={modal?.kind === 'createBot' ? (slug) => {
-                        setBotToolUrl(toolServerUrlFor(slug));
+                    onPick={(modal?.kind === 'createBot' || modal?.kind === 'editBot') ? (slug) => {
+                        // Added to the servers already chosen, not in place of them.
+                        setBotToolUrl(prev => [...new Set([...splitUrls(prev), toolServerUrlFor(slug)])].join('\n'));
                         setShowCatalog(false);
                     } : undefined}
                 />
@@ -1427,6 +1530,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {modal.kind === 'addHuman' && (t.addHuman || 'Добавить человека')}
                             {modal.kind === 'createBot' && <>{t.createBot || 'Создать бота'} <Hint id="bots" always /></>}
                             {modal.kind === 'cloneAgent' && (t.cloneAgent || 'Бот из персоны')}
+                            {modal.kind === 'library' && (t.myBots || 'Мои боты')}
                             {modal.kind === 'discussion' && <>{t.discussion || 'Совещание ботов'} <Hint id="meeting" always /></>}
                             {modal.kind === 'editBot' && `${t.editBot || 'Изменить бота'} · ${modal.botName}`}
                             {modal.kind === 'deleteBoard' && (t.deleteBoard || 'Удалить доску')}
@@ -1437,15 +1541,64 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {modal.kind === 'createBoard' && (t.boardNameHint || 'Название нового пространства')}
                             {modal.kind === 'createChannel' && (t.channelNameHint || 'Название канала внутри доски')}
                             {modal.kind === 'addHuman' && (t.memberPickHint || 'Найдите человека в Потоке и добавьте в доску')}
-                            {modal.kind === 'createBot' && (t.botHint || 'Бот живёт только в этой доске и отвечает на @имя. Токены тратит тот, кто его упомянул.')}
+                            {modal.kind === 'createBot' && (t.botHint || 'Бот отвечает на @имя. Токены тратит тот, кто его упомянул. Сохранённого в «Мои боты» можно добавить в любую свою доску.')}
+                            {modal.kind === 'library' && (t.myBotsHint || 'Боты, сохранённые для повторного использования: промпт, модель и инструменты. Токены инструментов не сохраняются — они остаются в настройках этого браузера.')}
                             {modal.kind === 'cloneAgent' && (t.cloneHint || 'Копия чужой персоны в вашей доске. Автору это ничего не стоит — платит тот, кто упомянул бота.')}
                             {modal.kind === 'discussion' && (meetingMode === 'orchestrator'
                                 ? (t.orchestratorHint || 'Оркестратор составит план, раздаст шаги подходящим ботам, после каждого шага проверит прогресс и закончит, когда задача выполнена. В конце — итог и степень выполнения.')
                                 : (t.discussionHint || 'Боты выскажутся по очереди, по кругу. Каждый ход — один запрос к модели с вашего ключа.'))}
-                            {modal.kind === 'editBot' && (t.editBotHint || 'Промпт и инструменты можно менять в любой момент — бот подхватит их со следующего ответа.')}
+                            {modal.kind === 'editBot' && (t.editBotHint || 'Имя, промпт, модель и инструменты можно менять в любой момент — бот подхватит их со следующего ответа.')}
                             {modal.kind === 'deleteBoard' && `«${modal.boardName}» — ${t.boardDeleteConfirm || 'доска, каналы и все сообщения будут удалены безвозвратно.'}`}
                             {modal.kind === 'deleteChannel' && `#${modal.channelName} — ${t.channelDeleteConfirm || 'все сообщения и вложения канала будут удалены безвозвратно, у всех участников доски.'}`}
                         </p>
+
+                        {modal.kind === 'library' && (
+                            <div className="mb-4 max-h-72 overflow-y-auto space-y-1 border border-slate-800 rounded-lg p-2">
+                                {savedBots.length === 0 ? (
+                                    <p className="text-[11px] text-slate-600 p-3 text-center leading-relaxed">
+                                        {t.noSavedBots || 'Пока пусто. Нажмите ☆ у бота в списке участников или оставьте галочку «Сохранить в мои боты» при создании.'}
+                                    </p>
+                                ) : savedBots.map(saved => (
+                                    <div key={saved.id} className="px-3 py-2 rounded-md border border-slate-800 bg-slate-950/40">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="text-sm text-indigo-200 truncate">@{saved.name}</span>
+                                            <span className="flex gap-1 shrink-0">
+                                                <button
+                                                    type="button"
+                                                    disabled={isSubmitting}
+                                                    onClick={async () => {
+                                                        setIsSubmitting(true);
+                                                        setError(null);
+                                                        try { await handleAddSavedBot(saved); }
+                                                        catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+                                                        finally { setIsSubmitting(false); }
+                                                    }}
+                                                    className="px-2 py-1 rounded border border-emerald-500/40 text-emerald-300 text-[10px] font-mono uppercase disabled:opacity-40"
+                                                >
+                                                    {t.add || 'Добавить'}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => currentUid && removeBotFromLibrary(currentUid, saved.id)
+                                                        .catch(e => setError(e instanceof Error ? e.message : String(e)))}
+                                                    className="px-1.5 py-1 rounded border border-slate-700 text-slate-500 hover:text-rose-300 text-[10px]"
+                                                    title={t.removeFromMyBots || 'Убрать из «Моих ботов»'}
+                                                >
+                                                    ✕
+                                                </button>
+                                            </span>
+                                        </div>
+                                        <p className="text-[10px] text-slate-500 line-clamp-2 mt-1">{saved.systemPrompt || (t.emptyPrompt || 'Промпт не задан')}</p>
+                                        {(saved.model || saved.toolServerUrls.length > 0) && (
+                                            <p className="text-[9px] font-mono text-emerald-500/70 truncate mt-0.5">
+                                                {saved.model ? `◈ ${saved.model} ` : ''}
+                                                {saved.toolServerUrls.length ? `⚒ ${saved.toolServerUrls.map(u => { try { return new URL(u).hostname; } catch { return u; } }).join(', ')}` : ''}
+                                            </p>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
 
                         {modal.kind === 'cloneAgent' && (
                             <div className="mb-4 max-h-44 overflow-y-auto space-y-1 border border-slate-800 rounded-lg p-2">
@@ -1734,7 +1887,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             </div>
                         )}
 
-                        {!isDestructiveModal(modal) && modal.kind !== 'discussion' && modal.kind !== 'addHuman' && modal.kind !== 'editBot' && (
+                        {!isDestructiveModal(modal) && modal.kind !== 'discussion' && modal.kind !== 'addHuman' && modal.kind !== 'library' && (
                             <input
                                 ref={modalInputRef}
                                 autoFocus={modal.kind !== 'cloneAgent'}
@@ -1744,7 +1897,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 placeholder={
                                     modal.kind === 'addHuman' ? 'Neo'
                                         : modal.kind === 'createChannel' ? 'general'
-                                            : modal.kind === 'createBot' ? (t.botNamePlaceholder || 'Аналитик')
+                                            : (modal.kind === 'createBot' || modal.kind === 'editBot') ? (t.botNamePlaceholder || 'Аналитик')
                                                 : modal.kind === 'cloneAgent' ? (t.botNameInBoard || 'Имя в доске')
                                                     : ''
                                 }
@@ -1761,6 +1914,13 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-4 font-mono"
                                 />
 
+                                <input
+                                    type="text"
+                                    value={botModel}
+                                    onChange={(e) => setBotModel(e.target.value)}
+                                    placeholder={`${t.botModelPlaceholder || 'Модель (необязательно), по умолчанию'}: ${settings.openRouterModel || 'из настроек'}`}
+                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs font-mono mb-3"
+                                />
                                 <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
                                     {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'} <Hint id="oauth-connectors" always /> <Hint id="mcp" />
                                 </label>
@@ -1860,6 +2020,17 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         )}
                                     </div>
                                 )}
+                                {modal.kind === 'createBot' && (
+                                    <label className="flex items-center gap-2 mb-3 text-[10px] text-amber-200/80 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={saveToLibrary}
+                                            onChange={(e) => setSaveToLibrary(e.target.checked)}
+                                            className="accent-amber-500"
+                                        />
+                                        ☆ {t.alsoSaveToMyBots || 'Сохранить и в «Мои боты» — для других досок'}
+                                    </label>
+                                )}
                                 <p className="text-[10px] text-slate-600 mb-4 leading-relaxed">
                                     {t.toolServerHint || 'По одному адресу на строку. Подойдёт сервер, разрешающий запросы из браузера (CORS): mcp.deepwiki.com, mcp.linear.app, api.githubcopilot.com/mcp. Локальные серверы и Docker-контейнеры (браузер, файлы, код) подключаются через мост: npm run bridge — см. docs/agents.md.'}
                                 </p>
@@ -1882,6 +2053,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 {error}
                             </div>
                         )}
+                        {notice && modal.kind === 'library' && (
+                            <div className="mb-4 px-3 py-2 rounded-lg bg-emerald-950/30 border border-emerald-500/30 text-emerald-300 text-xs">
+                                {notice}
+                            </div>
+                        )}
 
                         <div className="flex space-x-3">
                             <button
@@ -1889,9 +2065,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 onClick={closeModal}
                                 className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
                             >
-                                {t.cancel || 'Отмена'}
+                                {modal.kind === 'library' ? (t.close || 'Закрыть') : (t.cancel || 'Отмена')}
                             </button>
-                            {modal.kind !== 'addHuman' && (
+                            {modal.kind !== 'addHuman' && modal.kind !== 'library' && (
                             <button
                                 type="submit"
                                 disabled={

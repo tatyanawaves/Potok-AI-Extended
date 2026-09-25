@@ -133,8 +133,10 @@ const completion = (body) => {
 
     // Offered tools and none used yet: call one, like a real model would.
     if (body.tools?.length && toolResults.length === 0) {
-        // An external tool if the bot has one, otherwise the memory tool.
-        const external = body.tools.find(t => !t.function.name.startsWith('memory_'));
+        // An external tool if the bot has one, otherwise the memory tool. The
+        // built-in pause is not one: taking it for one sent every step of a
+        // test meeting into a minute-long wait.
+        const external = body.tools.find(t => !t.function.name.startsWith('memory_') && t.function.name !== 'wait_and_resume');
         const wantsMemory = /запомни|remember/i.test(all);
         if (!external && !wantsMemory) {
             const reply = `[mock] ${(system.match(/You are "([^"]+)"/) || [])[1] || 'бот'} · без инструментов · отвечаю на: «${text(lastUser).slice(0, 80)}»`;

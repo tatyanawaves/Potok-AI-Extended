@@ -60,7 +60,8 @@ Two scripts bring it up to date. Both need admin credentials
 
 For production, in this order:
 
-1. deploy the app;
+1. deploy the app (merging to `main` does it, through
+   `.github/workflows/deploy.yml`, once its deploy key is set);
 2. `node scripts/migrate-rules-data.mjs --confirm`;
 3. `firebase deploy --only firestore:rules --project neon-extended`;
 4. `node scripts/migrate-comments.mjs --confirm`.

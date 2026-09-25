@@ -3,7 +3,7 @@ import { addUsage, EMPTY_USAGE } from '../usage';
 import { connect, callTool, toOpenAITools, McpConnection, McpTool } from '../mcp';
 import { complete, ChatMessage, isFatalProviderError, modelOf, extractJson } from '../llm';
 import { memoryBlock, selectTools, clip } from '../memoryCore';
-import { isBot } from '../mentions';
+import { isBot, mentionableName } from '../mentions';
 import { AgentStore } from './store';
 import { loadTurnMemory, fileNote, findNotes } from './memory';
 
@@ -17,7 +17,13 @@ import { loadTurnMemory, fileNote, findNotes } from './memory';
  * out of tool rounds.
  */
 
-const MAX_REPLY_LENGTH = 1500;
+/**
+ * Longest reply posted. It used to be 1500 characters, which silently cut
+ * code, tables and reports in half — the step "succeeded" and the orchestrator
+ * built on the stump. A message this long is still far from Firestore's limit.
+ */
+const MAX_REPLY_LENGTH = 8000;
+const TRUNCATION_NOTE = '\n\n…(ответ обрезан — попросите бота продолжить)';
 /** Tool output is untrusted and can be huge; cap what reaches the model. */
 const MAX_TOOL_RESULT_LENGTH = 6000;
 
@@ -36,19 +42,77 @@ export type ToolApprover = (botName: string, toolName: string, args: Record<stri
 
 // --- Tool servers ---------------------------------------------------------------
 
-/** Handshakes are reused per URL — listing tools on every turn is wasteful. */
+/**
+ * Handshakes are reused — listing tools on every turn is wasteful — but per
+ * URL *and* token. Keyed by URL alone, a server task in the worker reused
+ * another user's session (and their tool list) on the same shared address,
+ * such as the OAuth proxy, and a browser kept the previous account's session
+ * after signing in as someone else.
+ */
 const connectionCache = new Map<string, McpConnection>();
+const MAX_CACHED_CONNECTIONS = 64;
+const cacheKey = (url: string, token: string | undefined, scope: string | undefined) =>
+    `${url}\u0000${scope || ''}\u0000${token || ''}`;
+
+const forgetConnections = (url: string): void => {
+    for (const key of [...connectionCache.keys()]) {
+        if (key.startsWith(`${url}\u0000`)) connectionCache.delete(key);
+    }
+};
 
 const connectToToolServer = async (url: string, store: AgentStore): Promise<McpConnection> => {
-    const cached = connectionCache.get(url);
+    const token = await store.toolToken(url);
+    const key = cacheKey(url, token, store.scope);
+    const cached = connectionCache.get(key);
     if (cached) return cached;
-    const connection = await connect(url, await store.toolToken(url));
-    connectionCache.set(url, connection);
+    const connection = await connect(url, token);
+    // Tokens that rotate (Firebase ID tokens do, hourly) leave old entries behind.
+    if (connectionCache.size >= MAX_CACHED_CONNECTIONS) connectionCache.clear();
+    connectionCache.set(key, connection);
     return connection;
 };
 
 /** Drops cached handshakes, e.g. after a token changes. */
 export const resetToolConnections = (): void => connectionCache.clear();
+
+/**
+ * A server that forgot our session answers 404 to it (some say 400 "no valid
+ * session"); the MCP spec says to start a new one. Without this every call
+ * failed until the page reloaded. Only protocol-level refusals count — the
+ * tool never ran, so calling it again is safe. An error from the tool itself
+ * (no "MCP tools/call:" prefix) is never retried: it may have done something.
+ */
+const sessionLost = (connection: McpConnection, error: unknown): boolean =>
+    Boolean(connection.sessionId)
+    && /^MCP tools\/call: (HTTP 404\b|.*session)/i.test(error instanceof Error ? error.message : String(error));
+
+const callWithReconnect = async (
+    connection: McpConnection, name: string, args: Record<string, any>, store: AgentStore
+): Promise<string> => {
+    try {
+        return await callTool(connection, name, args, await store.toolToken(connection.url));
+    } catch (error) {
+        if (!sessionLost(connection, error)) throw error;
+        forgetConnections(connection.url);
+        const fresh = await connectToToolServer(connection.url, store);
+        return callTool(fresh, name, args, await store.toolToken(fresh.url));
+    }
+};
+
+/**
+ * Tools that can destroy something. MCP servers may say so themselves
+ * (`destructiveHint`); most do not, so the name is read too. Asked about even
+ * under the "auto" policy when someone is there to answer — an @mention has
+ * no policy picker, and deleting a service should not hang on a guess.
+ */
+const DESTRUCTIVE_WORDS = new Set(['delete', 'remove', 'destroy', 'drop', 'purge', 'wipe', 'erase', 'terminate', 'truncate', 'unsafe', 'kill', 'revoke']);
+
+export const isDestructiveTool = (tool: McpTool): boolean => {
+    if (tool.annotations?.destructiveHint === true) return true;
+    if (tool.annotations?.readOnlyHint === true) return false;
+    const words = tool.name.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase().split(/[^a-z]+/);
+    return words.some(w => DESTRUCTIVE_WORDS.has(w));
+};
 
 /** Every tool server a bot is configured with. */
 export const toolServersOf = (agent: BoardMember): string[] =>
@@ -58,7 +122,7 @@ export const toolServersOf = (agent: BoardMember): string[] =>
 
 /** Connects afresh and lists what a server offers. */
 export const probeToolServer = async (url: string, store: AgentStore): Promise<McpTool[]> => {
-    connectionCache.delete(url);
+    forgetConnections(url);
     return (await connectToToolServer(url, store)).tools;
 };
 
@@ -128,7 +192,7 @@ export interface Assignment {
      * Results of the steps this one depends on. Passed explicitly: with steps
      * running in parallel they may no longer sit in the last few messages.
      */
-    inputs?: Array<{ bot: string, result: string }>;
+    inputs?: Array<{ bot: string, result: string, failed?: boolean }>;
 }
 
 export const buildSystemPrompt = (
@@ -158,7 +222,9 @@ You can also save lasting facts with memory_remember and look them up with memor
     const { discussion, assignment } = options;
     if (assignment) {
         const inputs = assignment.inputs?.length
-            ? `\nRESULTS YOU BUILD ON:\n${assignment.inputs.map(i => `— ${i.bot}: ${i.result}`).join('\n')}`
+            ? `\nRESULTS YOU BUILD ON:\n${assignment.inputs.map(i => i.failed
+                ? `— ${i.bot}: (this step FAILED: ${i.result}) — do not invent its data; work with what you have and say what is missing`
+                : `— ${i.bot}: ${i.result}`).join('\n')}`
             : '';
         parts.push(`ORCHESTRATED TASK — step ${assignment.step} of ${assignment.totalSteps}.
 Overall goal: ${assignment.goal}
@@ -183,9 +249,10 @@ ${isLast
 /** The bot's text, or a visible note that there was none. */
 export const replyOrNotice = (content: string | null | undefined): string => {
     const text = (content || '').trim();
-    return text
-        ? text.substring(0, MAX_REPLY_LENGTH)
-        : '⚠️ Модель вернула пустой ответ. Попробуйте ещё раз или выберите другую модель в настройках.';
+    if (!text) return '⚠️ Модель вернула пустой ответ. Попробуйте ещё раз или выберите другую модель в настройках.';
+    return text.length <= MAX_REPLY_LENGTH
+        ? text
+        : text.substring(0, MAX_REPLY_LENGTH - TRUNCATION_NOTE.length) + TRUNCATION_NOTE;
 };
 
 // --- One turn -------------------------------------------------------------------
@@ -201,6 +268,11 @@ export interface TurnOptions {
     assignment?: Assignment;
     toolPolicy?: ToolPolicy;
     approveTool?: ToolApprover;
+    /**
+     * Under "auto", still ask before a destructive tool when approveTool is
+     * given. Set for @mentions, which have no policy picker.
+     */
+    confirmDestructive?: boolean;
     onToolCall?: (toolName: string) => void;
     signal?: AbortSignal;
 }
@@ -217,35 +289,49 @@ export interface TurnResult {
 export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     const {
         store, agent, boardId, channelId, channelName, settings,
-        discussion, assignment, toolPolicy = 'auto', approveTool, onToolCall, signal
+        discussion, assignment, toolPolicy = 'auto', approveTool, confirmDestructive, onToolCall, signal
     } = options;
 
     const focus = assignment?.instruction || discussion?.task || '';
     const memory = await loadTurnMemory(store, settings, boardId, channelId, focus);
 
-    // Connect every server; a dead one must not silence the bot.
+    // Connect every server; a dead one must not silence the bot. Servers are
+    // reached in parallel: one slow handshake used to delay the whole turn.
     const toolOwner = new Map<string, McpConnection>();
-    const available: McpTool[] = assignment ? [...BUILTIN_TOOLS, WAIT_TOOL] : [...BUILTIN_TOOLS];
+    const builtins: McpTool[] = assignment ? [...BUILTIN_TOOLS, WAIT_TOOL] : [...BUILTIN_TOOLS];
+    const external: McpTool[] = [];
+    const serverOf = new Map<McpTool, string>();
     const notes: string[] = [];
 
     if (toolPolicy !== 'off') {
-        for (const url of toolServersOf(agent)) {
-            try {
-                const connection = await connectToToolServer(url, store);
-                for (const tool of connection.tools) {
+        const urls = toolServersOf(agent);
+        const connections = await Promise.allSettled(urls.map(url => connectToToolServer(url, store)));
+        connections.forEach((outcome, i) => {
+            if (outcome.status === 'fulfilled') {
+                for (const tool of outcome.value.tools) {
                     if (toolOwner.has(tool.name) || isBuiltin(tool.name)) continue;
-                    toolOwner.set(tool.name, connection);
-                    available.push(tool);
+                    toolOwner.set(tool.name, outcome.value);
+                    serverOf.set(tool, urls[i]);
+                    external.push(tool);
                 }
-            } catch (error) {
-                let host = url;
-                try { host = new URL(url).host; } catch { /* keep the raw url */ }
-                notes.push(`Tool server ${host} is unavailable (${error instanceof Error ? error.message : String(error)}). Say so if the task needs it.`);
+            } else {
+                let host = urls[i];
+                try { host = new URL(urls[i]).host; } catch { /* keep the raw url */ }
+                const reason = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+                notes.push(`Tool server ${host} is unavailable (${reason}). Say so if the task needs it.`);
             }
-        }
+        });
     }
 
-    const offered = selectTools(available, `${focus} ${memory.latest?.content || ''}`);
+    // The built-in tools are always offered: capped together with the rest,
+    // they were the first to go on a bot with many tools, and a step lost
+    // wait_and_resume exactly when it had the slow jobs that need it. The cap
+    // shares the remaining slots between servers instead of filling them from
+    // the first one.
+    const offered = [
+        ...builtins,
+        ...selectTools(external, `${focus} ${memory.latest?.content || ''}`, undefined, t => serverOf.get(t) || '')
+    ];
     const tools = toOpenAITools(offered);
 
     const system = buildSystemPrompt(agent, channelName, memoryBlock(memory.summary, memory.notes), {
@@ -264,6 +350,9 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     }
 
     const model = agent.model || modelOf(settings);
+    // A step of a task needs exact tool arguments and a faithful result more
+    // than variety; a chat reply can afford more.
+    const temperature = assignment ? 0.3 : 0.7;
     const toolsUsed: string[] = [];
     // The same call with the same arguments inside one turn is answered from
     // here: models repeat lookups, and the answer has not changed.
@@ -293,7 +382,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
 
         // Final round without tools, so the model has to answer in prose.
         const offer = round < MAX_TOOL_ROUNDS ? tools : undefined;
-        const completion = await complete({ messages, tools: offer, model, temperature: 0.8, signal }, settings);
+        const completion = await complete({ messages, tools: offer, model, temperature, signal }, settings);
         usage = addUsage(usage, completion.usage);
 
         if (completion.toolCalls.length === 0 || !offer) {
@@ -320,6 +409,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             if (resultCache.has(key)) return { role: 'tool', tool_call_id: call.id, content: resultCache.get(key)! };
 
             let result: string;
+            let failed = false;
             try {
                 if (call.name === WAIT_TOOL.name) {
                     const seconds = Math.min(MAX_WAIT_SECONDS, Math.max(MIN_WAIT_SECONDS, Number(args.seconds) || 60));
@@ -329,24 +419,29 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
                     result = await runBuiltin(call.name, args);
                 } else {
                     const connection = toolOwner.get(call.name);
-                    if (!connection) {
-                        result = `Error: no tool named ${call.name}. Available: ${offered.map(t => t.name).join(', ')}`;
-                    } else {
-                        if (toolPolicy === 'ask' && approveTool && !(await approveTool(agent.name, call.name, args))) {
-                            return { role: 'tool', tool_call_id: call.id, content: 'The operator declined this tool call. Continue without it and say so.' };
-                        }
-                        onToolCall?.(call.name);
-                        result = await callTool(connection, call.name, args, await store.toolToken(connection.url));
+                    const tool = external.find(t => t.name === call.name);
+                    if (!connection || !tool) {
+                        // Not recorded as used: the bot only imagined it.
+                        return { role: 'tool', tool_call_id: call.id, content: `Error: no tool named ${call.name}. Available: ${offered.map(t => t.name).join(', ')}` };
                     }
+                    const mustAsk = toolPolicy === 'ask' || (confirmDestructive && isDestructiveTool(tool));
+                    if (mustAsk && approveTool && !(await approveTool(agent.name, call.name, args))) {
+                        return { role: 'tool', tool_call_id: call.id, content: 'The operator declined this tool call. Continue without it and say so.' };
+                    }
+                    onToolCall?.(call.name);
+                    result = await callWithReconnect(connection, call.name, args, store);
                 }
                 if (!toolsUsed.includes(call.name)) toolsUsed.push(call.name);
             } catch (error) {
                 // Returned to the model, not thrown: it can retry or explain.
                 result = `Error: ${error instanceof Error ? error.message : String(error)}`;
+                failed = true;
             }
 
             result = clip(result, MAX_TOOL_RESULT_LENGTH);
-            resultCache.set(key, result);
+            // A failure is not remembered: the retry the model is invited to
+            // make would otherwise get the same error back from the cache.
+            if (!failed) resultCache.set(key, result);
             return { role: 'tool', tool_call_id: call.id, content: result };
         };
 
@@ -416,6 +511,7 @@ export interface MentionOptions {
     settings: AISettings;
     toolPolicy?: ToolPolicy;
     approveTool?: ToolApprover;
+    confirmDestructive?: boolean;
 }
 
 /** Answers every bot a message mentions, in order, each seeing the previous reply. */
@@ -510,7 +606,7 @@ Respond ONLY in JSON: {"name": "...", "systemPrompt": "...", "toolHint": "..."}`
     if (!data?.systemPrompt) throw new Error('Модель не вернула описание бота — попробуйте ещё раз');
 
     return {
-        name: String(data.name || 'Bot').replace(/[^\p{L}\p{N}_-]/gu, '').slice(0, 24) || 'Bot',
+        name: mentionableName(String(data.name || 'Bot')) || 'Bot',
         systemPrompt: String(data.systemPrompt).trim(),
         toolHint: String(data.toolHint || '').trim()
     };

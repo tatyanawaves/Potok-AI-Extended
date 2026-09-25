@@ -34,6 +34,8 @@ const PIPEDREAM_WORKER_URL: string = (import.meta.env.VITE_PIPEDREAM_WORKER_URL 
 
 /** The store bound to one user's settings (their tool tokens). */
 export const firestoreStore = (settings: AISettings): AgentStore => ({
+    scope: auth.currentUser?.uid,
+
     async getSummary(boardId, channelId) {
         const snap = await getDoc(summaryRef(boardId, channelId));
         return snap.exists() ? { ...EMPTY_SUMMARY, ...(snap.data() as ChannelSummary) } : EMPTY_SUMMARY;

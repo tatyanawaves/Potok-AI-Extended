@@ -1,0 +1,59 @@
+name: Deploy
+
+# The app is served from Firebase Hosting only: https://neon-extended.web.app.
+# Every push to main is tested, built and put live there.
+#
+# Inert until a key is added: repository Settings → Secrets and variables →
+# Actions → secret FIREBASE_SERVICE_ACCOUNT_NEON_EXTENDED, holding the JSON key
+# of a service account with the "Firebase Hosting Admin" role (Firebase
+# console → Project settings → Service accounts → Generate new private key).
+# `firebase init hosting:github` creates the same secret.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Deploys run one after another; a newer one never cancels a deploy midway.
+concurrency:
+  group: deploy-hosting
+  cancel-in-progress: false
+
+jobs:
+  hosting:
+    name: Firebase Hosting
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_NEON_EXTENDED != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      # The worker address is public — it ships in the bundle — so a default
+      # is kept here; a repository variable of the same name overrides it.
+      - name: Build
+        run: npm run build
+        env:
+          VITE_PIPEDREAM_WORKER_URL: ${{ vars.VITE_PIPEDREAM_WORKER_URL || 'https://potok-pipedream.potok.workers.dev' }}
+
+      - name: Deploy to neon-extended.web.app
+        if: env.HAS_KEY == 'true'
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_NEON_EXTENDED }}
+          projectId: neon-extended
+          channelId: live
+
+      - name: No deploy key yet
+        if: env.HAS_KEY != 'true'
+        run: echo "::notice::Built, not deployed — add the FIREBASE_SERVICE_ACCOUNT_NEON_EXTENDED secret to deploy (see the top of deploy.yml)."

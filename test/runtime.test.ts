@@ -64,7 +64,8 @@ describe('plan dependencies', () => {
             { stepId: 1, bot: 'A', instruction: '', result: 'r1', ok: true },
             { stepId: 2, bot: 'B', instruction: '', result: 'failed', ok: false }
         ];
-        expect(inputsFor(step, log)).toEqual([{ bot: 'A', result: 'r1' }]);
+        // A failed dependency is passed on as a failure, not silently dropped.
+        expect(inputsFor(step, log)).toEqual([{ bot: 'A', result: 'r1' }, { bot: 'B', result: 'failed', failed: true }]);
         expect(appendStep([step], { bot: 'A', instruction: 'more' }, new Set([1, 3])).at(-1))
             .toEqual({ id: 4, bot: 'A', instruction: 'more', after: [1, 3] });
     });

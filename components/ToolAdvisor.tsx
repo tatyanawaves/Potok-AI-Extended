@@ -3,6 +3,7 @@ import { AISettings, BoardMember } from '../types';
 import { translations } from '../translations';
 import { addBot, updateBot } from '../services/boards';
 import { designBot, toolServersOf } from '../services/boardAgent';
+import { freeName } from '../services/mentions';
 import { startAccountConnection } from '../services/pipedream';
 import { collectCandidates, startOAuthConnection, ToolCandidate } from '../services/connectors';
 import { adviseTools, generateMcpServer, Suggestion } from '../services/runtime/advisor';
@@ -21,10 +22,17 @@ interface ToolAdvisorProps {
     ownerId: string;
     settings: AISettings;
     onCodeFiles: (files: CodeFile[]) => void;
+    /** A bot the advisor created, so an open meeting can include it. */
+    onBotCreated?: (name: string) => void;
     onClose: () => void;
 }
 
-const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId, settings, onCodeFiles, onClose }) => {
+/** A readable name for a tool server; a malformed URL must not break the advice. */
+const hostOf = (url: string): string => {
+    try { return new URL(url).host; } catch { return url; }
+};
+
+const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId, settings, onCodeFiles, onBotCreated, onClose }) => {
     const t = translations[settings.language] as any;
     const [candidates, setCandidates] = useState<ToolCandidate[]>([]);
     const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
@@ -38,11 +46,18 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
                 const found = await collectCandidates(task);
                 setCandidates(found);
                 const byUrl = new Map(found.map(c => [c.url, c.name]));
-                setSuggestions(await adviseTools(task, bots.map(b => ({
+                const advice = await adviseTools(task, bots.map(b => ({
                     name: b.name,
                     persona: b.systemPrompt || '',
-                    tools: toolServersOf(b).map(u => byUrl.get(u) || new URL(u).host)
-                })), found, settings));
+                    tools: toolServersOf(b).map(u => byUrl.get(u) || hostOf(u))
+                })), found, settings);
+                // Advice to attach what a bot already has is noise.
+                setSuggestions(advice.filter(s => {
+                    if (s.type !== 'attach') return true;
+                    const bot = bots.find(b => b.name === s.bot);
+                    const url = found.find(c => c.id === s.toolId)?.url;
+                    return !(bot && url && toolServersOf(bot).includes(url));
+                }));
             } catch (e) {
                 setError(e instanceof Error ? e.message : String(e));
             }
@@ -73,12 +88,6 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
         } finally {
             setBusy(null);
         }
-    };
-
-    const freeName = (name: string) => {
-        let candidateName = name, n = 2;
-        while (bots.some(b => b.name.toLowerCase() === candidateName.toLowerCase())) candidateName = `${name}${n++}`;
-        return candidateName;
     };
 
     const card = 'p-3 rounded-lg border border-slate-800 bg-slate-950/50 space-y-2';
@@ -121,7 +130,9 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
                                     )}
                                     <button className={`${btn} border-emerald-500/40 text-emerald-300`} disabled={busy !== null}
                                         onClick={() => act(i, async () => {
-                                            await updateBot(boardId, bot.id, { toolServerUrls: [...toolServersOf(bot), c.url] });
+                                            // Merged at write time: this bot's list may have changed
+                                            // since the advice was drawn up.
+                                            await updateBot(boardId, bot.id, { addToolServerUrls: [c.url] });
                                             return `Добавлено боту ${bot.name}`;
                                         })}>
                                         {t.add || 'Добавить'}
@@ -147,11 +158,12 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
                                     <button className={`${btn} border-indigo-500/40 text-indigo-200`} disabled={busy !== null}
                                         onClick={() => act(i, async () => {
                                             const design = await designBot(s.description, settings);
-                                            const name = freeName(design.name);
+                                            const name = freeName(design.name, bots.map(b => b.name));
                                             await addBot(boardId, {
                                                 name, systemPrompt: design.systemPrompt, ownerId,
                                                 toolServerUrls: tools.map(c => c.url)
                                             });
+                                            onBotCreated?.(name);
                                             return `Бот @${name} создан`;
                                         })}>
                                         {t.createBot || 'Создать бота'}
