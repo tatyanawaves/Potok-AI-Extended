@@ -9,6 +9,9 @@
  *
  * The project is "demo-potok": a demo project id makes the emulators refuse
  * to touch any real Firebase service, so tests cannot reach production.
+ *
+ * With `--exec "<command>"` it starts Firestore alone, runs the command
+ * against it and stops (the security rules tests, `npm run test:rules`).
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -82,10 +85,19 @@ if (javaHome) {
     console.log(`Using Java from ${javaHome}`);
 }
 
-const child = spawn(
-    'firebase',
-    ['emulators:start', '--only', 'auth,firestore', '--project', 'demo-potok'],
-    { stdio: 'inherit', env, shell: isWindows }
-);
+const execIndex = process.argv.indexOf('--exec');
+const execCommand = execIndex !== -1 ? process.argv[execIndex + 1] : null;
+
+if (execIndex !== -1 && !execCommand) {
+    console.error('Error: --exec requires a command.');
+    process.exit(1);
+}
+
+const args = execCommand
+    // Through cmd.exe on Windows the command has to be quoted to stay one argument.
+    ? ['emulators:exec', '--only', 'firestore', '--project', 'demo-potok', isWindows ? JSON.stringify(execCommand) : execCommand]
+    : ['emulators:start', '--only', 'auth,firestore', '--project', 'demo-potok'];
+
+const child = spawn('firebase', args, { stdio: 'inherit', env, shell: isWindows });
 
 child.on('exit', code => process.exit(code ?? 0));

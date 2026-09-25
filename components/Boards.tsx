@@ -12,7 +12,7 @@ import { auth, getClonableAgentProfiles, searchProfiles } from '../services/fire
 import { onAuthStateChanged } from 'firebase/auth';
 import {
     createBoard, subscribeToMyBoards, deleteBoard,
-    addMember, addBot, removeMember,
+    addMember, addBot, removeMember, syncBotIds,
     createChannel, subscribeToChannels, deleteChannel,
     subscribeToMessages, sendMessage, deleteMessage, parseMentions, isBot
 } from '../services/boards';
@@ -264,6 +264,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         if (!currentUid) return;
         return subscribeToMyBoards(currentUid, setBoards);
     }, [currentUid]);
+
+    // An owner's boards whose botIds lag the roster are fixed on sight, or no
+    // member could post their bots' replies. Writes nothing once they match.
+    useEffect(() => {
+        if (!currentUid) return;
+        boards.forEach(board => syncBotIds(board, currentUid)
+            .catch(error => console.error('[Boards] Could not sync bot ids:', error)));
+    }, [boards, currentUid]);
 
     useEffect(() => {
         if (!activeBoardId) {

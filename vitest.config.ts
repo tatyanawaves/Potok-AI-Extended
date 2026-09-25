@@ -1,10 +1,12 @@
 import path from 'path';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
     test: {
         environment: 'node',
         include: ['test/**/*.test.ts'],
+        // The security rules suite needs the Firestore emulator: npm run test:rules.
+        exclude: [...configDefaults.exclude, 'test/rules/**'],
         // The app's modules initialise Firebase at import time, which cannot
         // run here; suites that touch them mock ./services/firebase.
         setupFiles: [],

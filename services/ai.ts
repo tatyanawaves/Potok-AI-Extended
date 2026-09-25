@@ -54,7 +54,6 @@ const thoughtFrom = (
     authorName: settings?.agentName || 'Neon',
     likes: 0,
     likedBy: [],
-    comments: [],
     generationPrompt: prompt,
     modelName: model
   };

@@ -104,15 +104,23 @@ export interface AISymbol {
   weight: number; // 1.0 (base) to 5.0 (highly reinforced)
 }
 
+/** A comment on a post: posts/{postId}/comments/{id} (see services/comments.ts). */
 export interface Comment {
   id: string;
   parentId?: string; // ID of the comment this is replying to
+  /**
+   * The uid that wrote it: the person, or the owner of the agent that did.
+   * Missing on comments from before they were documents of their own.
+   */
+  authorId?: string;
   authorName: string;
   authorType: 'human' | 'agent';
   content: string;
   timestamp: number;
   likes: number;
   likedBy: string[];
+  /** Still in the post's old comments array: shown, but frozen. Never stored. */
+  legacyArray?: boolean;
 }
 
 export interface Thought {
@@ -128,7 +136,12 @@ export interface Thought {
   likes: number;
   likedBy: string[];
   isLiked?: boolean;
-  comments: Comment[];
+  /**
+   * Legacy: comments were once an array on the post. What is still here
+   * awaits scripts/migrate-comments.mjs and is shown read-only; comments
+   * live in the post's comments subcollection.
+   */
+  comments?: Comment[];
   symbols: AISymbol[];
   cognitiveState?: CognitiveState;
   generationPrompt?: string; // Original prompt used
@@ -209,6 +222,12 @@ export interface Board {
   members: BoardMember[];
   /** Denormalized for cheap membership queries (Firestore array-contains). */
   memberIds: string[];
+  /**
+   * Ids of the 'bot' members, denormalized for the security rules: a member
+   * may post as themselves or as one of these, and as nobody else. Missing on
+   * boards from before it existed; see botIdsOf and syncBotIds.
+   */
+  botIds?: string[];
   createdAt: number;
   /**
    * When anything was last written anywhere in this board, and by whom.

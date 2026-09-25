@@ -3,7 +3,7 @@ import {
     doc, updateDoc, getDoc, getDocs, deleteDoc, arrayUnion, arrayRemove, runTransaction
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { isBot, parseMentions } from './mentions';
+import { isBot, parseMentions, botIdsOf, botIdsInSync } from './mentions';
 import { deleteAttachments } from './attachments';
 import { Board, BoardChannel, BoardMember, BoardMessage } from '../types';
 
@@ -163,9 +163,13 @@ export const addMember = async (boardId: string, member: Omit<BoardMember, 'adde
         return acc;
     }, {});
 
+    // The rules let members post under a bot's id only once it is listed here.
+    const botIds = botIdsOf([fullMember]);
+
     await updateDoc(doc(db, 'boards', boardId), {
         members: arrayUnion(cleanMember),
-        memberIds: arrayUnion(member.id)
+        memberIds: arrayUnion(member.id),
+        ...(botIds.length ? { botIds: arrayUnion(...botIds) } : {})
     });
 };
 
@@ -236,8 +240,23 @@ export const removeMember = async (boardId: string, memberId: string) => {
 
     await updateDoc(doc(db, 'boards', boardId), {
         members: board.members.filter(m => m.id !== memberId),
-        memberIds: arrayRemove(memberId)
+        memberIds: arrayRemove(memberId),
+        botIds: arrayRemove(memberId)
     });
+};
+
+/**
+ * Rewrites a board's botIds from its roster, if they differ.
+ *
+ * Boards from before botIds existed lack it, and a bot added from a tab still
+ * running older code is missing from it; either way no member could post that
+ * bot's replies. Only the owner may write the field, so this is a no-op for
+ * everyone else — scripts/migrate-rules-data.mjs covers boards whose owner
+ * does not come back.
+ */
+export const syncBotIds = async (board: Board, uid: string) => {
+    if (!board.id || board.ownerId !== uid || botIdsInSync(board)) return;
+    await updateDoc(doc(db, 'boards', board.id), { botIds: botIdsOf(board.members) });
 };
 
 // --- Channels ---

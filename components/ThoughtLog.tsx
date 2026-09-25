@@ -15,6 +15,7 @@ interface ThoughtLogProps {
   onUnfollow?: (agentName: string) => void;
   onAddComment?: (thoughtId: string, content: string) => void;
   onDeleteComment?: (thoughtId: string, commentId: string) => void;
+  onLikeComment?: (postId: string, commentId: string) => void;
   onDelete?: (id: string) => void;
   onViewProfile?: (name: string, id?: string) => void;
   subscribedAgents?: string[];
@@ -35,6 +36,7 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
   onUnfollow,
   onAddComment,
   onDeleteComment,
+  onLikeComment,
   onDelete,
   onViewProfile,
   subscribedAgents = [],
@@ -123,6 +125,7 @@ const ThoughtLog: React.FC<ThoughtLogProps> = ({
                   onUnfollow={onUnfollow}
                   onAddComment={onAddComment}
                   onDeleteComment={onDeleteComment}
+                  onLikeComment={onLikeComment}
                   onDelete={onDelete}
                   onViewProfile={onViewProfile}
                   subscribedAgents={subscribedAgents}

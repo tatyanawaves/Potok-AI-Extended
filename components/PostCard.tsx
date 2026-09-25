@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Thought, Comment } from '../types';
 import { translations } from '../translations';
 import { auth } from '../services/firebase';
+import { canDeleteComment, mergeLegacyComments } from '../services/comments';
+import { usePostComments } from '../hooks/usePostComments';
 import { ForwardButton, ForwardedLabel } from './Forward';
 
 interface PostCardProps {
@@ -59,24 +61,27 @@ interface CommentItemProps {
     comment: Comment;
     allComments: Comment[];
     language: string;
-    agentName: string;
+    /** The post's author, who may delete any comment under it. */
+    postAuthorId?: string;
     onAddComment?: (thoughtId: string, content: string, parentId?: string) => void;
     onDeleteComment?: (thoughtId: string, commentId: string) => void;
+    onLikeComment?: (postId: string, commentId: string) => void;
     onViewProfile?: (name: string, id?: string) => void;
     thoughtId: string;
     depth?: number;
 }
 
-const CommentItem: React.FC<CommentItemProps> = ({ 
-    comment, 
-    allComments, 
-    language, 
-    agentName, 
-    onAddComment, 
-    onDeleteComment, 
-    onViewProfile, 
+const CommentItem: React.FC<CommentItemProps> = ({
+    comment,
+    allComments,
+    language,
+    postAuthorId,
+    onAddComment,
+    onDeleteComment,
+    onLikeComment,
+    onViewProfile,
     thoughtId,
-    depth = 0 
+    depth = 0
 }) => {
     const [isExpanded, setIsExpanded] = useState(depth < 2); // Auto-expand first levels
     const [isReplying, setIsReplying] = useState(false);
@@ -86,6 +91,11 @@ const CommentItem: React.FC<CommentItemProps> = ({
 
     const replies = allComments.filter(c => c.parentId === comment.id);
     const hasReplies = replies.length > 0;
+
+    const uid = auth.currentUser?.uid;
+    const isLiked = Boolean(uid && comment.likedBy?.includes(uid));
+    // Matched on uid, as the rules do: a shared display name is not ownership.
+    const canDelete = canDeleteComment(comment, postAuthorId, uid);
 
     const handleReply = async () => {
         if (!replyContent.trim() || !onAddComment) return;
@@ -109,8 +119,8 @@ const CommentItem: React.FC<CommentItemProps> = ({
                 )}
                 
                 {/* Mini Avatar */}
-                <div 
-                    onClick={() => onViewProfile && onViewProfile(comment.authorName)}
+                <div
+                    onClick={() => onViewProfile && onViewProfile(comment.authorName, comment.authorId)}
                     className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white uppercase cursor-pointer transition-transform hover:scale-110 shadow-sm ${comment.authorType === 'human' ? 'bg-gradient-to-br from-indigo-500 to-purple-600' : 'bg-gradient-to-br from-cyan-500 to-indigo-600'}`}
                 >
                     {comment.authorName.substring(0, 1)}
@@ -122,7 +132,7 @@ const CommentItem: React.FC<CommentItemProps> = ({
                             <div className="flex items-center space-x-2">
                                 <span 
                                     className={`text-[10px] font-bold cursor-pointer hover:underline ${comment.authorType === 'human' ? 'text-indigo-300' : 'text-cyan-300'}`}
-                                    onClick={() => onViewProfile && onViewProfile(comment.authorName)}
+                                    onClick={() => onViewProfile && onViewProfile(comment.authorName, comment.authorId)}
                                 >
                                     {comment.authorName}
                                 </span>
@@ -138,7 +148,21 @@ const CommentItem: React.FC<CommentItemProps> = ({
                     </div>
                     
                     <div className="flex items-center space-x-4 mt-1 ml-2 opacity-60 group-hover/comment:opacity-100 transition-opacity">
-                        <button 
+                        {/* Comments still in a post's old array are frozen until migrated. */}
+                        {onLikeComment && !comment.legacyArray && (
+                            <button
+                                onClick={() => onLikeComment(thoughtId, comment.id)}
+                                disabled={!uid}
+                                className={`flex items-center space-x-1 text-[9px] font-bold transition-colors ${isLiked ? 'text-rose-500' : 'text-slate-500 hover:text-rose-400'}`}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className={`h-3 w-3 ${isLiked ? 'fill-current' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                                </svg>
+                                {comment.likes > 0 && <span>{comment.likes}</span>}
+                            </button>
+                        )}
+
+                        <button
                             onClick={() => setIsReplying(!isReplying)}
                             className="text-[9px] font-bold text-slate-500 hover:text-cyan-400 uppercase tracking-wider transition-colors"
                         >
@@ -176,7 +200,7 @@ const CommentItem: React.FC<CommentItemProps> = ({
                             })}
                         />
 
-                        {onDeleteComment && (comment.authorName === agentName || comment.authorName === 'Neo' || comment.authorType === 'human') && (
+                        {onDeleteComment && canDelete && (
                             <button
                                 onClick={() => onDeleteComment(thoughtId, comment.id)}
                                 className="p-1 text-slate-600 hover:text-rose-500 transition-all"
@@ -219,9 +243,10 @@ const CommentItem: React.FC<CommentItemProps> = ({
                             comment={reply} 
                             allComments={allComments}
                             language={language}
-                            agentName={agentName}
+                            postAuthorId={postAuthorId}
                             onAddComment={onAddComment}
                             onDeleteComment={onDeleteComment}
+                            onLikeComment={onLikeComment}
                             onViewProfile={onViewProfile}
                             thoughtId={thoughtId}
                             depth={depth + 1}
@@ -237,7 +262,6 @@ const PostCard: React.FC<PostCardProps> = ({
     thought,
     language,
     agentName,
-    userType,
     onLike,
     onFollow,
     onUnfollow,
@@ -255,7 +279,20 @@ const PostCard: React.FC<PostCardProps> = ({
     const [visibleComments, setVisibleComments] = useState(3);
     const [isSubmittingComment, setIsSubmittingComment] = useState(false);
     const [showMetaModal, setShowMetaModal] = useState(false);
-    const [showComments, setShowComments] = useState(thought.comments && thought.comments.length > 0);
+
+    const cardRef = useRef<HTMLDivElement>(null);
+    const storedComments = usePostComments(thought.id, cardRef);
+    const comments = useMemo(
+        () => mergeLegacyComments(thought.comments, storedComments || []),
+        [thought.comments, storedComments]
+    );
+    // Replies whose parent was deleted are shown at the top level.
+    const rootComments = comments.filter(c => !c.parentId || !comments.some(pc => pc.id === c.parentId));
+
+    // Open when there is something to read. The comments arrive after the
+    // card does, so this follows them until the user opens or closes it.
+    const [showCommentsChoice, setShowComments] = useState<boolean | null>(null);
+    const showComments = showCommentsChoice ?? comments.length > 0;
 
     const handleComment = async () => {
         if (!commentInput.trim() || commentInput.length > 500) return;
@@ -269,12 +306,6 @@ const PostCard: React.FC<PostCardProps> = ({
             } finally {
                 setIsSubmittingComment(false);
             }
-        }
-    };
-
-    const handleDeleteComment = (commentId: string) => {
-        if (onDeleteComment) {
-            onDeleteComment(thought.id, commentId);
         }
     };
 
@@ -304,7 +335,7 @@ const PostCard: React.FC<PostCardProps> = ({
     const styleClass = getTypeStyle ? getTypeStyle(thought.type) : defaultGetTypeStyle(thought.type);
 
     return (
-        <div className={`group mb-4 rounded-2xl border ${thought.authorType === 'human' ? 'border-slate-800 bg-slate-900/40' : styleClass} overflow-hidden transition-all duration-500 animate-[fadeIn_0.5s_ease-out]`}>
+        <div ref={cardRef} className={`group mb-4 rounded-2xl border ${thought.authorType === 'human' ? 'border-slate-800 bg-slate-900/40' : styleClass} overflow-hidden transition-all duration-500 animate-[fadeIn_0.5s_ease-out]`}>
             {/* Post Header */}
             <div className="flex justify-between items-center p-4 pb-2">
                 <div className="flex items-center space-x-3">
@@ -345,8 +376,9 @@ const PostCard: React.FC<PostCardProps> = ({
                         </button>
                     )}
 
-                    {/* Delete button (only for author) */}
-                    {(thought.authorId === auth.currentUser?.uid || (thought.authorName === agentName && thought.authorType === userType)) && (
+                    {/* Delete button (only for author). Matched on uid alone, as
+                        the rules do: a shared display name is not ownership. */}
+                    {thought.authorId && thought.authorId === auth.currentUser?.uid && (
                         <button
                             onClick={() => onDelete && onDelete(thought.id!)}
                             className="p-1.5 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
@@ -427,8 +459,9 @@ const PostCard: React.FC<PostCardProps> = ({
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                         </svg>
-                        <span className="text-xs font-bold">{thought.comments?.length || 0}</span>
-                        {thought.comments && thought.comments.length > 0 && (
+                        {/* Blank rather than a wrong 0 while they load. */}
+                        <span className="text-xs font-bold">{storedComments === null && comments.length === 0 ? '' : comments.length}</span>
+                        {comments.length > 0 && (
                             <svg 
                                 xmlns="http://www.w3.org/2000/svg" 
                                 className={`h-3 w-3 transition-transform duration-300 ${showComments ? 'rotate-180' : ''}`} 
@@ -477,19 +510,18 @@ const PostCard: React.FC<PostCardProps> = ({
                 <div className="bg-slate-950/40 border-t border-white/5 px-4 py-2 space-y-1 animate-[fadeIn_0.2s_ease-out]">
                     {/* Filter root comments */}
                     <div className="space-y-0.5">
-                        {thought.comments && thought.comments
-                            .filter(c => !c.parentId || !thought.comments.find(pc => pc.id === c.parentId))
-                            .sort((a, b) => a.timestamp - b.timestamp)
+                        {rootComments
                             .slice(0, visibleComments)
                             .map(comment => (
-                                <CommentItem 
-                                    key={comment.id} 
-                                    comment={comment} 
-                                    allComments={thought.comments}
+                                <CommentItem
+                                    key={comment.id}
+                                    comment={comment}
+                                    allComments={comments}
                                     language={language}
-                                    agentName={agentName}
+                                    postAuthorId={thought.authorId}
                                     onAddComment={onAddComment}
                                     onDeleteComment={onDeleteComment}
+                                    onLikeComment={onLikeComment}
                                     onViewProfile={onViewProfile}
                                     thoughtId={thought.id}
                                 />
@@ -497,12 +529,12 @@ const PostCard: React.FC<PostCardProps> = ({
                     </div>
 
                     {/* Pagination Button */}
-                    {thought.comments && thought.comments.filter(c => !c.parentId).length > visibleComments && (
-                        <button 
+                    {rootComments.length > visibleComments && (
+                        <button
                             onClick={() => setVisibleComments(prev => prev + 5)}
                             className="text-[10px] text-slate-500 hover:text-cyan-400 font-mono w-full text-center py-2 transition-colors"
                         >
-                            + {thought.comments.filter(c => !c.parentId).length - visibleComments} more threads
+                            + {rootComments.length - visibleComments} more threads
                         </button>
                     )}
 

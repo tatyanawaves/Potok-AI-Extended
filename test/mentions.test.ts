@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseMentions, isBot } from '../services/mentions';
+import { parseMentions, isBot, botIdsOf, botIdsInSync } from '../services/mentions';
 
 describe('parseMentions', () => {
     it('finds a Latin name', () => {
@@ -56,5 +56,41 @@ describe('isBot', () => {
 
     it('rejects humans', () => {
         expect(isBot(member('human'))).toBe(false);
+    });
+});
+
+describe('botIdsOf', () => {
+    const member = (id: string, type: string) => ({ id, type } as any);
+
+    it('lists bots once each', () => {
+        expect(botIdsOf([member('b1', 'bot'), member('b2', 'bot'), member('b1', 'bot')])).toEqual(['b1', 'b2']);
+    });
+
+    it('leaves out humans and legacy agents', () => {
+        // A legacy 'agent' member's id is a real account's uid. The rules let
+        // any member post under an id in botIds, so listing it would let them
+        // post as that person.
+        expect(botIdsOf([member('u1', 'human'), member('u2', 'agent'), member('b1', 'bot')])).toEqual(['b1']);
+    });
+});
+
+describe('botIdsInSync', () => {
+    const members = [{ id: 'owner', type: 'human' }, { id: 'b1', type: 'bot' }, { id: 'b2', type: 'bot' }] as any[];
+
+    it('accepts the same ids in any order', () => {
+        expect(botIdsInSync({ members, botIds: ['b2', 'b1'] })).toBe(true);
+    });
+
+    it('flags a board from before botIds existed', () => {
+        expect(botIdsInSync({ members })).toBe(false);
+    });
+
+    it('flags a bot missing from the list, or one that was removed', () => {
+        expect(botIdsInSync({ members, botIds: ['b1'] })).toBe(false);
+        expect(botIdsInSync({ members, botIds: ['b1', 'b2', 'gone'] })).toBe(false);
+    });
+
+    it('accepts an empty list on a board without bots', () => {
+        expect(botIdsInSync({ members: [members[0]], botIds: [] })).toBe(true);
     });
 });

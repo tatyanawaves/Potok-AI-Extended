@@ -7,12 +7,113 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // POSTS:
+    // POSTS: world-readable, owned by the uid that wrote them.
+    //
+    // Posts written before authorId existed carry only a display name, which
+    // is not unique, so they have no owner here: nobody can edit or delete
+    // them from the app. Removing one is left to the console.
+
+    function isPostAuthor() {
+      return isSignedIn() && resource.data.get('authorId', null) == request.auth.uid;
+    }
+
+    /** What liking a post changes. */
+    function onlyLikes() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['likes', 'likedBy']);
+    }
+
+    /**
+     * Posts once carried their comments as one array, rewritten whole to
+     * like or delete one, so no rule could tell whose comment changed. They
+     * are documents of their own now (below). What is left in an array waits
+     * for scripts/migrate-comments.mjs, which runs as admin, and is frozen
+     * until then — for the post's author too: the app still shows it, and
+     * whoever can write it can put words in other people's mouths.
+     */
+    function leavesLegacyCommentsAlone() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['comments']);
+    }
+
+    function postAuthorOf(postId) {
+      return get(/databases/$(database)/documents/posts/$(postId)).data.get('authorId', null);
+    }
+
+    /**
+     * A comment exactly as addComment writes it (services/comments.ts): under
+     * the caller's uid, unliked, on a post that exists.
+     */
+    function isNewComment(postId) {
+      let comment = request.resource.data;
+      return comment.keys().hasOnly(['authorId', 'authorName', 'authorType', 'content',
+                                     'timestamp', 'likes', 'likedBy', 'parentId'])
+          && comment.authorId == request.auth.uid
+          && comment.authorName is string && comment.authorName.size() > 0 && comment.authorName.size() <= 100
+          && comment.authorType in ['human', 'agent']
+          // MAX_COMMENT_LENGTH in services/comments.ts.
+          && comment.content is string && comment.content.size() > 0 && comment.content.size() <= 4000
+          && comment.timestamp is number
+          && comment.likes == 0 && comment.likedBy == []
+          && (!('parentId' in comment) || comment.parentId is string)
+          && exists(/databases/$(database)/documents/posts/$(postId));
+    }
+
+    /**
+     * A like or an unlike by the caller, and nothing else: their own uid put
+     * into likedBy or taken out, and the count moved by one the same way.
+     * Tolerates the fields missing, as on comments migrated from the array.
+     */
+    function togglesOwnLike() {
+      let me = request.auth.uid;
+      let before = resource.data.get('likedBy', []);
+      let after = request.resource.data.get('likedBy', []);
+      let delta = request.resource.data.get('likes', 0) - resource.data.get('likes', 0);
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'likedBy'])
+          && ((!(me in before) && delta == 1
+                && after.size() == before.size() + 1
+                && after.toSet() == before.toSet().union([me].toSet()))
+              || (me in before && delta == -1
+                && after.size() == before.size() - 1
+                && after.toSet() == before.toSet().difference([me].toSet())));
+    }
+
     match /posts/{postId} {
       allow read: if true;
-      allow create: if isSignedIn();
-      allow update: if isSignedIn(); 
-      allow delete: if isSignedIn() && (resource.data.authorId == request.auth.uid || resource.data.authorName == request.auth.token.name);
+
+      // Under your own uid only — otherwise the update rule below could be
+      // sidestepped by writing a fresh post in someone else's name. An empty
+      // comments array is still let through for clients from before.
+      allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid
+                    && request.resource.data.get('comments', []).size() == 0;
+
+      // The author edits their post but cannot hand it to someone else.
+      // Everyone else may like it, and change nothing else.
+      allow update: if (isPostAuthor()
+                        && request.resource.data.authorId == resource.data.authorId
+                        && leavesLegacyCommentsAlone())
+                    || (isSignedIn() && onlyLikes());
+
+      // By uid only: two people may share a display name.
+      allow delete: if isPostAuthor();
+
+      // COMMENTS: world-readable like the post. Anyone signed in comments as
+      // themselves — an agent's comment under the uid of whoever runs it.
+      match /comments/{commentId} {
+        allow read: if true;
+
+        allow create: if isSignedIn() && isNewComment(postId);
+
+        // Nobody edits a comment; anyone may like or unlike it in their own
+        // name only.
+        allow update: if isSignedIn() && togglesOwnLike();
+
+        // Its author, or the post's author moderating their thread. By uid,
+        // so a comment from before authorId existed is the post author's
+        // alone to remove.
+        allow delete: if isSignedIn()
+                      && (resource.data.get('authorId', null) == request.auth.uid
+                          || postAuthorOf(postId) == request.auth.uid);
+      }
     }
 
     // USERS:
@@ -193,12 +294,20 @@ service cloud.firestore {
                       || (isBoardMember(boardId) && onlyStampsLastMessage());
 
         // MESSAGES: board members can read and post. A member may only post as
-        // themselves or on behalf of an agent that belongs to the same board.
+        // themselves or on behalf of a bot that belongs to the same board.
+        //
+        // A bot's reply is written by whoever invoked it (their browser, or the
+        // worker with their token), so its author is legitimately not the
+        // caller. The board's botIds list says which ids those are. The app
+        // puts only generated bot ids there, never a person's uid (botIdsOf in
+        // services/mentions.ts), and only the board owner can change it. A
+        // board without the list has no bots anyone may post as.
         match /messages/{messageId} {
           allow read: if isBoardMember(boardId);
 
           allow create: if isBoardMember(boardId)
-                        && request.resource.data.authorId in boardData(boardId).memberIds;
+                        && (request.resource.data.authorId == request.auth.uid
+                            || request.resource.data.authorId in boardData(boardId).get('botIds', []));
 
           allow update: if false; // Messages are immutable
 

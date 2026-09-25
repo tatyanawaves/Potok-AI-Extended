@@ -14,7 +14,7 @@ import { ForwardProvider } from './components/Forward';
 import { LearningProvider, useLearning, Hint } from './components/Learning';
 import { finishOpenRouterLogin } from './services/openrouterAuth';
 import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
-import { Thought, SavedSession, AISettings, CognitiveState, Comment } from './types';
+import { Thought, SavedSession, AISettings, CognitiveState } from './types';
 import { translations } from './translations';
 import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink } from './services/llm';
 import { recordSpend } from './services/spend';
@@ -419,32 +419,23 @@ const App: React.FC = () => {
     }
   };
 
+  // Comments are shown by each PostCard's own listener on the post's comments
+  // subcollection, in the feed and on profiles alike. Firestore reports a
+  // local write to that listener at once, so none of these handlers has to
+  // patch a copy of the post by hand.
   const handleAddComment = async (thoughtId: string, content: string, parentId?: string) => {
     console.log("Adding comment to:", thoughtId, content, "Parent:", parentId);
     try {
       const isAgentCommand = content.trim().startsWith('*');
       const cleanContent = isAgentCommand ? content.trim().substring(1).trim() : content;
       const authorName = settings.agentName || 'Neo';
-      const commentId = crypto.randomUUID();
 
-      // A new comment starts unliked. addComment defaults these too, but
-      // stating them here is what makes this a complete Comment rather than a
-      // partial one that only happens to work.
-      const newComment: Comment = {
-        id: commentId,
+      const command = await addComment(thoughtId, {
         authorName: authorName,
         authorType: settings.userType,
         content: isAgentCommand ? `AI, ${cleanContent}` : content,
-        timestamp: Date.now(),
-        likes: 0,
-        likedBy: []
-      };
-
-      if (parentId) {
-        newComment.parentId = parentId;
-      }
-
-      await addComment(thoughtId, newComment);
+        parentId
+      });
       console.log("Comment added successfully");
 
       // If it's an agent command, trigger AI response as a reply to this comment
@@ -471,13 +462,12 @@ const App: React.FC = () => {
                   aiResponseContent = `~${authorName}: ${aiResponseContent}`;
                 }
 
+                // Under the commenter's own uid, like any comment they make.
                 await addComment(thoughtId, {
-                  id: crypto.randomUUID(),
-                  parentId: commentId, // REPLY TO THE COMMAND
-                  authorName: settings.agentName,
+                  parentId: command.id, // REPLY TO THE COMMAND
+                  authorName: authorName,
                   authorType: 'agent',
-                  content: aiResponseContent,
-                  timestamp: Date.now()
+                  content: aiResponseContent
                 });
               }
             } catch (err) {
@@ -485,19 +475,6 @@ const App: React.FC = () => {
             }
           }, 1500);
         }
-      }
-
-      // Optimistic UI update for viewedUserPosts
-      if (location.pathname.startsWith('/user')) {
-        setViewedUserPosts(prev => prev.map(p => {
-          if (p.id === thoughtId) {
-            return {
-              ...p,
-              comments: [...(p.comments || []), newComment]
-            };
-          }
-          return p;
-        }));
       }
     } catch (error: any) {
       console.error("Error adding comment:", error);
@@ -509,19 +486,6 @@ const App: React.FC = () => {
     console.log("Deleting comment:", commentId, "from post:", postId);
     try {
       await deleteComment(postId, commentId);
-
-      // Optimistic UI update for viewedUserPosts (not real-time like feed)
-      if (location.pathname.startsWith('/user')) {
-        setViewedUserPosts(prev => prev.map(p => {
-          if (p.id === postId) {
-            return {
-              ...p,
-              comments: (p.comments || []).filter(c => c.id !== commentId)
-            };
-          }
-          return p;
-        }));
-      }
     } catch (error: any) {
       console.error("Error deleting comment:", error);
       alert("Ошибка при удалении комментария: " + error.message);
@@ -533,29 +497,6 @@ const App: React.FC = () => {
     
     try {
       await toggleCommentLike(postId, commentId, auth.currentUser.uid);
-      
-      // Optimistic UI update for viewedUserPosts
-      if (location.pathname.startsWith('/user')) {
-        setViewedUserPosts(prev => prev.map(p => {
-          if (p.id === postId) {
-            return {
-              ...p,
-              comments: (p.comments || []).map(c => {
-                if (c.id === commentId) {
-                  const isLiked = c.likedBy?.includes(auth.currentUser!.uid);
-                  return {
-                    ...c,
-                    likes: (c.likes || 0) + (isLiked ? -1 : 1),
-                    likedBy: isLiked ? c.likedBy.filter(id => id !== auth.currentUser!.uid) : [...(c.likedBy || []), auth.currentUser!.uid]
-                  };
-                }
-                return c;
-              })
-            };
-          }
-          return p;
-        }));
-      }
     } catch (err) {
       console.error("Failed to like comment:", err);
     }
@@ -569,6 +510,7 @@ const App: React.FC = () => {
       const commentContent = await completeText(commentPrompt, settingsRef.current, { maxTokens: 200 });
 
       if (commentContent) {
+        // Under this user's uid: the agent runs in their browser, on their key.
         await addComment(thoughtId, {
           content: commentContent,
           authorName: settingsRef.current.agentName || 'Agent',
@@ -1424,6 +1366,7 @@ const App: React.FC = () => {
                   onUnfollow={handleUnfollow}
                   onAddComment={handleAddComment}
                   onDeleteComment={handleDeleteComment}
+                  onLikeComment={handleLikeComment}
                   onDelete={handleDeletePost}
                   onViewProfile={handleViewProfile}
                   subscribedAgents={subscribedAgents}
@@ -1459,6 +1402,7 @@ const App: React.FC = () => {
               onUnfollow={handleUnfollow}
               onAddComment={handleAddComment}
               onDeleteComment={handleDeleteComment}
+              onLikeComment={handleLikeComment}
               onDelete={handleDeletePost}
               onViewProfile={handleViewProfile}
               onBack={() => navigate('/feed')}
@@ -1590,6 +1534,7 @@ const App: React.FC = () => {
                 onUnfollow={handleUnfollow}
                 onAddComment={handleAddComment}
                 onDeleteComment={handleDeleteComment}
+                onLikeComment={handleLikeComment}
                 onDelete={handleDeletePost}
                 onViewProfile={handleViewProfile}
                 onBack={() => {
