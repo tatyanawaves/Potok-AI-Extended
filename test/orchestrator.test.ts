@@ -40,8 +40,23 @@ describe('parsePlan', () => {
             ]
         });
         const parsed = parsePlan(raw, 'task', roster, 2);
-        expect(parsed.steps.map(st => [st.id, st.bot, st.instruction])).toEqual([[1, 'Analyst', 'one'], [2, 'Critic', 'three']]);
+        // Over the limit the last step — the one that assembles the deliverable — is kept.
+        expect(parsed.steps.map(st => [st.id, st.bot, st.instruction])).toEqual([[1, 'Analyst', 'one'], [2, 'Analyst', 'four']]);
         expect(parsed.criteria).toEqual(['c1']);
+    });
+
+    it('keeps the final step when the plan is too long, and lets it combine what is left', () => {
+        const raw = JSON.stringify({
+            steps: [
+                { bot: 'Analyst', instruction: 'a', after: [] },
+                { bot: 'Critic', instruction: 'b', after: [] },
+                { bot: 'Analyst', instruction: 'c', after: [] },
+                { bot: 'Critic', instruction: 'report', after: [3] }
+            ]
+        });
+        const parsed = parsePlan(raw, 'task', roster, 3);
+        expect(parsed.steps.map(st => st.instruction)).toEqual(['a', 'b', 'report']);
+        expect(parsed.steps[2].after).toEqual([1, 2]);
     });
 
     it('falls back to giving every bot the task', () => {

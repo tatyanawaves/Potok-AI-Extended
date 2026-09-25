@@ -246,17 +246,38 @@ export const MAX_OFFERED_TOOLS = 12;
  * often expose dozens — a Pipedream app alone can bring forty, several
  * thousand tokens of schema per request, most of it irrelevant. Past the cap,
  * the tools whose name and description best match the request are kept.
+ *
+ * Tool descriptions are mostly English and requests often are not, so the
+ * match can come up nearly empty. The free slots are then shared between the
+ * tools' groups (`groupOf`, e.g. the server they come from) in turn — filled
+ * in list order, a bot with three servers only ever saw the first one.
  */
 export const selectTools = <T extends { name: string, description?: string }>(
     tools: T[],
     query: string,
-    max = MAX_OFFERED_TOOLS
+    max = MAX_OFFERED_TOOLS,
+    groupOf?: (tool: T) => string
 ): T[] => {
     if (tools.length <= max) return tools;
     const ranked = rankByRelevance(query, tools, t => `${t.name.replace(/[_-]/g, ' ')} ${t.description || ''}`, max);
-    // Fill up with the rest in original order when the query matched few.
     const rest = tools.filter(t => !ranked.includes(t));
-    return [...ranked, ...rest].slice(0, max);
+    return [...ranked, ...(groupOf ? interleave(rest, groupOf) : rest)].slice(0, max);
+};
+
+/** Round-robin over groups, keeping the order within each group. */
+export const interleave = <T>(items: T[], groupOf: (item: T) => string): T[] => {
+    const groups = new Map<string, T[]>();
+    for (const item of items) {
+        const key = groupOf(item);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(item);
+    }
+    const queues = [...groups.values()];
+    const out: T[] = [];
+    for (let i = 0; out.length < items.length; i++) {
+        for (const queue of queues) if (i < queue.length) out.push(queue[i]);
+    }
+    return out;
 };
 
 // --- Semantic retrieval -----------------------------------------------------------

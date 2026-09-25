@@ -121,7 +121,9 @@ export const openRuntime = async (
     const store = restAgentStore(rest, {
         // The Pipedream bridge takes the user's ID token; other servers the
         // token the user saved for them.
-        toolToken: async url => url.startsWith(params.selfOrigin) ? tokens.get() : secrets.mcpTokens?.[url]
+        toolToken: async url => url.startsWith(params.selfOrigin) ? tokens.get() : secrets.mcpTokens?.[url],
+        // Tasks of different people run side by side in one isolate.
+        scope: params.author.id
     });
 
     const settings: AISettings = {

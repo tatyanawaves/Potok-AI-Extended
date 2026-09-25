@@ -190,7 +190,10 @@ export const iterate = async (
     try {
         const checked = await complete({
             messages: [{ role: 'user', content: evaluationPrompt(next.plan, log, remaining, next.roster) }],
-            temperature: 0.1, json: true, maxTokens: 400, model: bookkeeping(ctx.settings)
+            // Room for the JSON and a redirect instruction; reasoning models
+            // spend part of the budget before answering, and a cut-off JSON
+            // meant no check at all.
+            temperature: 0.1, json: true, maxTokens: 900, model: bookkeeping(ctx.settings)
         }, ctx.settings);
         const evaluation = parseEvaluation(checked.content, next.plan, next.roster);
         next = { ...next, evaluation };
@@ -209,7 +212,7 @@ export const finishRun = async (ctx: TaskContext, state: RunState): Promise<Fina
     try {
         const final = await complete({
             messages: [{ role: 'user', content: finalPrompt(state.plan, state.log) }],
-            temperature: 0.3, json: true, maxTokens: 1200, model: bookkeeping(ctx.settings)
+            temperature: 0.3, json: true, maxTokens: 4000, model: bookkeeping(ctx.settings)
         }, ctx.settings);
         report = parseFinal(final.content, state.plan, state.evaluation, state.log);
     } catch {

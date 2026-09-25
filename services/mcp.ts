@@ -20,6 +20,8 @@ export interface McpTool {
     name: string;
     description?: string;
     inputSchema: Record<string, any>;
+    /** Hints a server may give about a tool; see isDestructiveTool. */
+    annotations?: { readOnlyHint?: boolean, destructiveHint?: boolean, title?: string };
 }
 
 export interface McpConnection {
