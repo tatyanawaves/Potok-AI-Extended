@@ -136,7 +136,10 @@ const completion = (body) => {
         // An external tool if the bot has one, otherwise the memory tool. The
         // built-in pause is not one: taking it for one sent every step of a
         // test meeting into a minute-long wait.
-        const external = body.tools.find(t => !t.function.name.startsWith('memory_') && t.function.name !== 'wait_and_resume');
+        const externals = body.tools.filter(t => !t.function.name.startsWith('memory_') && t.function.name !== 'wait_and_resume');
+        // Asked for a shell, a sandbox bot runs a command; otherwise it runs code.
+        const wantsShell = /shell|bash|терминал|команд/i.test(text(lastUser));
+        const external = (wantsShell && externals.find(t => t.function.name === 'sandbox_shell')) || externals[0];
         const wantsMemory = /запомни|remember/i.test(all);
         if (!external && !wantsMemory) {
             const reply = `[mock] ${(system.match(/You are "([^"]+)"/) || [])[1] || 'бот'} · без инструментов · отвечаю на: «${text(lastUser).slice(0, 80)}»`;
@@ -149,6 +152,9 @@ const completion = (body) => {
             : tool.name === 'fetch' ? { url: 'https://example.com', max_length: 200 }
             : tool.name.startsWith('browser_navigate') ? { url: 'https://example.com' }
             : tool.name === 'memory_remember' ? { fact: `[mock] ${text(lastUser).slice(0, 100)}` }
+            : tool.name === 'sandbox_shell' ? { command: 'echo "Привет из песочницы" && uname -sr && python3 --version && ls /' }
+            : tool.name === 'sandbox_run_code'
+                ? { language: 'python', code: ['import platform, math', 'print("Python", platform.python_version())', 'print("sqrt(2) =", round(math.sqrt(2), 6))'].join('\n') }
             : {};
         return {
             choices: [{

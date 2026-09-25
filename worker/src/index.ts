@@ -513,7 +513,7 @@ const resolveUploadKey = async (
 
     const boardId = url.searchParams.get('boardId');
     if (boardId) {
-        return (await isBoardMember(env.FIREBASE_PROJECT_ID, boardId, idToken))
+        return (await isBoardMember(env.FIREBASE_PROJECT_ID, boardId, idToken, env.FIRESTORE_EMULATOR_HOST))
             ? boardKeyFor(boardId, name)
             : null;
     }
@@ -568,7 +568,7 @@ const mayAccessKey = async (
     if (conversationId) return mayAccessConversation(conversationId, uid);
 
     const boardId = boardOfKey(key);
-    if (boardId) return isBoardMember(env.FIREBASE_PROJECT_ID, boardId, idToken);
+    if (boardId) return isBoardMember(env.FIREBASE_PROJECT_ID, boardId, idToken, env.FIRESTORE_EMULATOR_HOST);
 
     return false;
 };

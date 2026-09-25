@@ -28,10 +28,13 @@ import { mentionableName, freeName } from '../services/mentions';
 import { subscribeToBotLibrary, saveBotToLibrary, removeBotFromLibrary, SavedBot } from '../services/botLibrary';
 import MemoryPanel from './MemoryPanel';
 import CodeSaveDialog from './CodeSaveDialog';
+import TerminalBlock from './TerminalBlock';
 import ToolAdvisor from './ToolAdvisor';
 import { Hint } from './Learning';
 import { cloudBrowserUrl, connectedMcpUrl, startOAuthConnection, OAUTH_PRESETS, sandboxUrl, cloudRunUrl } from '../services/connectors';
 import { extractCodeFiles, toFile, CodeFile } from '../services/codeSave';
+import { parseTerminalCommand, runnableBlocks, RunRequest } from '../services/terminal';
+import { runInSandbox } from '../services/sandboxRun';
 import {
     serverTasksAvailable, startServerTask, cancelServerTask, subscribeToTasks,
     isActive, isLocalUrl, ServerTask, STALE_AFTER_MS
@@ -79,6 +82,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [lightbox, setLightbox] = useState<{ url: string, name: string } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isAgentThinking, setIsAgentThinking] = useState(false);
+    /** A person's command is running in their sandbox. */
+    const [isRunning, setIsRunning] = useState(false);
     const [showMembers, setShowMembers] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [reads, setReads] = useState(EMPTY_READ_STATE);
@@ -713,6 +718,19 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setPending([]);
         setError(null);
 
+        // /sh, /py, /js: run in this user's sandbox and post what it printed.
+        // Not with files attached: then it is an ordinary message.
+        const command = files.length ? null : parseTerminalCommand(content);
+        if (command) {
+            if (!command.input) {
+                setError(t.terminalUsage || 'Напишите команду после /sh, код после /py или /js');
+                setDraft(content);
+                return;
+            }
+            await runAndPost([command], content);
+            return;
+        }
+
         try {
             // parseMentions rather than a hand-rolled regex: \b is an ASCII
             // word boundary, so `@Маркетолог ` never matched and the bot was
@@ -776,6 +794,44 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         } finally {
             setUploading(false);
         }
+    };
+
+    /**
+     * Runs code in this user's cloud sandbox and posts the result under their
+     * name, so the channel — bots included — sees what ran and what it printed.
+     */
+    const runAndPost = async (requests: RunRequest[], content: string) => {
+        if (!activeChannelId || !currentUid || !activeBoard) return;
+
+        setIsRunning(true);
+        setError(null);
+        try {
+            const { entries } = await runInSandbox(requests);
+            await sendMessage({
+                channelId: activeChannelId,
+                boardId: activeBoard.id!,
+                authorId: currentUid,
+                authorName: settings.agentName || 'User',
+                authorType: settings.userType === 'agent' ? 'agent' : 'human',
+                content,
+                terminal: entries
+            });
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+            if (content.startsWith('/')) setDraft(content);
+        } finally {
+            setIsRunning(false);
+        }
+    };
+
+    /** ▶ on a message: its code blocks, in order, in one sandbox. */
+    const runMessageCode = (msg: BoardMessage) => {
+        const blocks = runnableBlocks(msg.content);
+        if (!blocks.length || isRunning) return;
+        // Someone else's code runs under this user's key: say what will run.
+        const what = blocks.map(b => b.kind === 'shell' ? 'bash' : b.kind).join(', ');
+        if (!window.confirm(`${t.runCodeConfirm || 'Запустить в вашей облачной песочнице'}: ${what}?`)) return;
+        runAndPost(blocks, `▶ ${t.ranCodeFrom || 'код из сообщения'} ${msg.authorName}`);
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1067,6 +1123,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                         💾
                                                     </button>
                                                 )}
+                                                {runnableBlocks(msg.content).length > 0 && (
+                                                    <button
+                                                        onClick={() => runMessageCode(msg)}
+                                                        disabled={isRunning}
+                                                        className="text-[11px] text-slate-500 hover:text-emerald-300 md:opacity-0 md:group-hover:opacity-100 disabled:opacity-40"
+                                                        title={t.runInSandbox || 'Запустить в облачной песочнице'}
+                                                    >
+                                                        ▶
+                                                    </button>
+                                                )}
                                                 <ForwardButton
                                                     title={t.forward || 'Переслать'}
                                                     className="md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
@@ -1102,8 +1168,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                     <ForwardedLabel origin={msg.forwardedFrom} language={settings.language} />
                                                 </div>
                                             )}
+                                            {/* A /sh, /py or /js message is its terminal: the command
+                                                is already at the prompt there, so only the command
+                                                word is shown here. The text stays stored, for bots
+                                                and for forwarding. */}
                                             <p className={`text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5 ${msg.forwardedFrom ? 'border-l-2 border-cyan-500/30 pl-2' : ''}`}>
-                                                {msg.content}
+                                                {msg.terminal?.length && parseTerminalCommand(msg.content)
+                                                    ? msg.content.trim().split(/\s/)[0]
+                                                    : msg.content}
                                             </p>
 
                                             {msg.attachments?.map(a => (
@@ -1115,9 +1187,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                     onOpen={(url, at) => setLightbox({ url, name: at.name })}
                                                 />
                                             ))}
-                                            {msg.toolsUsed?.length ? (
+                                            {msg.terminal?.length ? <TerminalBlock entries={msg.terminal} /> : null}
+                                            {msg.toolsUsed?.some(tool => !(msg.terminal?.length && tool.startsWith('sandbox_'))) ? (
                                                 <div className="flex flex-wrap gap-1 mt-2">
-                                                    {msg.toolsUsed.map(tool => (
+                                                    {msg.toolsUsed.filter(tool => !(msg.terminal?.length && tool.startsWith('sandbox_'))).map(tool => (
                                                         <span
                                                             key={tool}
                                                             className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-500/20"
@@ -1204,6 +1277,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     </div>
                                 )}
 
+                                {isRunning && (
+                                    <div className="flex items-center space-x-2 text-emerald-400 text-xs font-mono pl-11">
+                                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                                        <span>{t.sandboxRunning || 'выполняется в облачной песочнице…'}</span>
+                                    </div>
+                                )}
                                 {isAgentThinking && !discussionProgress && (
                                     <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono pl-11">
                                         <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
@@ -1409,14 +1488,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         // where the field is one line tall — so it is cut in
                                         // half rather than shown.
                                         ? (isWide
-                                            ? `${t.messagePlaceholder || 'Сообщение в'} #${activeChannel.name}  ·  @${t.mentionAgentHint || 'имя для вызова агента'}`
+                                            ? `${t.messagePlaceholder || 'Сообщение в'} #${activeChannel.name}  ·  @${t.mentionAgentHint || 'имя для вызова агента'}  ·  /sh ${t.terminalHint || 'команда — терминал'}`
                                             : `#${activeChannel.name}  ·  @${t.mentionAgentHint || 'имя'}`)
                                         : (t.noChannel || 'Создайте канал')}
                                     className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors resize-none h-[46px] max-h-32 disabled:opacity-40"
                                 />
                                 <button
                                     onClick={handleSend}
-                                    disabled={(!draft.trim() && pending.length === 0) || !activeChannelId || uploading}
+                                    disabled={(!draft.trim() && pending.length === 0) || !activeChannelId || uploading || isRunning}
                                     className="h-[46px] px-5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-bold transition-all active:scale-95 shrink-0"
                                 >
                                     {uploading ? '...' : (t.send || 'Отпр.')}
