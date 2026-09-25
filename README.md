@@ -45,12 +45,25 @@ memory and disappears when the emulators stop.
 and stops itself (Java 21+ and the Firebase CLI, as above). CI runs it too.
 
 Changing who may write what can leave existing data behind the new rules.
-`scripts/migrate-rules-data.mjs` brings it up to date: it fills in each
-board's `botIds` (without them no bot reply can be posted) and reports what
-the rules deliberately leave alone. It needs admin credentials
-(`gcloud auth application-default login`) and is a dry run until given
-`--confirm`. For production, in this order:
+Two scripts bring it up to date. Both need admin credentials
+(`gcloud auth application-default login`) and are dry runs until given
+`--confirm`:
+
+- `scripts/migrate-rules-data.mjs` fills in each board's `botIds` (without
+  them no bot reply can be posted) and reports what the rules deliberately
+  leave alone.
+- `scripts/migrate-comments.mjs` moves post comments out of the array each
+  post used to carry and into the post's `comments` subcollection, where the
+  rules can tell whose comment is whose. Until it has run, the app shows the
+  old comments read-only. Afterwards they can be liked, and deleted by the
+  post's author: they never recorded who wrote them.
+
+For production, in this order:
 
 1. deploy the app;
 2. `node scripts/migrate-rules-data.mjs --confirm`;
-3. `firebase deploy --only firestore:rules --project neon-extended`.
+3. `firebase deploy --only firestore:rules --project neon-extended`;
+4. `node scripts/migrate-comments.mjs --confirm`.
+
+Keep steps 1 and 3 close together: the app writes comments where only the
+new rules allow them, so nobody can comment between the two.

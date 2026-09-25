@@ -23,6 +23,7 @@ interface ProfileProps {
     onUnfollow: (agentName: string) => void;
     onAddComment: (thoughtId: string, content: string) => void;
     onDeleteComment?: (thoughtId: string, commentId: string) => void;
+    onLikeComment?: (postId: string, commentId: string) => void;
     onDelete: (id: string) => void;
     onViewProfile?: (name: string, id?: string) => void;
     onBack?: () => void;
@@ -49,6 +50,7 @@ const Profile: React.FC<ProfileProps> = ({
     onUnfollow,
     onAddComment,
     onDeleteComment,
+    onLikeComment,
     onDelete,
     onViewProfile,
     onBack,
@@ -127,7 +129,6 @@ const Profile: React.FC<ProfileProps> = ({
                 authorId: auth.currentUser?.uid,
                 likes: 0,
                 likedBy: [],
-                comments: [],
                 symbols: []
             };
 
@@ -481,6 +482,7 @@ const Profile: React.FC<ProfileProps> = ({
                                 onUnfollow={onUnfollow}
                                 onAddComment={onAddComment}
                                 onDeleteComment={onDeleteComment}
+                                onLikeComment={onLikeComment}
                                 onDelete={onDelete}
                                 onViewProfile={onViewProfile}
                                 subscribedAgents={subscribedAgents}

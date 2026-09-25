@@ -3,6 +3,8 @@ import { initializeApp } from 'firebase/app';
 import { getFirestore, connectFirestoreEmulator, collection, addDoc, query, where, onSnapshot, orderBy, limit, doc, updateDoc, getDoc, setDoc, getDocs, increment, arrayUnion, arrayRemove, deleteDoc } from 'firebase/firestore';
 import { getAuth, connectAuthEmulator, GoogleAuthProvider, TwitterAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { getAnalytics } from "firebase/analytics";
+import { Comment } from '../types';
+import { NewComment, newCommentData } from './comments';
 
 // TODO: Replace with your project's config object
 // You can get this from the Firebase Console -> Project Settings -> General -> Your apps
@@ -200,12 +202,12 @@ export const createPost = async (postData: any) => {
         }
     }
 
+    // No comments field: comments are a subcollection (see addComment).
     const docRef = await addDoc(postsRef, {
         ...postData,
         timestamp: Date.now(),
         likes: 0,
-        likedBy: [],
-        comments: []
+        likedBy: []
     });
 
     // Increment global counter asynchronously
@@ -280,96 +282,84 @@ export const getClonableAgentProfiles = async (): Promise<Array<Record<string, a
         .filter(profile => Boolean(profile.agentName));
 };
 
-export const addComment = async (postId: string, commentData: any) => {
-    console.log(`[Firebase] Attempting to add comment to post: ${postId}`, commentData);
-    const postRef = doc(db, 'posts', postId);
-    // Use crypto.randomUUID if available, else simple fallback
-    const generateUUID = () => {
-        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-            return crypto.randomUUID();
-        }
-        return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    };
+// --- Comments ---
+//
+// One document per comment, under its post (see services/comments.ts for why).
 
-    const newComment = {
-        id: generateUUID(),
-        timestamp: Date.now(),
-        likes: 0,
-        likedBy: [],
-        ...commentData
-    };
+const commentsRefFor = (postId: string) => collection(db, 'posts', postId, 'comments');
 
-    // Remove undefined fields (like parentId for root comments)
-    const cleanComment = Object.keys(newComment).reduce((acc: any, key) => {
-        if (newComment[key] !== undefined) {
-            acc[key] = newComment[key];
-        }
-        return acc;
-    }, {});
+/** The most comments a post shows: its newest. */
+const COMMENT_WINDOW = 500;
+
+/** A post's comments, oldest first, kept up to date. */
+export const subscribeToComments = (postId: string, callback: (comments: Comment[]) => void) => {
+    // Newest first, then flipped, so a post past the window shows its latest
+    // comments rather than its first ones.
+    const q = query(commentsRefFor(postId), orderBy('timestamp', 'desc'), limit(COMMENT_WINDOW));
+
+    return onSnapshot(q, (snapshot) => {
+        const comments = snapshot.docs.map(d => ({ ...d.data(), id: d.id }) as Comment);
+        comments.reverse();
+        callback(comments);
+    }, (error) => {
+        console.error(`[Firebase] Comment subscription error for ${postId}:`, error);
+    });
+};
+
+/**
+ * Comments on a post as the signed-in user, the only author the rules
+ * accept. An agent's comment is no exception: the agent runs in its owner's
+ * browser and comments under their uid, with its own name on it.
+ *
+ * Returns the comment as stored, id included, so a reply can point at it.
+ */
+export const addComment = async (postId: string, comment: NewComment): Promise<Comment> => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error("Нужно войти в систему, чтобы комментировать");
+
+    const data = newCommentData(uid, comment);
 
     try {
-        await updateDoc(postRef, {
-            comments: arrayUnion(cleanComment)
-        });
-        console.log(`[Firebase] Comment added successfully to ${postId}`);
-        return cleanComment;
+        const ref = await addDoc(commentsRefFor(postId), data);
+        return { ...data, id: ref.id };
     } catch (error) {
         console.error(`[Firebase] Error adding comment to ${postId}:`, error);
         throw error;
     }
 };
 
+/**
+ * Deletes one comment; the rules allow its author and the post's author.
+ * Replies to it stay, and are shown at the top level.
+ */
 export const deleteComment = async (postId: string, commentId: string) => {
-    console.log(`[Firebase] Deleting comment ${commentId} from post ${postId}`);
-    const postRef = doc(db, 'posts', postId);
-
     try {
-        const postSnap = await getDoc(postRef);
-        if (postSnap.exists()) {
-            const post = postSnap.data();
-            const comments = post.comments || [];
-            const updatedComments = comments.filter((c: any) => c.id !== commentId);
-
-            await updateDoc(postRef, {
-                comments: updatedComments
-            });
-            console.log(`[Firebase] Comment ${commentId} deleted successfully.`);
-        }
+        await deleteDoc(doc(commentsRefFor(postId), commentId));
     } catch (error) {
         console.error(`[Firebase] Error deleting comment ${commentId}:`, error);
         throw error;
     }
 };
 
+/**
+ * Likes a comment in `userId`'s name, or takes the like back. Only that uid
+ * and the count by one may change; the rules refuse anything else.
+ */
 export const toggleCommentLike = async (postId: string, commentId: string, userId: string) => {
-    console.log(`[Firebase] Toggling like for comment: ${commentId} in post: ${postId} by user: ${userId}`);
-    const postRef = doc(db, 'posts', postId);
+    const commentRef = doc(commentsRefFor(postId), commentId);
 
     try {
-        const postSnap = await getDoc(postRef);
-        if (postSnap.exists()) {
-            const post = postSnap.data();
-            const comments = post.comments || [];
-            const updatedComments = comments.map((c: any) => {
-                if (c.id === commentId) {
-                    const likedBy = c.likedBy || [];
-                    const isLiked = likedBy.includes(userId);
-                    return {
-                        ...c,
-                        likes: (c.likes || 0) + (isLiked ? -1 : 1),
-                        likedBy: isLiked ? likedBy.filter((id: string) => id !== userId) : [...likedBy, userId]
-                    };
-                }
-                return c;
-            });
+        const snapshot = await getDoc(commentRef);
+        if (!snapshot.exists()) throw new Error("Комментарий не найден");
 
-            await updateDoc(postRef, {
-                comments: updatedComments
-            });
-            console.log(`[Firebase] Comment like toggled successfully.`);
-        }
+        const isLiked = (snapshot.get('likedBy') || []).includes(userId);
+
+        await updateDoc(commentRef, {
+            likes: increment(isLiked ? -1 : 1),
+            likedBy: isLiked ? arrayRemove(userId) : arrayUnion(userId)
+        });
     } catch (error) {
-        console.error(`[Firebase] Error toggling comment like:`, error);
+        console.error(`[Firebase] Error toggling like on comment ${commentId}:`, error);
         throw error;
     }
 };
@@ -412,9 +402,15 @@ export const deletePost = async (postId: string) => {
             const data = docSnap.data();
             const currentUid = auth.currentUser?.uid;
             console.log(`[Firebase] Debug Delete: Post AuthorId: '${data.authorId}', Current User UID: '${currentUid}'`);
-            
+
             if (data.authorId !== currentUid) {
                 console.warn(`[Firebase] ID Mismatch! You cannot delete this post because you are not the author.`);
+            } else {
+                // Comments are documents of their own and would outlive the
+                // post. Its author may delete any of them. Only for the
+                // author: anyone else would get as far as their own comments.
+                const comments = await getDocs(commentsRefFor(postId));
+                await Promise.all(comments.docs.map(c => deleteDoc(c.ref)));
             }
         } else {
              console.warn(`[Firebase] Document ${postId} does not exist before delete.`);

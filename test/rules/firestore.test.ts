@@ -2,8 +2,8 @@
  * firestore.rules against the Firestore emulator: `npm run test:rules`.
  *
  * The writes below are the ones the app makes (services/firebase.ts,
- * services/boards.ts, worker/src/firestoreRest.ts), so a rule that refuses
- * them fails here rather than in someone's browser.
+ * services/comments.ts, services/boards.ts, worker/src/firestoreRest.ts), so
+ * a rule that refuses them fails here rather than in someone's browser.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -12,11 +12,12 @@ import {
     assertFails, assertSucceeds, initializeTestEnvironment, RulesTestEnvironment
 } from '@firebase/rules-unit-testing';
 import {
-    doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, collection,
-    arrayUnion, arrayRemove, increment
+    doc, getDoc, getDocs, setDoc, addDoc, updateDoc, deleteDoc, collection,
+    query, orderBy, limit, arrayUnion, arrayRemove, increment
 } from 'firebase/firestore';
 import { FirestoreRest, restAgentStore } from '../../worker/src/firestoreRest';
 import { botIdsOf } from '../../services/mentions';
+import { newCommentData, MAX_COMMENT_LENGTH } from '../../services/comments';
 import type { BoardMember } from '../../types';
 
 // Not demo-potok: that is the project `npm run emulators` serves the app
@@ -72,6 +73,7 @@ describe('posts', () => {
         timestamp: 1,
         likes: 0,
         likedBy: [],
+        // Not migrated yet: comments from before they were documents.
         comments: [{ id: 'c1', authorName: 'Bob', content: 'hi', likes: 0, likedBy: [] }]
     };
 
@@ -86,8 +88,18 @@ describe('posts', () => {
     });
 
     describe('create', () => {
-        it('lets a user post under their own uid', async () => {
-            await assertSucceeds(addDoc(collection(as('alice'), 'posts'), { ...post, likes: 0, comments: [] }));
+        it('lets a user post under their own uid (createPost)', async () => {
+            const { comments, ...fresh } = post;
+            await assertSucceeds(addDoc(collection(as('alice'), 'posts'), fresh));
+        });
+
+        it('still accepts the empty comments array older clients send', async () => {
+            await assertSucceeds(addDoc(collection(as('alice'), 'posts'), { ...post, comments: [] }));
+        });
+
+        it('refuses a post that arrives with comments already on it', async () => {
+            // They would be shown under it, in other people's names.
+            await assertFails(addDoc(collection(as('alice'), 'posts'), post));
         });
 
         it('refuses a post in someone else\'s name', async () => {
@@ -109,6 +121,14 @@ describe('posts', () => {
         it('may not hand the post to someone else', async () => {
             await assertFails(updateDoc(doc(as('alice'), 'posts/p1'), { authorId: 'bob' }));
         });
+
+        it('may not rewrite the old comments array, which the app still shows', async () => {
+            const db = as('alice');
+            await assertFails(updateDoc(doc(db, 'posts/p1'), {
+                comments: arrayUnion({ id: 'fake', authorName: 'Bob', content: 'I agree with everything', timestamp: 2 })
+            }));
+            await assertFails(updateDoc(doc(db, 'posts/p1'), { comments: [] }));
+        });
     });
 
     describe('update by anyone else', () => {
@@ -118,18 +138,17 @@ describe('posts', () => {
             await assertSucceeds(updateDoc(doc(db, 'posts/p1'), { likes: increment(-1), likedBy: arrayRemove('bob') }));
         });
 
-        it('may comment (addComment)', async () => {
-            await assertSucceeds(updateDoc(doc(as('bob'), 'posts/p1'), {
+        it('may not touch the old comments array: add, like or delete in it', async () => {
+            // What addComment, toggleCommentLike and deleteComment wrote before
+            // comments had documents of their own; an app from then gets this.
+            const db = as('bob');
+            await assertFails(updateDoc(doc(db, 'posts/p1'), {
                 comments: arrayUnion({ id: 'c2', authorName: 'Bob', content: 'reply', timestamp: 2, likes: 0, likedBy: [] })
             }));
-        });
-
-        it('may rewrite the comments to like or delete one (toggleCommentLike, deleteComment)', async () => {
-            const db = as('bob');
-            await assertSucceeds(updateDoc(doc(db, 'posts/p1'), {
+            await assertFails(updateDoc(doc(db, 'posts/p1'), {
                 comments: [{ ...post.comments[0], likes: 1, likedBy: ['bob'] }]
             }));
-            await assertSucceeds(updateDoc(doc(db, 'posts/p1'), { comments: [] }));
+            await assertFails(updateDoc(doc(db, 'posts/p1'), { comments: [] }));
         });
 
         it('may not change the content, the author or the name', async () => {
@@ -161,7 +180,7 @@ describe('posts', () => {
     });
 
     describe('posts from before authorId', () => {
-        it('can still be liked and commented on', async () => {
+        it('can still be liked', async () => {
             await assertSucceeds(updateDoc(doc(as('bob'), 'posts/legacy'), { likes: increment(1), likedBy: arrayUnion('bob') }));
         });
 
@@ -169,6 +188,188 @@ describe('posts', () => {
             const db = as('alice');
             await assertFails(updateDoc(doc(db, 'posts/legacy'), { content: 'claimed' }));
             await assertFails(deleteDoc(doc(db, 'posts/legacy')));
+        });
+    });
+});
+
+// --- Comments --------------------------------------------------------------------------
+
+describe('comments', () => {
+    const post = {
+        authorId: 'alice', authorName: SHARED_NAME, authorType: 'human',
+        content: 'post', timestamp: 1, likes: 0, likedBy: []
+    };
+
+    const comments = (db: any, postId = 'p1') => collection(db, 'posts', postId, 'comments');
+    const comment = (db: any, id: string, postId = 'p1') => doc(db, 'posts', postId, 'comments', id);
+
+    /** What addComment writes for `uid`. */
+    const written = (uid: string, extra: Partial<Parameters<typeof newCommentData>[1]> = {}) =>
+        newCommentData(uid, { authorName: SHARED_NAME, authorType: 'human', content: 'hello', ...extra });
+
+    beforeEach(async () => {
+        await seed(async db => {
+            await setDoc(doc(db, 'posts/p1'), post);
+            // Bob's comment, which Carol has liked.
+            await setDoc(comment(db, 'c1'), { ...written('bob'), likes: 1, likedBy: ['carol'] });
+            // Moved from a post's array by scripts/migrate-comments.mjs: no
+            // authorId, and on the oldest ones no like fields either.
+            await setDoc(comment(db, 'legacy'), { authorName: 'Bob', authorType: 'human', content: 'old', timestamp: 0 });
+        });
+    });
+
+    describe('create (addComment)', () => {
+        it('lets anyone signed in comment as themselves', async () => {
+            await assertSucceeds(addDoc(comments(as('bob')), written('bob')));
+        });
+
+        it('lets them reply to a comment', async () => {
+            await assertSucceeds(addDoc(comments(as('dave')), written('dave', { parentId: 'c1' })));
+        });
+
+        it('lets an agent comment under the uid of whoever runs it', async () => {
+            await assertSucceeds(addDoc(comments(as('carol')), written('carol', {
+                authorName: 'Helper', authorType: 'agent', content: '~Neo: done'
+            })));
+        });
+
+        it('refuses a comment in someone else\'s name', async () => {
+            await assertFails(addDoc(comments(as('mallory')), written('bob')));
+        });
+
+        it('refuses a comment with no author, and an anonymous one', async () => {
+            const { authorId, ...ownerless } = written('bob');
+            await assertFails(addDoc(comments(as('bob')), ownerless));
+            await assertFails(addDoc(comments(anonymous()), written('bob')));
+        });
+
+        it('refuses a comment that arrives already liked', async () => {
+            const db = as('mallory');
+            await assertFails(addDoc(comments(db), { ...written('mallory'), likes: 99 }));
+            await assertFails(addDoc(comments(db), { ...written('mallory'), likes: 1, likedBy: ['bob'] }));
+        });
+
+        it('refuses fields the app does not write, and a malformed author type', async () => {
+            const db = as('bob');
+            await assertFails(addDoc(comments(db), { ...written('bob'), pinned: true }));
+            await assertFails(addDoc(comments(db), { ...written('bob'), authorType: 'admin' }));
+        });
+
+        it('refuses empty content, and content past the limit', async () => {
+            const db = as('bob');
+            await assertFails(addDoc(comments(db), { ...written('bob'), content: '' }));
+            await assertFails(addDoc(comments(db), { ...written('bob'), content: 'x'.repeat(MAX_COMMENT_LENGTH + 1) }));
+        });
+
+        it('measures the limit as newCommentData cuts to it', async () => {
+            // The rules count UTF-16 units, like JavaScript's length: a
+            // Cyrillic letter is one, an emoji two. Not bytes, not code points.
+            const db = as('bob');
+            await assertSucceeds(addDoc(comments(db), written('bob', { content: 'ж'.repeat(MAX_COMMENT_LENGTH) })));
+            await assertSucceeds(addDoc(comments(db), written('bob', { content: 'x' + '😀'.repeat(MAX_COMMENT_LENGTH) })));
+            await assertFails(addDoc(comments(db), { ...written('bob'), content: '😀'.repeat(MAX_COMMENT_LENGTH / 2 + 1) }));
+        });
+
+        it('refuses a comment on a post that does not exist', async () => {
+            await assertFails(addDoc(comments(as('bob'), 'missing'), written('bob')));
+        });
+    });
+
+    describe('like (toggleCommentLike)', () => {
+        const like = (uid: string) => ({ likes: increment(1), likedBy: arrayUnion(uid) });
+        const unlike = (uid: string) => ({ likes: increment(-1), likedBy: arrayRemove(uid) });
+
+        it('lets anyone like and unlike in their own name', async () => {
+            const db = as('dave');
+            await assertSucceeds(updateDoc(comment(db, 'c1'), like('dave')));
+            expect(await read('posts/p1/comments/c1')).toMatchObject({ likes: 2, likedBy: ['carol', 'dave'] });
+
+            await assertSucceeds(updateDoc(comment(db, 'c1'), unlike('dave')));
+            expect(await read('posts/p1/comments/c1')).toMatchObject({ likes: 1, likedBy: ['carol'] });
+        });
+
+        it('lets a comment\'s author like it too', async () => {
+            await assertSucceeds(updateDoc(comment(as('bob'), 'c1'), like('bob')));
+        });
+
+        it('works on a migrated comment without authorId or like fields', async () => {
+            await assertSucceeds(updateDoc(comment(as('dave'), 'legacy'), like('dave')));
+            await assertSucceeds(updateDoc(comment(as('dave'), 'legacy'), unlike('dave')));
+        });
+
+        it('refuses liking in someone else\'s name', async () => {
+            await assertFails(updateDoc(comment(as('mallory'), 'c1'), like('erin')));
+        });
+
+        it('refuses taking back someone else\'s like', async () => {
+            await assertFails(updateDoc(comment(as('mallory'), 'c1'), unlike('carol')));
+        });
+
+        it('refuses liking twice', async () => {
+            // arrayUnion changes nothing the second time; the count would.
+            await assertFails(updateDoc(comment(as('carol'), 'c1'), like('carol')));
+        });
+
+        it('refuses the count without the like, the like without the count, or a jump', async () => {
+            const db = as('mallory');
+            await assertFails(updateDoc(comment(db, 'c1'), { likes: increment(1) }));
+            await assertFails(updateDoc(comment(db, 'c1'), { likedBy: arrayUnion('mallory') }));
+            await assertFails(updateDoc(comment(db, 'c1'), { likes: increment(50), likedBy: arrayUnion('mallory') }));
+        });
+
+        it('refuses rewriting the list, even to add oneself', async () => {
+            // Carol's like disappears: the set is not the old one plus mallory.
+            await assertFails(updateDoc(comment(as('mallory'), 'c1'), { likes: 1, likedBy: ['mallory'] }));
+        });
+
+        it('refuses an edit slipped in with a like', async () => {
+            await assertFails(updateDoc(comment(as('mallory'), 'c1'), { ...like('mallory'), content: 'defaced' }));
+        });
+
+        it('refuses anonymous likes', async () => {
+            await assertFails(updateDoc(comment(anonymous(), 'c1'), like('anon')));
+        });
+    });
+
+    describe('edit', () => {
+        it('is refused to everyone, the author included', async () => {
+            await assertFails(updateDoc(comment(as('bob'), 'c1'), { content: 'edited' }));
+            await assertFails(updateDoc(comment(as('bob'), 'c1'), { authorId: 'mallory' }));
+            await assertFails(updateDoc(comment(as('alice'), 'c1'), { content: 'moderated' }));
+        });
+    });
+
+    describe('delete (deleteComment)', () => {
+        it('lets the comment\'s author delete it', async () => {
+            await assertSucceeds(deleteDoc(comment(as('bob'), 'c1')));
+        });
+
+        it('lets the post\'s author delete any comment under it', async () => {
+            await assertSucceeds(deleteDoc(comment(as('alice'), 'c1')));
+        });
+
+        it('refuses everyone else, including someone with the same display name', async () => {
+            // Every account in this suite is called SHARED_NAME, as is c1's author.
+            await assertFails(deleteDoc(comment(as('mallory'), 'c1')));
+            await assertFails(deleteDoc(comment(anonymous(), 'c1')));
+        });
+
+        it('leaves a migrated comment, which has no author id, to the post\'s author', async () => {
+            await assertFails(deleteDoc(comment(as('bob'), 'legacy')));
+            await assertSucceeds(deleteDoc(comment(as('alice'), 'legacy')));
+        });
+
+        it('lets the post\'s author clear the thread and then the post (deletePost)', async () => {
+            const db = as('alice');
+            await assertSucceeds(Promise.all([deleteDoc(comment(db, 'c1')), deleteDoc(comment(db, 'legacy'))]));
+            await assertSucceeds(deleteDoc(doc(db, 'posts/p1')));
+        });
+    });
+
+    describe('read', () => {
+        it('is open to everyone, like the post', async () => {
+            await assertSucceeds(getDoc(comment(anonymous(), 'c1')));
+            await assertSucceeds(getDocs(query(comments(as('dave')), orderBy('timestamp', 'desc'), limit(500))));
         });
     });
 });
