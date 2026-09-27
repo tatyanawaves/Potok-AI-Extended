@@ -29,6 +29,7 @@ import { subscribeToBotLibrary, saveBotToLibrary, removeBotFromLibrary, SavedBot
 import MemoryPanel from './MemoryPanel';
 import CodeSaveDialog from './CodeSaveDialog';
 import TerminalBlock from './TerminalBlock';
+import { RichText } from './RichText';
 import ToolAdvisor from './ToolAdvisor';
 import { Hint } from './Learning';
 import { cloudBrowserUrl, connectedMcpUrl, startOAuthConnection, OAUTH_PRESETS, sandboxUrl, cloudRunUrl } from '../services/connectors';
@@ -1172,11 +1173,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 is already at the prompt there, so only the command
                                                 word is shown here. The text stays stored, for bots
                                                 and for forwarding. */}
-                                            <p className={`text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5 ${msg.forwardedFrom ? 'border-l-2 border-cyan-500/30 pl-2' : ''}`}>
+                                            <div className={`text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5 ${msg.forwardedFrom ? 'border-l-2 border-cyan-500/30 pl-2' : ''}`}>
                                                 {msg.terminal?.length && parseTerminalCommand(msg.content)
                                                     ? msg.content.trim().split(/\s/)[0]
-                                                    : msg.content}
-                                            </p>
+                                                    : <RichText text={msg.content} />}
+                                            </div>
 
                                             {msg.attachments?.map(a => (
                                                 <AttachmentView

@@ -177,6 +177,8 @@ export interface MessageAttachment {
   name: string;
   size: number;
   contentType: string;
+  /** Board attachments only: the start of a small text file, for bots. */
+  text?: string;
 }
 
 // --- Boards (Slack-like spaces where humans and AI agents talk) ---

@@ -2,9 +2,10 @@ import { AISettings, BoardMessage } from '../../types';
 import { complete, embed } from '../llm';
 import {
     ChannelSummary, EMPTY_SUMMARY, MemoryNote, compactionBatch, summaryPrompt, parseSummary,
-    rankByRelevance, rankHybrid, selectWindow, needsEmbedding, packVector, clip, AUTO_NOTES
+    rankByRelevance, rankHybrid, selectWindow, WINDOW_MESSAGES, needsEmbedding, packVector, clip, AUTO_NOTES
 } from '../memoryCore';
 import { AgentStore } from './store';
+import { hydrateAttachments } from '../attachmentText';
 
 /**
  * Agent memory at run time: keeping the summary current, filing notes and
@@ -174,5 +175,6 @@ export const loadTurnMemory = async (
     const notes = await findNotes(store, settings, boardId, query).catch(() => []);
 
     const fresh = history.filter(m => (m.timestamp || 0) > summary.coveredUntil);
+    await hydrateAttachments(fresh.slice(-WINDOW_MESSAGES), store.readAttachment?.bind(store));
     return { summary, notes, window: selectWindow(fresh), latest };
 };
