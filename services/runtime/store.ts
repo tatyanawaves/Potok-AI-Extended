@@ -25,6 +25,8 @@ export interface AgentStore {
     setNoteEmbedding(boardId: string, noteId: string, embedding: string, model: string): Promise<void>;
     /** Bearer token for a tool server, when it needs one. */
     toolToken(url: string): Promise<string | undefined>;
+    /** A board attachment's contents as text, read with the user's own access. */
+    readAttachment?(key: string): Promise<string>;
     /**
      * Whom the runtime acts for (a uid). Tool sessions are cached per scope,
      * so users sharing one worker never share a session, even on servers that

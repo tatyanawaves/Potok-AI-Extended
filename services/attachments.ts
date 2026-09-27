@@ -1,5 +1,6 @@
 import { auth } from './firebase';
 import { PIPEDREAM_WORKER_URL } from './pipedream';
+import { isReadableText, keptText } from './attachmentText';
 
 /**
  * Attachments, stored in R2 behind the worker.
@@ -20,6 +21,7 @@ export interface Attachment {
     name: string;
     size: number;
     contentType: string;
+    text?: string;
 }
 
 export const attachmentsAvailable = (): boolean => Boolean(PIPEDREAM_WORKER_URL);
@@ -76,7 +78,22 @@ export const uploadAttachment = async (
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error((data as any).error || `Upload failed (${response.status})`);
 
-    return data as Attachment;
+    const attachment = data as Attachment;
+    if ('boardId' in target && isReadableText(file)) {
+        const text = await file.text().catch(() => undefined);
+        if (text !== undefined) attachment.text = keptText(text);
+    }
+    return attachment;
+};
+
+/** An attachment's contents as text, with the caller's own access. */
+export const fetchAttachmentText = async (key: string): Promise<string> => {
+    if (!PIPEDREAM_WORKER_URL) throw new Error('Attachment storage is not configured');
+    const url = new URL(`${PIPEDREAM_WORKER_URL}/files`);
+    url.searchParams.set('key', key);
+    const response = await fetch(url.toString(), { headers: { 'Authorization': await authHeader() } });
+    if (!response.ok) throw new Error(`Download failed (${response.status})`);
+    return response.text();
 };
 
 /**

@@ -3,6 +3,7 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
 import { getMessagesSince, sendMessage } from './boards';
+import { fetchAttachmentText } from './attachments';
 import { AISettings } from '../types';
 import { ChannelSummary, EMPTY_SUMMARY, MemoryNote } from './memoryCore';
 import { AgentStore } from './runtime/store';
@@ -52,6 +53,8 @@ export const firestoreStore = (settings: AISettings): AgentStore => ({
     },
 
     getMessagesSince,
+
+    readAttachment: fetchAttachmentText,
 
     async postMessage(message) {
         await sendMessage(message);

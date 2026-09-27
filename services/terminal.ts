@@ -1,4 +1,5 @@
-import { TerminalEntry } from '../types';
+import { TerminalEntry, MessageAttachment } from '../types';
+import { attachmentsForBots } from './attachmentText';
 
 /**
  * The terminal in board chat.
@@ -84,8 +85,10 @@ const PROMPT_FOR_BOTS: Record<TerminalEntry['kind'], string> = {
  * printed, so "why did that fail?" has something to answer from. A person's
  * `/sh ls` is otherwise just those four characters.
  */
-export const textForBots = (message: { content?: string, terminal?: TerminalEntry[] }): string => {
-    const text = message.content || '';
+export const textForBots = (message: { content?: string, terminal?: TerminalEntry[], attachments?: MessageAttachment[] }): string => {
+    const files = attachmentsForBots(message.attachments);
+    const text = (message.content || '') + (files ? `
+${files}` : '');
     if (!message.terminal?.length) return text;
 
     const transcript = message.terminal.map(entry => {

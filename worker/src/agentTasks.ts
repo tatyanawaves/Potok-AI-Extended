@@ -123,7 +123,16 @@ export const openRuntime = async (
         // token the user saved for them.
         toolToken: async url => url.startsWith(params.selfOrigin) ? tokens.get() : secrets.mcpTokens?.[url],
         // Tasks of different people run side by side in one isolate.
-        scope: params.author.id
+        scope: params.author.id,
+        // Through this worker's own /files, with the user's token, so board
+        // membership is checked exactly as for the app.
+        readAttachment: async key => {
+            const url = new URL('/files', params.selfOrigin);
+            url.searchParams.set('key', key);
+            const response = await selfFetch(new Request(url, { headers: { Authorization: `Bearer ${await tokens.get()}` } }));
+            if (!response.ok) throw new Error(`Download failed (${response.status})`);
+            return response.text();
+        }
     });
 
     const settings: AISettings = {
