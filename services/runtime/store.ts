@@ -19,7 +19,7 @@ export interface AgentStore {
     replaceSummary(boardId: string, channelId: string, expectedCoveredUntil: number, next: ChannelSummary): Promise<boolean>;
     /** Messages newer than `since`, oldest first, at most the newest `count`. */
     getMessagesSince(boardId: string, channelId: string, since: number, count: number): Promise<BoardMessage[]>;
-    postMessage(message: Omit<BoardMessage, 'id' | 'timestamp' | 'mentions'>): Promise<void>;
+    postMessage(message: Omit<BoardMessage, 'id' | 'timestamp' | 'mentions' | 'postedBy'>): Promise<void>;
     loadNotes(boardId: string): Promise<MemoryNote[]>;
     addNote(boardId: string, note: Omit<MemoryNote, 'id' | 'createdAt'>): Promise<void>;
     setNoteEmbedding(boardId: string, noteId: string, embedding: string, model: string): Promise<void>;

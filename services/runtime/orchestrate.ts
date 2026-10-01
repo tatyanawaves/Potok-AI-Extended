@@ -63,6 +63,7 @@ const post = (ctx: TaskContext, content: string) => ctx.store.postMessage({
     authorId: ctx.author.id,
     authorName: '🧭 Оркестратор',
     authorType: 'agent',
+    orchestrator: true,
     content,
     isAgentReply: true
 });

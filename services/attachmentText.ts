@@ -4,6 +4,8 @@
  * file is kept on the message at upload time.
  */
 
+import { untrusted } from './untrusted';
+
 export const MAX_READABLE_BYTES = 64 * 1024;
 export const MAX_KEPT_CHARS = 8000;
 const FOR_BOTS_CHARS = 4000;
@@ -27,7 +29,7 @@ export const attachmentsForBots = (attachments: { key?: string; name: string; si
         const head = `[вложение: ${a.name}, ${a.size} байт${a.key ? `, key=${a.key}` : ''}]`;
         if (a.text === undefined) return `${head} (содержимое недоступно боту)`;
         const body = a.text.length > FOR_BOTS_CHARS ? `${a.text.slice(0, FOR_BOTS_CHARS)}\n…(обрезано)` : a.text;
-        return `${head}\n\`\`\`\n${body}\n\`\`\``;
+        return `${head}\n${untrusted(`file ${a.name}`, body)}`;
     }).join('\n');
 };
 

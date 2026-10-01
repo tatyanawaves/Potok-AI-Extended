@@ -400,7 +400,7 @@ describe('board messages', () => {
 
     const message = (authorId: string, extra: Record<string, unknown> = {}) => ({
         boardId: 'b1', channelId: 'c1', authorId, authorName: 'x', authorType: 'human',
-        content: 'hello', mentions: [], timestamp: Date.now(), ...extra
+        content: 'hello', mentions: [], timestamp: Date.now(), postedBy: 'alice', ...extra
     });
 
     beforeEach(async () => {
@@ -417,6 +417,15 @@ describe('board messages', () => {
 
     it('lets a member post as themselves', async () => {
         await assertSucceeds(addDoc(messages(as('alice')), message('alice')));
+    });
+
+    it('records who really posted, and refuses a message without it or with someone else', async () => {
+        const { postedBy: _, ...unsigned } = message('alice');
+        await assertFails(addDoc(messages(as('alice')), unsigned));
+        await assertFails(addDoc(messages(as('alice')), message('alice', { postedBy: 'owner' })));
+        // A bot's reply carries the account of whoever ran the bot.
+        await assertFails(addDoc(messages(as('alice')), message(BOT, { authorType: 'agent', postedBy: 'owner' })));
+        await assertSucceeds(addDoc(messages(as('alice')), message(BOT, { authorType: 'agent', postedBy: 'alice' })));
     });
 
     it('lets a member post a bot\'s reply', async () => {
@@ -508,7 +517,7 @@ describe('board messages', () => {
                 { projectId: PROJECT, apiKey: 'unused', firestoreEmulatorHost: `${HOST}:${PORT}` },
                 { get: async () => tokenFor(uid) } as any
             ),
-            { toolToken: async () => undefined }
+            { toolToken: async () => undefined, scope: uid }
         );
 
         const reply = (authorId: string) => ({

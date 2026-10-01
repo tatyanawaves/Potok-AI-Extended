@@ -1,5 +1,6 @@
 import { TerminalEntry, MessageAttachment } from '../types';
 import { attachmentsForBots } from './attachmentText';
+import { untrusted } from './untrusted';
 
 /**
  * The terminal in board chat.
@@ -95,7 +96,7 @@ ${files}` : '');
         // Stripped here too: messages stored before stripAnsi still carry codes.
         const clean = stripAnsi(entry.output);
         const output = clean.length > OUTPUT_FOR_BOTS ? `…${clean.slice(-OUTPUT_FOR_BOTS)}` : clean;
-        return `${PROMPT_FOR_BOTS[entry.kind]} ${entry.input.split('\n').slice(0, 5).join('\n')}${entry.failed ? '  [ошибка]' : ''}\n${output}`;
+        return `${PROMPT_FOR_BOTS[entry.kind]} ${entry.input.split('\n').slice(0, 5).join('\n')}${entry.failed ? '  [ошибка]' : ''}\n${untrusted('terminal output', output)}`;
     });
     return `${text}\n[терминал]\n${transcript.join('\n')}`;
 };

@@ -1,4 +1,5 @@
 import { BoardMessage } from '../types';
+import { untrusted } from './untrusted';
 import { textForBots } from './terminal';
 
 /**
@@ -238,8 +239,9 @@ export const rankByRelevance = <T>(
  */
 export const memoryBlock = (summary: ChannelSummary, notes: MemoryNote[]): string => {
     const parts: string[] = [];
-    if (summary.text) parts.push(`EARLIER IN THIS CHANNEL (summary of ${summary.coveredCount} older messages):\n${summary.text}`);
-    if (notes.length) parts.push(`RELEVANT NOTES FROM MEMORY:\n${notes.map(n => `- ${n.text}`).join('\n')}`);
+    // Written from what members and tools said: data for the bot, never instructions.
+    if (summary.text) parts.push(untrusted(`summary of ${summary.coveredCount} older messages in this channel`, summary.text));
+    if (notes.length) parts.push(untrusted('notes from board memory', notes.map(n => `- ${n.text}`).join('\n')));
     return parts.join('\n\n');
 };
 

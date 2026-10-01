@@ -16,6 +16,7 @@ import {
     createChannel, subscribeToChannels, deleteChannel,
     subscribeToMessages, sendMessage, deleteMessage, parseMentions, isBot
 } from '../services/boards';
+import { messageAuthor } from '../services/mentions';
 import {
     triggerAgentReplies, runBotDiscussion, designBot, probeToolServer, toolServersOf,
     MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, MAX_REQUESTS_PER_TURN, ToolPolicy
@@ -193,12 +194,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     // A queue, not a single slot: steps of a meeting run in parallel, and two
     // bots may ask at the same moment — one request must not replace the other.
     const [toolQueue, setToolQueue] = useState<
-        Array<{ bot: string, tool: string, args: Record<string, any>, resolve: (ok: boolean) => void }>
+        Array<{ bot: string, tool: string, args: Record<string, any>, foreign: boolean, resolve: (ok: boolean) => void }>
     >([]);
     const pendingTool = toolQueue[0] || null;
 
-    const requestToolApproval = (bot: string, tool: string, args: Record<string, any>) =>
-        new Promise<boolean>(resolve => setToolQueue(queue => [...queue, { bot, tool, args, resolve }]));
+    const requestToolApproval = (bot: string, tool: string, args: Record<string, any>, reason?: 'foreign') =>
+        new Promise<boolean>(resolve => setToolQueue(queue => [...queue, { bot, tool, args, foreign: reason === 'foreign', resolve }]));
 
     const answerToolApproval = (allowed: boolean) => {
         pendingTool?.resolve(allowed);
@@ -1107,23 +1108,28 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         {t.noMessages || 'Сообщений пока нет.'}<br />
                                         {t.mentionHint || 'Упомяните агента через @имя, чтобы он ответил.'}
                                     </p>
-                                ) : messages.map(msg => (
+                                ) : messages.map(msg => { const author = messageAuthor(msg, activeBoard.members); return (
                                     <div key={msg.id} className="group flex space-x-3">
                                         <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono ${msg.authorType === 'agent'
                                             ? 'bg-indigo-950/60 text-indigo-300 border border-indigo-500/30'
                                             : 'bg-slate-800 text-slate-300 border border-slate-700'
                                             }`}>
-                                            {(Array.from(String(msg.authorName))[0] || '?').toUpperCase()}
+                                            {(Array.from(String(author.name).replace(/^\P{L}+/u, ''))[0] || '?').toUpperCase()}
                                         </div>
 
                                         <div className="min-w-0 flex-1">
                                             <div className="flex items-baseline space-x-2">
                                                 <button
-                                                    onClick={() => onViewProfile(msg.authorName, msg.authorId)}
+                                                    onClick={() => onViewProfile(author.name, msg.authorId)}
                                                     className={`text-sm font-bold hover:underline ${msg.authorType === 'agent' ? 'text-indigo-300' : 'text-slate-200'}`}
                                                 >
-                                                    {msg.authorName}
+                                                    {author.name}
                                                 </button>
+                                                {author.via && (
+                                                    <span className="text-[10px] text-slate-500" title={t.postedByHint || 'Кто на самом деле отправил это сообщение'}>
+                                                        {t.via || 'через'} {author.via}
+                                                    </span>
+                                                )}
                                                 {msg.authorType === 'agent' && (
                                                     <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-950/50 text-indigo-400 border border-indigo-500/20">
                                                         AI
@@ -1227,7 +1233,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                             )}
                                         </div>
                                     </div>
-                                ))}
+                                ); })}
 
                                 {serverTasks
                                     .filter(task => task.channelId === activeChannelId
@@ -1578,6 +1584,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             <span className="text-indigo-300">{pendingTool.bot}</span>{' '}
                             {t.wantsToCall || 'хочет вызвать инструмент. Это действие в вашем подключённом аккаунте.'}
                         </p>
+                        {pendingTool.foreign && (
+                            <p className="text-amber-200/90 text-xs leading-relaxed mb-4 px-3 py-2 rounded-lg bg-amber-950/30 border border-amber-500/30">
+                                {t.foreignBotWarning || 'Этого бота настроили не вы: его инструкции и сервисы выбрал другой человек, а действие выполнится от вашего имени, на ваших ключах. Разрешайте, только если понимаете, зачем оно нужно.'}
+                            </p>
+                        )}
 
                         <div className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 mb-4">
                             <div className="text-[11px] font-mono text-emerald-400 break-all">

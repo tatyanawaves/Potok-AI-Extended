@@ -47,16 +47,24 @@ describe('describeHttpError', () => {
 });
 
 describe('buildSystemPrompt', () => {
-    it('puts the persona and memory before the task, so the prefix can be cached', () => {
-        const prompt = buildSystemPrompt(bot, 'general', 'MEMORY HERE', {
-            assignment: { goal: 'G', instruction: 'Do X', step: 1, totalSteps: 2 }
+    it('puts the persona and rules before the task, so the prefix can be cached', () => {
+        const prompt = buildSystemPrompt(bot, 'general', {
+            assignment: { goal: 'G', instruction: 'Do X', step: 1, totalSteps: 2, inputs: [{ bot: 'A', result: 'SECRET DATA' }] }
         });
-        expect(prompt.indexOf('You analyse.')).toBeLessThan(prompt.indexOf('MEMORY HERE'));
-        expect(prompt.indexOf('MEMORY HERE')).toBeLessThan(prompt.indexOf('YOUR ASSIGNMENT: Do X'));
+        expect(prompt.indexOf('You analyse.')).toBeLessThan(prompt.indexOf('SECURITY'));
+        expect(prompt.indexOf('SECURITY')).toBeLessThan(prompt.indexOf('YOUR ASSIGNMENT: Do X'));
+    });
+
+    it('keeps data out of the instructions', () => {
+        const prompt = buildSystemPrompt(bot, 'general', {
+            assignment: { goal: 'G', instruction: 'Do X', step: 2, totalSteps: 2, inputs: [{ bot: 'A', result: 'SECRET DATA' }] }
+        });
+        expect(prompt).not.toContain('SECRET DATA');
+        expect(prompt).toContain('<untrusted');
     });
 
     it('marks the final turn of a discussion', () => {
-        const prompt = buildSystemPrompt(bot, 'general', '', { discussion: { participants: ['Analyst'], task: 'T', turn: 2, totalTurns: 2 } });
+        const prompt = buildSystemPrompt(bot, 'general', { discussion: { participants: ['Analyst'], task: 'T', turn: 2, totalTurns: 2 } });
         expect(prompt).toContain('FINAL turn');
     });
 });

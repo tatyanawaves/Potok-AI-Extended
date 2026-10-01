@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseMentions, isBot, botIdsOf, botIdsInSync } from '../services/mentions';
+import { parseMentions, isBot, botIdsOf, botIdsInSync, messageAuthor } from '../services/mentions';
 
 describe('parseMentions', () => {
     it('finds a Latin name', () => {
@@ -92,5 +92,26 @@ describe('botIdsInSync', () => {
 
     it('accepts an empty list on a board without bots', () => {
         expect(botIdsInSync({ members: [members[0]], botIds: [] })).toBe(true);
+    });
+});
+
+describe('messageAuthor', () => {
+    const members = [
+        { id: 'alice', name: 'Alice', type: 'human', role: 'member', addedAt: 1 },
+        { id: 'bot', name: 'Helper', type: 'bot', role: 'member', addedAt: 2 }
+    ] as any;
+
+    it('takes the name from the roster, not from what the sender wrote', () => {
+        expect(messageAuthor({ authorId: 'alice', authorName: 'Owner', postedBy: 'alice' }, members)).toEqual({ name: 'Alice' });
+    });
+
+    it('says who really posted a bot reply or a task message', () => {
+        expect(messageAuthor({ authorId: 'bot', authorName: 'Helper', postedBy: 'alice' }, members)).toEqual({ name: 'Helper', via: 'Alice' });
+        expect(messageAuthor({ authorId: 'alice', authorName: 'x', postedBy: 'alice', orchestrator: true }, members))
+            .toEqual({ name: '🧭 Оркестратор', via: 'Alice' });
+    });
+
+    it('keeps the stored name on old messages', () => {
+        expect(messageAuthor({ authorId: 'alice', authorName: 'Old name' }, members)).toEqual({ name: 'Old name' });
     });
 });

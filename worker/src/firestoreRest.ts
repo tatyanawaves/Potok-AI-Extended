@@ -214,6 +214,7 @@ export const restAgentStore = (
             const timestamp = Date.now();
             await rest.create(`boards/${message.boardId}/channels/${message.channelId}/messages`, {
                 ...message,
+                postedBy: options.scope,
                 mentions: parseMentions(message.content),
                 timestamp
             });
