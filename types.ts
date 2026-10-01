@@ -266,11 +266,15 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** In US dollars, when the provider says (OpenRouter does). */
+  cost?: number;
 }
 
 export interface DailySpend {
   requests: number;
   tokens: number;
+  /** US dollars; absent on days before cost was recorded. */
+  cost?: number;
 }
 
 /**
@@ -335,6 +339,8 @@ export interface BoardMessage {
    * Shown on the message so the cost sits where it was incurred.
    */
   tokensUsed?: number;
+  /** Bot-only: what the reply cost in US dollars, when the provider said. */
+  costUsd?: number;
   /**
    * True for messages produced by an agent run (client or Cloud Function).
    * Loop guard: a bot reply must never wake another bot. Author type can't

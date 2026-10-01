@@ -31,7 +31,7 @@ export const setUsageGate = (gate: UsageGate): void => { usageGate = gate; };
 
 const reportUsage = async (usage: TokenUsage, settings?: AISettings) => {
     try {
-        if (settings?.usageHooks) await settings.usageHooks.record(usage.totalTokens);
+        if (settings?.usageHooks) await settings.usageHooks.record(usage.totalTokens, usage.cost);
         else await usageSink(usage);
     } catch { /* a counter must not break a reply */ }
 };
@@ -371,6 +371,8 @@ export const complete = async (
     };
     if (request.tools?.length) body.tools = request.tools;
     if (request.onDelta) body.stream = true;
+    // OpenRouter adds what the request cost, in dollars, to the usage block.
+    if (openRouter) body.usage = { include: true };
     if (request.maxTokens) body.max_tokens = request.maxTokens;
     if (request.json) body.response_format = { type: 'json_object' };
 

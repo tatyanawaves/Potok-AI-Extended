@@ -45,9 +45,9 @@ export const usageHooksFor = (rest: FirestoreRest, uid: string, settings: { dail
             const used = Number(doc?.data?.days?.[dayKey()]?.requests || 0);
             if (overLimit(used, limit)) throw new Error(limitMessage(limit));
         },
-        record: async tokens => {
+        record: async (tokens, cost) => {
             const doc = await rest.get(spendPath).catch(() => null);
-            const days = addToDay(doc?.data?.days, dayKey(), tokens);
+            const days = addToDay(doc?.data?.days, dayKey(), tokens, 1, cost || 0);
             if (doc) await rest.update(spendPath, { days });
             else await rest.create(`users/${uid}/private`, { days }, 'spend');
         }

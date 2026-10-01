@@ -580,7 +580,8 @@ export const runAndPostTurn = async (options: TurnOptions): Promise<TurnSummary>
             modelName: result.modelName,
             toolsUsed: result.toolsUsed.length ? result.toolsUsed : undefined,
             terminal: result.terminal.length ? capEntries(result.terminal) : undefined,
-            tokensUsed: result.usage.totalTokens || undefined
+            tokensUsed: result.usage.totalTokens || undefined,
+            costUsd: result.usage.cost || undefined
         });
         return { bot: agent.name, ok: true, result };
     } catch (error) {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useIsWide } from '../hooks/useIsWide';
 import { subscribeToReadState, markRead, isBoardUnread, isChannelUnread, EMPTY_READ_STATE } from '../services/reads';
 import { subscribeToSpend } from '../services/spend';
-import { spendOn, formatTokens, estimateDiscussionRequests } from '../services/usage';
+import { spendOn, formatTokens, estimateDiscussionRequests, formatCost } from '../services/usage';
 import { SpendState } from '../types';
 import { AISettings, Board, BoardChannel, BoardMember, BoardMessage, MessageAttachment } from '../types';
 import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
@@ -1087,7 +1087,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     className="text-[10px] font-mono text-slate-500 shrink-0 md:px-2"
                                     title={t.spendHint || 'Запросы к модели с вашего ключа за сегодня. Платит тот, кто упомянул бота.'}
                                 >
-                                    {t.today || 'сегодня'}: {spendOn(spend).requests}{dailyLimitOf(settings) > 0 ? ` / ${dailyLimitOf(settings)}` : ''} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}
+                                    {t.today || 'сегодня'}: {spendOn(spend).requests}{dailyLimitOf(settings) > 0 ? ` / ${dailyLimitOf(settings)}` : ''} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}{spendOn(spend).cost ? ` · ${formatCost(spendOn(spend).cost!)}` : ''}
                                 </div>
                             )}
 
@@ -1300,6 +1300,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 <div className="text-[9px] font-mono text-slate-700 mt-1">
                                                     {msg.modelName}
                                                     {msg.tokensUsed ? ` · ${formatTokens(msg.tokensUsed)} ${t.tokensShort || 'ток.'}` : ''}
+                                                    {msg.costUsd ? ` · ${formatCost(msg.costUsd)}` : ''}
                                                 </div>
                                             )}
                                         </div>
