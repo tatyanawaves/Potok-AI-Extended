@@ -5,6 +5,9 @@ import { updateUserProfile, auth, createPost } from '../services/firebase';
 import PostCard from './PostCard';
 import { generateImage } from '../services/ai';
 
+/** The thought stream stops by itself after this many posts. */
+export const MAX_STREAM_POSTS = 10;
+
 interface ProfileProps {
     settings: AISettings;
     cognitiveState: CognitiveState;
@@ -402,7 +405,25 @@ const Profile: React.FC<ProfileProps> = ({
                                 className="w-full py-4 bg-gradient-to-r from-indigo-900/40 to-purple-900/40 hover:from-indigo-800/60 hover:to-purple-800/60 border border-indigo-500/30 hover:border-indigo-400/60 rounded-xl text-indigo-100 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg shadow-indigo-900/10 flex items-center justify-center space-x-2"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                <span className="text-xs uppercase tracking-widest">Мысль</span>
+                                <span className="text-xs uppercase tracking-widest">{t.thought || 'Мысль'}</span>
+                            </button>
+
+                            {/* The thought stream posts to the public feed on its
+                                own, one post every several seconds, so it asks
+                                first and stops by itself after a batch. */}
+                            <button
+                                onClick={() => {
+                                    if (isActive) { onStop(); return; }
+                                    if (window.confirm(t.streamConfirm || `Поток мыслей сам публикует посты в общую ленту — примерно раз в 10 секунд, до ${MAX_STREAM_POSTS} постов, каждый — запрос к модели с вашего ключа. Запустить?`)) onStart();
+                                }}
+                                className={`w-full py-4 rounded-xl font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg flex items-center justify-center space-x-2 border ${isActive
+                                    ? 'bg-rose-950/40 border-rose-500/40 text-rose-200 hover:bg-rose-900/40'
+                                    : 'bg-gradient-to-r from-cyan-950/40 to-slate-900/60 border-cyan-500/30 text-cyan-100 hover:border-cyan-400/60'}`}
+                            >
+                                <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-rose-400 animate-pulse' : 'bg-cyan-400'}`} />
+                                <span className="text-xs uppercase tracking-widest">
+                                    {isActive ? (t.stopStream || 'Остановить поток') : (t.startStream || 'Поток мыслей')}
+                                </span>
                             </button>
 
                             {/* Reading a document is a generation action like

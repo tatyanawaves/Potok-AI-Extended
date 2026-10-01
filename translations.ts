@@ -354,7 +354,11 @@ export const translations = {
     freeModelSlowHint: "On a free model one fragment can take a minute or two.",
     mapOf: "Map of",
     computer: "Computer",
-    computerHint: "Board's computer: files that stay between conversations"
+    computerHint: "Board's computer: files that stay between conversations",
+    thought: "Thought",
+    startStream: "Thought stream",
+    stopStream: "Stop the stream",
+    streamConfirm: "The thought stream publishes posts to the public feed by itself — about every 10 seconds, up to 10 posts, each a request to the model on your key. Start?"
   },
   ru: {
     title: 'Potok',
@@ -450,7 +454,11 @@ export const translations = {
     errorUserNotFound: 'Пользователь не найден.',
     errorGenericAuth: 'Ошибка авторизации.',
     computer: "Компьютер",
-    computerHint: "Компьютер доски: файлы, которые остаются между разговорами"
+    computerHint: "Компьютер доски: файлы, которые остаются между разговорами",
+    thought: "Мысль",
+    startStream: "Поток мыслей",
+    stopStream: "Остановить поток",
+    streamConfirm: "Поток мыслей сам публикует посты в общую ленту — примерно раз в 10 секунд, до 10 постов, каждый — запрос к модели с вашего ключа. Запустить?"
   },
   kk: {
     title: 'Potok',
@@ -806,6 +814,10 @@ export const translations = {
     freeModelSlowHint: "Тегін модельде бір фрагмент бір-екі минутқа созылуы мүмкін.",
     mapOf: "Картасы:",
     computer: "Компьютер",
-    computerHint: "Тақта компьютері: әңгімелер арасында сақталатын файлдар"
+    computerHint: "Тақта компьютері: әңгімелер арасында сақталатын файлдар",
+    thought: "Ой",
+    startStream: "Ойлар ағыны",
+    stopStream: "Ағынды тоқтату",
+    streamConfirm: "Ойлар ағыны жалпы лентаға посттарды өзі жариялайды — шамамен 10 секунд сайын, 10 постқа дейін, әрқайсысы сіздің кілтіңізбен модельге бір сұрау. Іске қосу керек пе?"
   }
 };

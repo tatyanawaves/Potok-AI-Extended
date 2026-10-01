@@ -6,7 +6,7 @@ const ThoughtSymbolMap2D = React.lazy(() => import('./components/ThoughtSymbolMa
 import ThoughtLog from './components/ThoughtLog';
 import SettingsModal from './components/SettingsModal';
 import AuthScreen from './components/AuthScreen';
-import Profile from './components/Profile';
+import Profile, { MAX_STREAM_POSTS } from './components/Profile';
 import Boards from './components/Boards';
 import { useUnread } from './hooks/useUnread';
 import Messages from './components/Messages';
@@ -98,6 +98,7 @@ const App: React.FC = () => {
   const commentedRef = useRef<Set<string>>(new Set());
   const sessionStartRef = useRef(Date.now());
   const isCycleRunningRef = useRef(isCycleRunning);
+  const streamPostsRef = useRef(0);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -1037,6 +1038,14 @@ const App: React.FC = () => {
       await createPost(enrichedThought);
       console.log('[initiateContinuousThoughtGeneration] Post saved successfully');
 
+      // A batch, not forever: each post is public and costs a request.
+      streamPostsRef.current += 1;
+      if (streamPostsRef.current >= MAX_STREAM_POSTS) {
+        setIsThinking(false);
+        isThinkingRef.current = false;
+        return;
+      }
+
       const baseDelay = 7000; // 7 seconds default
       const randomTimeVariation = (Math.random() * 1.0 + 0.5); 
       const delay = baseDelay * randomTimeVariation;
@@ -1064,6 +1073,7 @@ const App: React.FC = () => {
 
     setIsThinking(true);
     isThinkingRef.current = true;
+    streamPostsRef.current = 0;
 
     console.log('[startThoughtGenerationStream] Starting thought loop');
 
