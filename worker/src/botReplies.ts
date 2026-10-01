@@ -13,6 +13,7 @@
 
 import type { AISettings, BoardMember } from '../../types';
 import { answerMentions } from '../../services/runtime/turn';
+import { untilAborted } from '../../services/llm';
 import { setMcpFetch } from '../../services/mcp';
 import { FirestoreRest, restAgentStore } from './firestoreRest';
 import { firestoreConfig, fixedToken, type TaskEnv } from './agentTasks';
@@ -84,7 +85,8 @@ export const handleBotReply = async (
     const timer = setTimeout(() => deadline.abort(), REPLY_DEADLINE_MS);
 
     try {
-        await answerMentions({
+        // Raced as a whole too: a stuck tool call does not take the signal.
+        await untilAborted(answerMentions({
             signal: deadline.signal,
             store, mentions, authorId: uid, boardId, channelId,
             channelName: str(body.channelName, 100) || 'general',
@@ -93,7 +95,7 @@ export const handleBotReply = async (
             approveTool: approvalVia(rest, boardId, uid),
             confirmDestructive: true,
             onDelta: (botName, text) => drafts.write(idOf(botName), botName, text)
-        });
+        }), deadline.signal);
     } catch (error) {
         if (!deadline.signal.aborted) throw error;
         // A bot cut off by the deadline leaves a note rather than silence.
