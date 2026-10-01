@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentStore } from '../services/runtime/store';
-import { runBotTurn, runAndPostTurn, isDestructiveTool, replyOrNotice, resetToolConnections, probeToolServer } from '../services/runtime/turn';
+import { runBotTurn, runAndPostTurn, isDestructiveTool, replyOrNotice, resetToolConnections, probeToolServer, boardScoped } from '../services/runtime/turn';
 import { setMcpFetch } from '../services/mcp';
 import { isFatalProviderError } from '../services/llm';
 import { interleave, selectTools, EMPTY_SUMMARY } from '../services/memoryCore';
@@ -306,8 +306,9 @@ describe('my bots', () => {
 describe('the terminal on a reply', () => {
     it('keeps what the bot ran in its sandbox, and nothing from other tools', async () => {
         const url = 'https://worker/tools/sandbox?provider=e2b';
+        // Reached on the board's own computer.
         fakeMcp({
-            [url]: {
+            [`${url}&board=b`]: {
                 tools: [{ name: 'sandbox_shell' }, { name: 'get_time' }],
                 call: name => name === 'sandbox_shell' ? 'exit 0\nreport.csv' : '2026-09-25T12:00:00Z'
             }
@@ -339,5 +340,17 @@ describe('the terminal on a reply', () => {
 
         // Firestore rejects a field set to undefined; sendMessage drops it.
         expect(posted[0].terminal).toBeUndefined();
+    });
+});
+
+describe('boardScoped', () => {
+    it('puts sandbox tools on the board computer, once', () => {
+        expect(boardScoped('https://w/tools/sandbox?provider=daytona', 'B1')).toBe('https://w/tools/sandbox?provider=daytona&board=B1');
+        expect(boardScoped('https://w/tools/sandbox?provider=daytona&board=X', 'B1')).toBe('https://w/tools/sandbox?provider=daytona&board=X');
+    });
+
+    it('leaves other servers alone', () => {
+        expect(boardScoped('https://mcp.deepwiki.com/mcp', 'B1')).toBe('https://mcp.deepwiki.com/mcp');
+        expect(boardScoped('https://w/tools/browser', 'B1')).toBe('https://w/tools/browser');
     });
 });

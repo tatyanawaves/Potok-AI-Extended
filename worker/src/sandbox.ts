@@ -12,7 +12,9 @@
  *
  * One sandbox per user and provider is kept warm between calls (its id is
  * remembered for a while) so a bot can write a file and run it in the next
- * call; the provider stops it on its own when idle.
+ * call; the provider stops it on its own when idle. With `&board=<id>`,
+ * Daytona instead gives each board a computer of its own that is never
+ * deleted (POST /machine manages it).
  */
 
 import { seal, open } from './taskCrypto';
@@ -119,59 +121,105 @@ interface Backend {
     shell(command: string): Promise<string>;
     writeFile(path: string, content: string): Promise<string>;
     readFile(path: string): Promise<string>;
+    /** Puts a binary file into ~/attachments; returns its absolute path. */
+    writeBytes(name: string, bytes: ArrayBuffer): Promise<string>;
 }
 
-/** Daytona: create a sandbox, then drive it through its toolbox API. */
-const daytona = async (env: SandboxEnv, uid: string, key: string): Promise<Backend> => {
-    const auth = { Authorization: `Bearer ${key}` };
-    const kv = env.CONNECTOR_TOKENS!;
+/** A board id as Firestore makes them; anything else is refused before it reaches a key. */
+export const BOARD_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const machineName = (uid: string, board: string) => `box:${uid}:daytona:board:${board}`;
 
-    const cached = await kv.get(boxName(uid, 'daytona'));
-    let box: { id: string, toolbox: string } | null = cached ? JSON.parse(cached) : null;
+interface DaytonaBox { id: string, toolbox: string }
+
+export const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+const daytonaAuth = (key: string) => ({ Authorization: `Bearer ${key}` });
+
+/** The sandbox's state, or null once it is gone. */
+const daytonaState = async (key: string, id: string): Promise<any | null> => {
+    const r = await fetch(`${DAYTONA_API}/sandbox/${id}`, { headers: daytonaAuth(key) });
+    if (r.status === 404) return null;
+    if (!r.ok) await failed(r, 'Daytona');
+    return r.json();
+};
+
+const GONE = ['destroyed', 'destroying', 'error', 'build_failed'];
+
+/**
+ * Finds the user's Daytona sandbox and makes sure it runs.
+ *
+ * Without a board it is a scratch sandbox: remembered for a while and deleted
+ * by Daytona a couple of hours after it stops. With a board it is that board's
+ * computer: stopped when idle, archived by Daytona after a while, but never
+ * deleted and never forgotten, so files and installed packages stay until the
+ * user deletes the machine.
+ */
+const ensureDaytona = async (env: SandboxEnv, uid: string, key: string, board?: string): Promise<DaytonaBox> => {
+    const kv = env.CONNECTOR_TOKENS!;
+    const name = board ? machineName(uid, board) : boxName(uid, 'daytona');
+    const cached = await kv.get(name);
+    let box: DaytonaBox | null = cached ? JSON.parse(cached) : null;
 
     if (box) {
-        // Stopped by its idle timer since: start it again rather than make a new one.
-        const r = await fetch(`${DAYTONA_API}/sandbox/${box.id}`, { headers: auth });
-        if (!r.ok) box = null;
-        else {
-            const s: any = await r.json();
-            if (s.state === 'stopped') await fetch(`${DAYTONA_API}/sandbox/${box.id}/start`, { method: 'POST', headers: auth });
-            else if (!['started', 'starting'].includes(s.state)) box = null;
-        }
+        const s = await daytonaState(key, box.id);
+        if (!s || GONE.includes(s.state)) box = null;
     }
 
     if (!box) {
         const r = await fetch(`${DAYTONA_API}/sandbox`, {
             method: 'POST',
-            headers: { ...auth, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ labels: { app: 'potok' }, autoStopInterval: 15, autoDeleteInterval: 120 })
+            headers: { ...daytonaAuth(key), 'Content-Type': 'application/json' },
+            body: JSON.stringify(board
+                ? { labels: { app: 'potok', board }, autoStopInterval: 15, autoDeleteInterval: -1 }
+                : { labels: { app: 'potok' }, autoStopInterval: 15, autoDeleteInterval: 120 })
         });
         if (!r.ok) await failed(r, 'Daytona: не удалось создать песочницу');
         const s: any = await r.json();
         box = { id: s.id, toolbox: String(s.toolboxProxyUrl || 'https://proxy.app.daytona.io/toolbox').replace(/\/$/, '') };
     }
 
-    // A fresh sandbox takes a few seconds to come up.
-    for (let i = 0; i < 20; i++) {
-        const s: any = await (await fetch(`${DAYTONA_API}/sandbox/${box.id}`, { headers: auth })).json();
-        if (s.state === 'started') break;
-        if (s.state === 'error') throw new Error(`Daytona: ${s.errorReason || 'sandbox failed'}`);
-        await new Promise(r => setTimeout(r, 1500));
+    // A new or stopped sandbox takes a few seconds; an archived one longer.
+    let started = false;
+    for (let i = 0; i < 30 && !started; i++) {
+        const s = await daytonaState(key, box.id);
+        if (!s) throw new Error('Daytona: машина пропала, повторите команду');
+        if (s.state === 'started') started = true;
+        else if (s.state === 'error' || s.state === 'build_failed') throw new Error(`Daytona: ${s.errorReason || 'sandbox failed'}`);
+        else {
+            if (s.state === 'stopped' || s.state === 'archived') {
+                await fetch(`${DAYTONA_API}/sandbox/${box.id}/start`, { method: 'POST', headers: daytonaAuth(key) });
+            }
+            await new Promise(r => setTimeout(r, 2000));
+        }
     }
-    await kv.put(boxName(uid, 'daytona'), JSON.stringify(box), { expirationTtl: REUSE_SECONDS });
+    if (!started) throw new Error('Daytona: машина ещё запускается, повторите через минуту');
 
+    await kv.put(name, JSON.stringify(box), board ? undefined : { expirationTtl: REUSE_SECONDS });
+    return box;
+};
+
+/** Drives a running Daytona sandbox through its toolbox API. */
+const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
     const base = `${box.toolbox}/${box.id}`;
     const call = async (path: string, init: RequestInit) => {
-        const r = await fetch(`${base}${path}`, { ...init, headers: { ...auth, ...(init.headers || {}) } });
+        const r = await fetch(`${base}${path}`, { ...init, headers: { ...daytonaAuth(key), ...(init.headers || {}) } });
         if (!r.ok) await failed(r, `Daytona ${path}`);
         return r;
     };
     const execute = async (command: string, timeout = 60) => {
         const out: any = await (await call('/process/execute', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command, timeout })
+            // Through sh, so pipes, && and quotes work whatever the toolbox does with a bare command.
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ command: `sh -c ${shellQuote(command)}`, timeout })
         })).json();
-        return `exit ${out.exitCode ?? 0}\n${clip(String(out.result || ''))}`;
+        return { exitCode: Number(out.exitCode ?? 0), result: String(out.result || '') };
     };
+    const upload = async (path: string, body: Blob) => {
+        const form = new FormData();
+        form.append('file', body, path.split('/').pop() || 'file');
+        await call(`/files/upload-v2?path=${encodeURIComponent(path)}`, { method: 'POST', body: form });
+    };
+    let home: Promise<string> | null = null;
+    const homeDir = () => (home ??= execute('echo $HOME').then(r => r.result.trim() || '/home/daytona'));
 
     return {
         runCode: async (language, code) => {
@@ -181,15 +229,90 @@ const daytona = async (env: SandboxEnv, uid: string, key: string): Promise<Backe
             })).json();
             return `exit ${out.exitCode ?? 0}\n${clip(String(out.result || ''))}`;
         },
-        shell: command => execute(command),
+        shell: async command => {
+            const out = await execute(command);
+            return `exit ${out.exitCode}\n${clip(out.result)}`;
+        },
         writeFile: async (path, content) => {
-            const form = new FormData();
-            form.append('file', new Blob([content]), path.split('/').pop() || 'file');
-            await call(`/files/upload-v2?path=${encodeURIComponent(path)}`, { method: 'POST', body: form });
+            await upload(path, new Blob([content]));
             return `Saved ${path} (${content.length} chars)`;
         },
-        readFile: async path => clip(await (await call(`/files/download?path=${encodeURIComponent(path)}`, { method: 'GET' })).text())
+        readFile: async path => clip(await (await call(`/files/download?path=${encodeURIComponent(path)}`, { method: 'GET' })).text()),
+        writeBytes: async (name, bytes) => {
+            const path = `${await homeDir()}/attachments/${name}`;
+            await upload(path, new Blob([bytes]));
+            return path;
+        }
     };
+};
+
+/** Lists one folder of the machine as JSON, for the board's "Компьютер" panel. */
+const LIST_SCRIPT = [
+    'import os, sys, json',
+    "p = os.path.expanduser(sys.argv[1] if len(sys.argv) > 1 else '~')",
+    'out = []',
+    'for e in sorted(os.scandir(p), key=lambda e: (not e.is_dir(), e.name.lower())):',
+    '    try:',
+    "        out.append({'name': e.name, 'dir': e.is_dir(), 'size': 0 if e.is_dir() else e.stat().st_size})",
+    '    except OSError:',
+    '        pass',
+    "print(json.dumps({'path': os.path.abspath(p), 'entries': out[:500]}))"
+].join('\n');
+
+/**
+ * POST /machine { board, action, path? } — the board's computer, for its panel.
+ * `status` never wakes the machine; `list` and `download` do.
+ */
+export const handleMachine = async (request: Request, env: SandboxEnv, uid: string, json: Json): Promise<Response> => {
+    const body: any = await request.json().catch(() => ({}));
+    const board = String(body.board || '');
+    if (!BOARD_ID.test(board)) return json({ error: 'board is required' }, 400);
+    if (!env.CONNECTOR_TOKENS) return json({ error: 'Key storage is not enabled on this worker' }, 501);
+    const key = await userKey(env, uid, 'daytona');
+    if (!key) return json({ key: false }, 200);
+
+    const kv = env.CONNECTOR_TOKENS;
+    const cached = await kv.get(machineName(uid, board));
+    const box: DaytonaBox | null = cached ? JSON.parse(cached) : null;
+    const path = typeof body.path === 'string' && body.path ? body.path : '~';
+
+    switch (body.action) {
+        case 'status': {
+            const s = box ? await daytonaState(key, box.id) : null;
+            if (!s || GONE.includes(s.state)) return json({ key: true, exists: false }, 200);
+            return json({ key: true, exists: true, state: s.state, cpu: s.cpu, memory: s.memory, disk: s.disk }, 200);
+        }
+        case 'list': {
+            const backend = daytonaBackend(key, await ensureDaytona(env, uid, key, board));
+            const out = (await backend.shell(`python3 -c ${shellQuote(LIST_SCRIPT)} ${shellQuote(path)}`)).replace(/^exit \d+\n/, '');
+            try {
+                return json({ key: true, exists: true, state: 'started', ...JSON.parse(out) }, 200);
+            } catch {
+                return json({ error: out.slice(0, 300) || 'Не удалось прочитать папку' }, 502);
+            }
+        }
+        case 'download': {
+            if (!box) return json({ error: 'У доски ещё нет компьютера' }, 404);
+            const running = await ensureDaytona(env, uid, key, board);
+            const r = await fetch(`${running.toolbox}/${running.id}/files/download?path=${encodeURIComponent(path)}`, { headers: daytonaAuth(key) });
+            if (!r.ok) await failed(r, 'Daytona download');
+            return new Response(r.body, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } });
+        }
+        case 'stop': {
+            if (box) await fetch(`${DAYTONA_API}/sandbox/${box.id}/stop`, { method: 'POST', headers: daytonaAuth(key) });
+            return json({ ok: true }, 200);
+        }
+        case 'delete': {
+            if (box) {
+                const r = await fetch(`${DAYTONA_API}/sandbox/${box.id}`, { method: 'DELETE', headers: daytonaAuth(key) });
+                if (!r.ok && r.status !== 404) await failed(r, 'Daytona: не удалось удалить машину');
+                await kv.delete(machineName(uid, board));
+            }
+            return json({ ok: true }, 200);
+        }
+        default:
+            return json({ error: 'action must be status, list, download, stop or delete' }, 400);
+    }
 };
 
 /**
@@ -249,24 +372,51 @@ const e2b = async (env: SandboxEnv, uid: string, key: string): Promise<Backend> 
             await execute(`import os\nos.makedirs(os.path.dirname(${py(path)}) or ".", exist_ok=True)\nopen(${py(path)}, "w", encoding="utf-8").write(${py(content)})`);
             return `Saved ${path} (${content.length} chars)`;
         },
-        readFile: path => execute(`print(open(${py(path)}, encoding="utf-8").read())`)
+        readFile: path => execute(`print(open(${py(path)}, encoding="utf-8").read())`),
+        writeBytes: async (name, bytes) => {
+            let binary = '';
+            const view = new Uint8Array(bytes);
+            for (let i = 0; i < view.length; i += 0x8000) binary += String.fromCharCode(...view.subarray(i, i + 0x8000));
+            const path = `/home/user/attachments/${name}`;
+            await execute(`import os, base64
+os.makedirs("/home/user/attachments", exist_ok=True)
+open(${py(path)}, "wb").write(base64.b64decode(${py(btoa(binary))}))`);
+            return path;
+        }
     };
 };
 
-const backendFor = async (env: SandboxEnv, uid: string, provider: Provider): Promise<Backend> => {
+const backendFor = async (env: SandboxEnv, uid: string, provider: Provider, board?: string): Promise<Backend> => {
     const key = await userKey(env, uid, provider);
     if (!key) throw new Error(`Ключ ${provider === 'e2b' ? 'E2B' : 'Daytona'} не сохранён — добавьте его в Настройках Potok`);
-    return provider === 'daytona' ? daytona(env, uid, key) : e2b(env, uid, key);
+    return provider === 'daytona' ? daytonaBackend(key, await ensureDaytona(env, uid, key, board)) : e2b(env, uid, key);
 };
 
-/** The sandbox as MCP tools. The backend is only created when a tool is called. */
-export const sandboxTools = (env: SandboxEnv, uid: string, provider: Provider): ServerTool[] => {
+/** What the import tool needs: the board's files, and whether the caller may read them. */
+export interface AttachmentSource {
+    get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
+    mayRead(board: string): Promise<boolean>;
+}
+
+/**
+ * The sandbox as MCP tools. The backend is only created when a tool is called.
+ * With a board, Daytona works on that board's own computer, which keeps its
+ * files; E2B stays a scratch sandbox.
+ */
+export const sandboxTools = (
+    env: SandboxEnv, uid: string, provider: Provider, board?: string, files?: AttachmentSource
+): ServerTool[] => {
     let backend: Promise<Backend> | null = null;
-    const get = () => (backend ??= backendFor(env, uid, provider));
-    return [
+    const get = () => (backend ??= backendFor(env, uid, provider, board));
+    const persistent = provider === 'daytona' && Boolean(board);
+    const lifetime = persistent
+        ? "This is the board's own computer: files and installed packages stay between conversations, days apart."
+        : 'State and files persist between calls for about 25 minutes.';
+
+    const tools: ServerTool[] = [
         {
             name: 'sandbox_run_code',
-            description: 'Run Python or JavaScript in a private cloud sandbox and get the output. State and files persist between calls for about 25 minutes.',
+            description: `Run Python or JavaScript in a private cloud sandbox and get the output. ${lifetime}`,
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -296,4 +446,23 @@ export const sandboxTools = (env: SandboxEnv, uid: string, provider: Provider): 
             run: async a => (await get()).readFile(String(a.path || ''))
         }
     ];
+
+    if (board && files) {
+        tools.push({
+            name: 'sandbox_import_attachment',
+            description: 'Copy a file attached in the board chat into the sandbox (~/attachments/<name>), to open it with code: PDF, Excel, images, archives, anything. Pass the key shown next to the attachment.',
+            inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
+            run: async a => {
+                const key = String(a.key || '');
+                if (!key.startsWith(`board/${board}/`)) throw new Error('Это вложение не из этой доски');
+                if (!(await files.mayRead(board))) throw new Error('Нет доступа к файлам этой доски');
+                const object = await files.get(key);
+                if (!object) throw new Error('Вложение не найдено');
+                const name = key.slice(key.lastIndexOf('/') + 1).replace(/^[0-9a-f-]{36}-/, '') || 'file';
+                const path = await (await get()).writeBytes(name, await object.arrayBuffer());
+                return `Saved ${path}`;
+            }
+        });
+    }
+    return tools;
 };

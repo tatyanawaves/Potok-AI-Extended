@@ -27,6 +27,7 @@ import { updateBot } from '../services/boards';
 import { mentionableName, freeName } from '../services/mentions';
 import { subscribeToBotLibrary, saveBotToLibrary, removeBotFromLibrary, SavedBot } from '../services/botLibrary';
 import MemoryPanel from './MemoryPanel';
+import ComputerPanel from './ComputerPanel';
 import CodeSaveDialog from './CodeSaveDialog';
 import TerminalBlock from './TerminalBlock';
 import { RichText } from './RichText';
@@ -159,6 +160,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [toolHint, setToolHint] = useState('');
     const [toolProbe, setToolProbe] = useState<{ state: 'idle' | 'loading' | 'ok' | 'error', text: string }>({ state: 'idle', text: '' });
     const [showMemory, setShowMemory] = useState(false);
+    const [showComputer, setShowComputer] = useState(false);
 
     // Server tasks: meetings the worker runs, which outlive this tab.
     const [runOnServer, setRunOnServer] = useState(false);
@@ -807,7 +809,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setIsRunning(true);
         setError(null);
         try {
-            const { entries } = await runInSandbox(requests);
+            const { entries } = await runInSandbox(requests, activeBoard.id!);
             await sendMessage({
                 channelId: activeChannelId,
                 boardId: activeBoard.id!,
@@ -1033,7 +1035,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
                                 {activeChannelId && (
                                     <button
-                                        onClick={() => setShowMemory(v => !v)}
+                                        onClick={() => { setShowMemory(v => !v); setShowComputer(false); }}
                                         className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showMemory
                                             ? 'bg-amber-950/30 border-amber-500/30 text-amber-300'
                                             : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'}`}
@@ -1043,6 +1045,18 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     </button>
                                 )}
                                 {activeChannelId && <Hint id="memory" />}
+
+                                {activeChannelId && (
+                                    <button
+                                        onClick={() => { setShowComputer(v => !v); setShowMemory(false); }}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showComputer
+                                            ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+                                            : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'}`}
+                                        title="Компьютер доски: файлы, которые остаются между разговорами"
+                                    >
+                                        Компьютер
+                                    </button>
+                                )}
 
                                 {activeChannelId && (
                                     <button
@@ -1320,6 +1334,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     settings={settings}
                                     onClose={() => setShowMemory(false)}
                                 />
+                            )}
+
+                            {showComputer && activeBoard.id && (
+                                <ComputerPanel boardId={activeBoard.id} onClose={() => setShowComputer(false)} />
                             )}
 
                             {/* Members panel */}

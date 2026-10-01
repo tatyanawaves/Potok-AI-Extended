@@ -121,6 +121,10 @@ export const toolServersOf = (agent: BoardMember): string[] =>
         .map(u => u?.trim())
         .filter((u): u is string => Boolean(u)))];
 
+/** Sandbox tools work on the board's own computer, which the worker keeps per board. */
+export const boardScoped = (url: string, boardId: string): string =>
+    /\/tools\/sandbox\?/.test(url) && !/[?&]board=/.test(url) ? `${url}&board=${encodeURIComponent(boardId)}` : url;
+
 /** Connects afresh and lists what a server offers. */
 export const probeToolServer = async (url: string, store: AgentStore): Promise<McpTool[]> => {
     forgetConnections(url);
@@ -307,7 +311,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     const notes: string[] = [];
 
     if (toolPolicy !== 'off') {
-        const urls = toolServersOf(agent);
+        const urls = toolServersOf(agent).map(url => boardScoped(url, boardId));
         const connections = await Promise.allSettled(urls.map(url => connectToToolServer(url, store)));
         connections.forEach((outcome, i) => {
             if (outcome.status === 'fulfilled') {

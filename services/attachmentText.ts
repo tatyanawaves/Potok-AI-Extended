@@ -20,10 +20,11 @@ export const isReadableText = (file: { name: string; type: string; size: number 
 export const keptText = (text: string): string =>
     text.length > MAX_KEPT_CHARS ? `${text.slice(0, MAX_KEPT_CHARS)}\n…(обрезано)` : text;
 
-export const attachmentsForBots = (attachments: { name: string; size: number; text?: string }[] | undefined): string => {
+export const attachmentsForBots = (attachments: { key?: string; name: string; size: number; text?: string }[] | undefined): string => {
     if (!attachments?.length) return '';
     return attachments.map(a => {
-        const head = `[вложение: ${a.name}, ${a.size} байт]`;
+        // The key lets a bot copy the file into its sandbox (sandbox_import_attachment).
+        const head = `[вложение: ${a.name}, ${a.size} байт${a.key ? `, key=${a.key}` : ''}]`;
         if (a.text === undefined) return `${head} (содержимое недоступно боту)`;
         const body = a.text.length > FOR_BOTS_CHARS ? `${a.text.slice(0, FOR_BOTS_CHARS)}\n…(обрезано)` : a.text;
         return `${head}\n\`\`\`\n${body}\n\`\`\``;
