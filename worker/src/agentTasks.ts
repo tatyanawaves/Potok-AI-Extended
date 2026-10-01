@@ -21,8 +21,8 @@ import { setMcpFetch } from '../../services/mcp';
 import { MAX_ORCHESTRATED_STEPS } from '../../services/orchestratorCore';
 import type { TaskContext } from '../../services/runtime/orchestrate';
 import { FirestoreRest, TokenSource, restAgentStore, type FirestoreConfig } from './firestoreRest';
-import { dailyLimitOf, overLimit, limitMessage, addToDay, type UsageHooks } from '../../services/spendLimit';
-import { dayKey } from '../../services/usage';
+import { fileReaders, usageHooksFor } from './runtimeParts';
+import { signerFor, verifierFor, type BotKeyEnv } from './botKey';
 import { seal, open } from './taskCrypto';
 
 /** The Workflow binding, typed structurally so tests need no Cloudflare globals. */
@@ -34,7 +34,7 @@ export interface TaskWorkflowBinding {
     }): Promise<{ id: string }>;
 }
 
-export interface TaskEnv {
+export interface TaskEnv extends BotKeyEnv {
     FIREBASE_PROJECT_ID: string;
     FIREBASE_WEB_API_KEY?: string;
     /** Key material for sealing task secrets; falls back to the Pipedream secret. */
@@ -85,7 +85,7 @@ export const firestoreConfig = (env: TaskEnv): FirestoreConfig => {
 };
 
 /** A token source that is just the caller's current ID token. */
-const fixedToken = (idToken: string) => ({ get: async () => idToken }) as unknown as TokenSource;
+export const fixedToken = (idToken: string) => ({ get: async () => idToken }) as unknown as TokenSource;
 
 const decodePayload = (jwt: string): any => {
     try {
@@ -120,50 +120,19 @@ export const openRuntime = async (
         ? selfFetch(new Request(url, init))
         : fetch(url, init));
 
-    // Through this worker's own /files, with the user's token, so board
-    // membership is checked exactly as for the app.
-    const readOwnFile = async (key: string): Promise<Response> => {
-        const url = new URL('/files', params.selfOrigin);
-        url.searchParams.set('key', key);
-        const response = await selfFetch(new Request(url, { headers: { Authorization: `Bearer ${await tokens.get()}` } }));
-        if (!response.ok) throw new Error(`Download failed (${response.status})`);
-        return response;
-    };
-
     const store = restAgentStore(rest, {
         // The Pipedream bridge takes the user's ID token; other servers the
         // token the user saved for them.
         toolToken: async url => url.startsWith(params.selfOrigin) ? tokens.get() : secrets.mcpTokens?.[url],
         // Tasks of different people run side by side in one isolate.
         scope: params.author.id,
-        readAttachment: async key => (await readOwnFile(key)).text(),
-        readAttachmentDataUrl: async (key, contentType) => {
-            const bytes = new Uint8Array(await (await readOwnFile(key)).arrayBuffer());
-            let binary = '';
-            for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-            return `data:${contentType};base64,${btoa(binary)}`;
-        }
+        ...fileReaders(params.selfOrigin, selfFetch, () => tokens.get()),
+        // Bot replies the server writes are signed, and bots believe only signed ones.
+        sign: await signerFor(env),
+        isAuthentic: await verifierFor(env)
     });
 
-    // The person's daily ceiling holds on the server too, counted in the same
-    // tally as in the browser. Per run, not module-wide: tasks of different
-    // people share this process.
-    const spendPath = `users/${params.author.id}/private/spend`;
-    const limit = dailyLimitOf(params.settings);
-    const usageHooks: UsageHooks = {
-        gate: async () => {
-            if (limit <= 0) return;
-            const doc = await rest.get(spendPath).catch(() => null);
-            const used = Number(doc?.data?.days?.[dayKey()]?.requests || 0);
-            if (overLimit(used, limit)) throw new Error(limitMessage(limit));
-        },
-        record: async tokens => {
-            const doc = await rest.get(spendPath).catch(() => null);
-            const days = addToDay(doc?.data?.days, dayKey(), tokens);
-            if (doc) await rest.update(spendPath, { days });
-            else await rest.create(`users/${params.author.id}/private`, { days }, 'spend');
-        }
-    };
+    const usageHooks = usageHooksFor(rest, params.author.id, params.settings);
 
     const settings: AISettings = {
         ...params.settings,

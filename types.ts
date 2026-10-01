@@ -314,6 +314,8 @@ export interface BoardMessage {
   postedBy?: string;
   /** Posted by the orchestrator of a task, on behalf of postedBy. */
   orchestrator?: boolean;
+  /** The server's signature on a bot reply (services/botSignature). */
+  sig?: string;
   content: string;
   /** Names mentioned via @name, used to wake up agents. */
   mentions: string[];

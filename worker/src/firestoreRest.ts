@@ -11,6 +11,7 @@
  * from it as needed.
  */
 
+import type { SignedFields } from '../../services/botSignature';
 import type { AgentStore } from '../../services/runtime/store';
 import type { BoardMessage } from '../../types';
 import { EMPTY_SUMMARY, type ChannelSummary, type MemoryNote } from '../../services/memoryCore';
@@ -163,6 +164,12 @@ export class FirestoreRest {
         return true;
     }
 
+    /** Deletes a document; one already gone is fine. */
+    async delete(path: string): Promise<void> {
+        const response = await this.request(`/${path}`, { method: 'DELETE' });
+        if (response.status !== 404) await this.ok(response, `delete ${path}`);
+    }
+
     async query(parentPath: string, structuredQuery: Record<string, unknown>): Promise<Array<{ id: string, data: Record<string, any> }>> {
         const parent = parentPath ? `/${parentPath}` : '';
         const rows = await this.ok(await this.request(`${parent}:runQuery`, {
@@ -181,7 +188,10 @@ export const restAgentStore = (
         toolToken: (url: string) => Promise<string | undefined>,
         scope?: string,
         readAttachment?: (key: string) => Promise<string>,
-        readAttachmentDataUrl?: (key: string, contentType: string) => Promise<string>
+        readAttachmentDataUrl?: (key: string, contentType: string) => Promise<string>,
+        /** Signs what this store posts in a bot's name (services/botSignature). */
+        sign?: (fields: SignedFields) => Promise<string>,
+        isAuthentic?: (message: BoardMessage) => Promise<boolean>
     }
 ): AgentStore => {
     const summaryPath = (b: string, c: string) => `boards/${b}/channels/${c}/memory/summary`;
@@ -191,6 +201,7 @@ export const restAgentStore = (
         scope: options.scope,
         readAttachment: options.readAttachment,
         readAttachmentDataUrl: options.readAttachmentDataUrl,
+        isAuthentic: options.isAuthentic,
 
         async getSummary(boardId, channelId) {
             const doc = await rest.get(summaryPath(boardId, channelId));
@@ -218,9 +229,14 @@ export const restAgentStore = (
 
         async postMessage(message) {
             const timestamp = Date.now();
+            const postedBy = options.scope;
+            const sig = options.sign && message.authorType === 'agent'
+                ? await options.sign({ ...message, postedBy, timestamp })
+                : undefined;
             await rest.create(`boards/${message.boardId}/channels/${message.channelId}/messages`, {
                 ...message,
-                postedBy: options.scope,
+                postedBy,
+                ...(sig ? { sig } : {}),
                 mentions: parseMentions(message.content),
                 timestamp
             });

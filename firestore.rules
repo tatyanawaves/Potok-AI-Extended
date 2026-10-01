@@ -280,9 +280,29 @@ service cloud.firestore {
       }
 
       // CHANNELS: readable by board members, managed by the board owner.
+      // APPROVALS: a tool request from a bot the server runs for someone;
+      // only that person sees it and only they answer it.
+      match /approvals/{approvalId} {
+        allow read, delete: if isSignedIn() && resource.data.requestedBy == request.auth.uid;
+        allow create: if isBoardMember(boardId)
+                      && request.resource.data.requestedBy == request.auth.uid
+                      && request.resource.data.status == 'pending';
+        allow update: if isSignedIn() && resource.data.requestedBy == request.auth.uid
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+                      && request.resource.data.status in ['allowed', 'denied'];
+      }
+
       match /channels/{channelId} {
         // MEMORY: the channel's running summary, kept up to date by any member
         // whose request triggered a compaction.
+        // DRAFTS: a bot reply as it is being written, shown until it lands.
+        match /drafts/{botId} {
+          allow read, delete: if isBoardMember(boardId);
+          allow create, update: if isBoardMember(boardId)
+                                && request.resource.data.postedBy == request.auth.uid
+                                && botId in boardData(boardId).get('botIds', []);
+        }
+
         match /memory/{docId} {
           allow read, write: if isBoardMember(boardId);
         }
