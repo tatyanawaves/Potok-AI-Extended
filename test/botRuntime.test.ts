@@ -435,3 +435,39 @@ describe('sending is risky too', () => {
         expect(isDestructiveTool({ name: 'list_emails', inputSchema: {} })).toBe(false);
     });
 });
+
+describe('pictures', () => {
+    const withImage = {
+        id: 'm', boardId: 'b', channelId: 'c', authorId: 'u', authorName: 'U', authorType: 'human', content: '@Worker что на фото?',
+        mentions: [], timestamp: 1, attachments: [{ key: 'board/b/x-cat.png', name: 'cat.png', size: 100, contentType: 'image/png' }]
+    } as any;
+    const pictureStore = () => ({
+        ...store(),
+        getMessagesSince: async () => [withImage],
+        readAttachmentDataUrl: async () => 'data:image/png;base64,AAAA'
+    });
+
+    it('sends an image on the newest message as an image', async () => {
+        const requests = fakeModel([{ content: 'Кот' }]);
+        await runBotTurn({ store: pictureStore(), agent: bot([]), boardId: 'b', channelId: 'c', channelName: 'g', settings });
+        const user = requests[0].messages.find((m: any) => Array.isArray(m.content));
+        expect(user.content[0].text).toContain('что на фото');
+        expect(user.content[1]).toEqual({ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } });
+    });
+
+    it('asks again without pictures when the model cannot see them', async () => {
+        const bodies: any[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (_url: string, init: any) => {
+            const body = JSON.parse(init.body);
+            bodies.push(body);
+            const hasImage = body.messages.some((m: any) => Array.isArray(m.content));
+            return hasImage
+                ? Response.json({ error: { message: 'This model does not support image input' } }, { status: 400 })
+                : Response.json({ choices: [{ message: { content: 'Не вижу картинку' } }], usage: { total_tokens: 1 } });
+        }));
+        const result = await runBotTurn({ store: pictureStore(), agent: bot([]), boardId: 'b', channelId: 'c', channelName: 'g', settings });
+        expect(result.reply).toBe('Не вижу картинку');
+        const last = bodies.at(-1).messages.map((m: any) => m.content).join('\n');
+        expect(last).toContain('cannot see images');
+    });
+});

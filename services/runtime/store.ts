@@ -27,6 +27,8 @@ export interface AgentStore {
     toolToken(url: string): Promise<string | undefined>;
     /** A board attachment's contents as text, read with the user's own access. */
     readAttachment?(key: string): Promise<string>;
+    /** A board image attachment as a data: URL, for models that see pictures. */
+    readAttachmentDataUrl?(key: string, contentType: string): Promise<string>;
     /**
      * Whom the runtime acts for (a uid). Tool sessions are cached per scope,
      * so users sharing one worker never share a session, even on servers that

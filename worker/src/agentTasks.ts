@@ -118,20 +118,28 @@ export const openRuntime = async (
         ? selfFetch(new Request(url, init))
         : fetch(url, init));
 
+    // Through this worker's own /files, with the user's token, so board
+    // membership is checked exactly as for the app.
+    const readOwnFile = async (key: string): Promise<Response> => {
+        const url = new URL('/files', params.selfOrigin);
+        url.searchParams.set('key', key);
+        const response = await selfFetch(new Request(url, { headers: { Authorization: `Bearer ${await tokens.get()}` } }));
+        if (!response.ok) throw new Error(`Download failed (${response.status})`);
+        return response;
+    };
+
     const store = restAgentStore(rest, {
         // The Pipedream bridge takes the user's ID token; other servers the
         // token the user saved for them.
         toolToken: async url => url.startsWith(params.selfOrigin) ? tokens.get() : secrets.mcpTokens?.[url],
         // Tasks of different people run side by side in one isolate.
         scope: params.author.id,
-        // Through this worker's own /files, with the user's token, so board
-        // membership is checked exactly as for the app.
-        readAttachment: async key => {
-            const url = new URL('/files', params.selfOrigin);
-            url.searchParams.set('key', key);
-            const response = await selfFetch(new Request(url, { headers: { Authorization: `Bearer ${await tokens.get()}` } }));
-            if (!response.ok) throw new Error(`Download failed (${response.status})`);
-            return response.text();
+        readAttachment: async key => (await readOwnFile(key)).text(),
+        readAttachmentDataUrl: async (key, contentType) => {
+            const bytes = new Uint8Array(await (await readOwnFile(key)).arrayBuffer());
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+            return `data:${contentType};base64,${btoa(binary)}`;
         }
     });
 

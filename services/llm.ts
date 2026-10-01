@@ -1,3 +1,4 @@
+import type { ContentPart } from './vision';
 import { AISettings, TokenUsage } from '../types';
 import { usageFrom } from './usage';
 
@@ -37,7 +38,8 @@ export const LEGACY_BASE_URLS = {
 
 export interface ChatMessage {
     role: 'system' | 'user' | 'assistant' | 'tool';
-    content: string | null;
+    /** Text, or text with pictures (services/vision). */
+    content: string | null | ContentPart[];
     tool_calls?: Array<{ id: string, type: 'function', function: { name: string, arguments: string } }>;
     tool_call_id?: string;
 }

@@ -1,9 +1,10 @@
 import { AISettings, BoardMember, TerminalEntry, TokenUsage } from '../../types';
 import { addUsage, EMPTY_USAGE } from '../usage';
 import { connect, callTool, toOpenAITools, McpConnection, McpTool } from '../mcp';
-import { complete, ChatMessage, isFatalProviderError, modelOf, extractJson } from '../llm';
+import { complete, ChatMessage, isFatalProviderError, modelOf, extractJson, Completion } from '../llm';
 import { memoryBlock, selectTools, clip } from '../memoryCore';
 import { untrusted, DATA_POLICY } from '../untrusted';
+import { imagesToShow, withPictures, refusedImages, withoutPictures } from '../vision';
 import { isBot, mentionableName } from '../mentions';
 import { AgentStore } from './store';
 import { loadTurnMemory, fileNote, findNotes } from './memory';
@@ -396,10 +397,20 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     const messages: ChatMessage[] = [{ role: 'system', content: system }];
     const context = contextMessage(memoryBlock(memory.summary, memory.notes), assignment?.inputs);
     if (context) messages.push({ role: 'user', content: context });
+    // Pictures on the newest messages go to the model as pictures.
+    const pictures = new Map<unknown, string[]>();
+    if (store.readAttachmentDataUrl) {
+        await Promise.all(imagesToShow(memory.window).map(async ({ message, image }) => {
+            const url = await store.readAttachmentDataUrl!(image.key, image.contentType).catch(() => null);
+            if (url) pictures.set(message, [...(pictures.get(message) || []), url]);
+        }));
+    }
     for (const msg of memory.window) {
+        const text = `${msg.authorName}: ${msg.content}`;
+        const urls = pictures.get(msg);
         messages.push(msg.authorId === agent.id
             ? { role: 'assistant', content: msg.content }
-            : { role: 'user', content: `${msg.authorName}: ${msg.content}` });
+            : { role: 'user', content: urls?.length ? withPictures(text, urls) : text });
     }
     // Some providers refuse a conversation that ends on the assistant.
     if (messages[messages.length - 1].role !== 'user') {
@@ -440,7 +451,16 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
 
         // Final round without tools, so the model has to answer in prose.
         const offer = round < MAX_TOOL_ROUNDS ? tools : undefined;
-        const completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta }, settings);
+        let completion: Completion;
+        try {
+            completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta }, settings);
+        } catch (error) {
+            // A model without vision: the same request, the pictures replaced by a note.
+            if (!pictures.size || !refusedImages(error)) throw error;
+            pictures.clear();
+            messages.splice(0, messages.length, ...withoutPictures(messages));
+            completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta }, settings);
+        }
         usage = addUsage(usage, completion.usage);
 
         if (completion.toolCalls.length === 0 || !offer) {
