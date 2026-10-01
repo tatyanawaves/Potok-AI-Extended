@@ -1,4 +1,4 @@
-import { forget, type ToolPermissions } from '../services/toolPermissions';
+import { forget, type ToolPermissions, type Remembered } from '../services/toolPermissions';
 import ModelPicker from './ModelPicker';
 import { dailyLimitOf } from '../services/spendLimit';
 import React, { useState, useEffect, useCallback } from 'react';
@@ -594,7 +594,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
               <p className="text-[10px] text-slate-500">{t.toolPermissionsEmpty || 'Пока ничего. Отметьте «Запомнить» в запросе инструмента, чтобы бот больше не спрашивал.'}</p>
             ) : (
               <ul className="space-y-1">
-                {Object.entries(toolPermissions).map(([key, item]) => (
+                {(Object.entries(toolPermissions) as Array<[string, Remembered]>).map(([key, item]) => (
                   <li key={key} className="flex items-center justify-between gap-2 text-[11px] bg-slate-950 border border-slate-800 rounded-md px-2.5 py-1.5">
                     <span className="truncate font-mono text-slate-300">{item.label}</span>
                     <span className="shrink-0 flex items-center gap-2">
