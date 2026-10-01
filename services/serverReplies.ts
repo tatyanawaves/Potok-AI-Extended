@@ -30,7 +30,11 @@ export const replyOnServer = async (options: {
     if (!settings.openRouterKey || settings.openRouterKey === 'google-auth') {
         throw new Error('Нужен ключ API в настройках — бот ответит на нём');
     }
+    // A little longer than the server's own deadline (worker/src/botReplies.ts).
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), 5 * 60_000);
     const response = await fetch(`${WORKER}/bots/reply`, {
+        signal: deadline.signal,
         method: 'POST',
         headers: { Authorization: `Bearer ${await user.getIdToken()}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -50,7 +54,9 @@ export const replyOnServer = async (options: {
                 language: settings.language
             }
         })
-    });
+    }).catch(error => {
+        throw deadline.signal.aborted ? new Error('Сервер не ответил за 5 минут — бот, похоже, завис. Попробуйте ещё раз.') : error;
+    }).finally(() => clearTimeout(timer));
     if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error((data as any).error || `Сервер ответил ${response.status}`);

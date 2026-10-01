@@ -615,6 +615,8 @@ export interface MentionOptions {
     confirmDestructive?: boolean;
     /** The reply of the bot answering now, as it is written. */
     onDelta?: (botName: string, textSoFar: string) => void;
+    /** Stops every reply still being written, e.g. when a deadline passes. */
+    signal?: AbortSignal;
 }
 
 /** Answers every bot a message mentions, in order, each seeing the previous reply. */
