@@ -28,6 +28,14 @@ export interface AgentStore {
     /** A board attachment's contents as text, read with the user's own access. */
     readAttachment?(key: string): Promise<string>;
     /**
+     * Whether a message in a bot's name really came from the server (its
+     * signature checks out; services/botSignature). Absent: everything is
+     * believed, as before signatures existed.
+     */
+    isAuthentic?(message: BoardMessage): Promise<boolean>;
+    /** A board image attachment as a data: URL, for models that see pictures. */
+    readAttachmentDataUrl?(key: string, contentType: string): Promise<string>;
+    /**
      * Whom the runtime acts for (a uid). Tool sessions are cached per scope,
      * so users sharing one worker never share a session, even on servers that
      * take no token.

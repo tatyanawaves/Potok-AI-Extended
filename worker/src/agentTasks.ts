@@ -21,6 +21,8 @@ import { setMcpFetch } from '../../services/mcp';
 import { MAX_ORCHESTRATED_STEPS } from '../../services/orchestratorCore';
 import type { TaskContext } from '../../services/runtime/orchestrate';
 import { FirestoreRest, TokenSource, restAgentStore, type FirestoreConfig } from './firestoreRest';
+import { fileReaders, usageHooksFor } from './runtimeParts';
+import { signerFor, verifierFor, type BotKeyEnv } from './botKey';
 import { seal, open } from './taskCrypto';
 
 /** The Workflow binding, typed structurally so tests need no Cloudflare globals. */
@@ -32,7 +34,7 @@ export interface TaskWorkflowBinding {
     }): Promise<{ id: string }>;
 }
 
-export interface TaskEnv {
+export interface TaskEnv extends BotKeyEnv {
     FIREBASE_PROJECT_ID: string;
     FIREBASE_WEB_API_KEY?: string;
     /** Key material for sealing task secrets; falls back to the Pipedream secret. */
@@ -55,7 +57,7 @@ export interface TaskParams {
     bots: BoardMember[];
     author: { id: string, name: string };
     /** Non-secret model settings. */
-    settings: Pick<AISettings, 'apiBaseUrl' | 'openRouterModel' | 'memoryModel' | 'embeddingModel'>;
+    settings: Pick<AISettings, 'apiBaseUrl' | 'openRouterModel' | 'memoryModel' | 'embeddingModel' | 'fallbackModel' | 'dailyRequestLimit'>;
     /** { apiKey, refreshToken, mcpTokens }, sealed. */
     sealed: string;
     /** This worker's public origin, to reach its own Pipedream bridge in-process. */
@@ -83,7 +85,7 @@ export const firestoreConfig = (env: TaskEnv): FirestoreConfig => {
 };
 
 /** A token source that is just the caller's current ID token. */
-const fixedToken = (idToken: string) => ({ get: async () => idToken }) as unknown as TokenSource;
+export const fixedToken = (idToken: string) => ({ get: async () => idToken }) as unknown as TokenSource;
 
 const decodePayload = (jwt: string): any => {
     try {
@@ -124,19 +126,17 @@ export const openRuntime = async (
         toolToken: async url => url.startsWith(params.selfOrigin) ? tokens.get() : secrets.mcpTokens?.[url],
         // Tasks of different people run side by side in one isolate.
         scope: params.author.id,
-        // Through this worker's own /files, with the user's token, so board
-        // membership is checked exactly as for the app.
-        readAttachment: async key => {
-            const url = new URL('/files', params.selfOrigin);
-            url.searchParams.set('key', key);
-            const response = await selfFetch(new Request(url, { headers: { Authorization: `Bearer ${await tokens.get()}` } }));
-            if (!response.ok) throw new Error(`Download failed (${response.status})`);
-            return response.text();
-        }
+        ...fileReaders(params.selfOrigin, selfFetch, () => tokens.get()),
+        // Bot replies the server writes are signed, and bots believe only signed ones.
+        sign: await signerFor(env),
+        isAuthentic: await verifierFor(env)
     });
+
+    const usageHooks = usageHooksFor(rest, params.author.id, params.settings);
 
     const settings: AISettings = {
         ...params.settings,
+        usageHooks,
         openRouterKey: secrets.apiKey,
         openRouterModel: params.settings.openRouterModel || '',
         aiProvider: 'openrouter',
@@ -229,7 +229,9 @@ export const handleTaskStart = async (
             apiBaseUrl: body.settings?.apiBaseUrl || undefined,
             openRouterModel: body.settings?.openRouterModel || undefined,
             memoryModel: body.settings?.memoryModel || undefined,
-            embeddingModel: body.settings?.embeddingModel || undefined
+            embeddingModel: body.settings?.embeddingModel || undefined,
+            fallbackModel: typeof body.settings?.fallbackModel === 'string' ? body.settings.fallbackModel.slice(0, 200) || undefined : undefined,
+            dailyRequestLimit: Number.isFinite(Number(body.settings?.dailyRequestLimit)) ? Math.max(0, Math.floor(Number(body.settings.dailyRequestLimit))) : undefined
         },
         sealed: await seal({ apiKey, refreshToken, mcpTokens: body.mcpTokens || {} } satisfies Secrets, sealingSecret(env)),
         selfOrigin: new URL(request.url).origin

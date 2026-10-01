@@ -92,3 +92,45 @@ describe('complete: failures and fallbacks', () => {
         expect(new Set(asked)).toEqual(new Set(['paid/model']));
     });
 });
+
+const sse = (chunks: any[]) => new Response(new ReadableStream({
+    start(controller) {
+        const encoder = new TextEncoder();
+        for (const c of chunks) controller.enqueue(encoder.encode(`data: ${JSON.stringify(c)}\n\n`));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+    }
+}), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+
+describe('complete: streaming', () => {
+    it('reports the text as it arrives and returns the whole answer', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => sse([
+            { model: 'm', choices: [{ delta: { content: 'При' } }] },
+            { choices: [{ delta: { content: 'вет' } }] },
+            { choices: [], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } }
+        ])));
+        const seen: string[] = [];
+        const result = await complete({ ...request, onDelta: t => seen.push(t) }, { ...settings, openRouterModel: 'm' });
+        expect(seen).toEqual(['При', 'Привет']);
+        expect(result.content).toBe('Привет');
+        expect(result.usage.totalTokens).toBe(5);
+    });
+
+    it('joins tool call fragments by index', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => sse([
+            { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'sandbox_', arguments: '{"comm' } }] } }] },
+            { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'shell', arguments: 'and":"ls"}' } }] } }] }
+        ])));
+        const result = await complete({ ...request, onDelta: () => { } }, { ...settings, openRouterModel: 'm' });
+        expect(result.toolCalls).toEqual([{ id: 'c1', name: 'sandbox_shell', args: '{"command":"ls"}' }]);
+    });
+});
+
+describe('complete: the person\'s fallback model', () => {
+    it('takes over from a busy paid model', async () => {
+        const asked = mockFetch(m => m === 'paid/model' ? json(503, { error: { message: 'overloaded' } }) : ok(m));
+        const result = await complete(request, { ...settings, openRouterModel: 'paid/model', fallbackModel: 'backup/model' });
+        expect(result.model).toBe('backup/model');
+        expect(asked.at(-1)).toBe('backup/model');
+    }, 15_000);
+});

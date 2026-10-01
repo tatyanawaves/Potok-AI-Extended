@@ -67,6 +67,15 @@ export interface AISettings {
    */
   memoryModel?: string;
   /**
+   * Used when the chosen model fails, is busy or goes silent — for any
+   * model, not only free ones. Optional.
+   */
+  fallbackModel?: string;
+  /** Requests to the model per day, counted across browser and server; 0 means no ceiling. */
+  dailyRequestLimit?: number;
+  /** Server only, never stored: counts and limits one task's requests. */
+  usageHooks?: import('./services/spendLimit').UsageHooks;
+  /**
    * Embedding model on the same API, for finding notes by meaning. Empty
    * means keyword search only.
    */
@@ -305,6 +314,8 @@ export interface BoardMessage {
   postedBy?: string;
   /** Posted by the orchestrator of a task, on behalf of postedBy. */
   orchestrator?: boolean;
+  /** The server's signature on a bot reply (services/botSignature). */
+  sig?: string;
   content: string;
   /** Names mentioned via @name, used to wake up agents. */
   mentions: string[];

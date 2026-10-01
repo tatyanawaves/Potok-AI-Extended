@@ -257,12 +257,22 @@ Potok никогда не удаляет. Боты с песочницей Dayto
 
 ## Деплой
 
-Приложение выкладывается только на Firebase Hosting: https://neon-extended.web.app.
-`.github/workflows/deploy.yml` тестирует, собирает и выкладывает каждый push в `main`,
-как только в репозитории появится секрет `FIREBASE_SERVICE_ACCOUNT_NEON_EXTENDED`
-(JSON-ключ сервисного аккаунта с ролью Firebase Hosting Admin). Вручную:
+`.github/workflows/deploy.yml` выкладывает каждый push в `main` в порядке, при котором
+старый и новый код совместимы: **воркер → сайт → правила Firestore**. Воркер выкладывается,
+только если менялись `worker/`, `services/` или `types.ts`; правила — только если менялся
+`firestore.rules` (и перед этим проходят `npm run test:rules`). Ручной запуск выкладывает всё.
+
+Каждый шаг включается своим секретом (Settings → Secrets and variables → Actions):
+
+- `FIREBASE_SERVICE_ACCOUNT_NEON_EXTENDED` — JSON-ключ сервисного аккаунта с ролями
+  Firebase Hosting Admin и Firebase Rules Admin: сайт и правила;
+- `CLOUDFLARE_API_TOKEN` и `CLOUDFLARE_ACCOUNT_ID` — токен с правом Edit Cloudflare Workers: воркер.
+
+Без секрета шаг только проверяет сборку. Вручную, в том же порядке:
 
 ```bash
+cd worker && npm run deploy && cd ..
 VITE_PIPEDREAM_WORKER_URL=https://potok-pipedream.potok.workers.dev npm run build
 firebase deploy --only hosting --project neon-extended
+firebase deploy --only firestore:rules --project neon-extended
 ```

@@ -6,9 +6,10 @@ const ThoughtSymbolMap2D = React.lazy(() => import('./components/ThoughtSymbolMa
 import ThoughtLog from './components/ThoughtLog';
 import SettingsModal from './components/SettingsModal';
 import AuthScreen from './components/AuthScreen';
-import Profile from './components/Profile';
+import Profile, { MAX_STREAM_POSTS } from './components/Profile';
 import Boards from './components/Boards';
 import { useUnread } from './hooks/useUnread';
+import { useTaskNotifications } from './hooks/useTaskNotifications';
 import Messages from './components/Messages';
 import { ForwardProvider } from './components/Forward';
 import { LearningProvider, useLearning, Hint } from './components/Learning';
@@ -16,11 +17,15 @@ import { finishOpenRouterLogin } from './services/openrouterAuth';
 import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
 import { Thought, SavedSession, AISettings, CognitiveState } from './types';
 import { translations } from './translations';
-import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink } from './services/llm';
-import { recordSpend } from './services/spend';
+import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink, setUsageGate } from './services/llm';
+import { DEFAULT_DAILY_REQUESTS, dailyLimitOf } from './services/spendLimit';
+import { recordSpend, spendGate } from './services/spend';
 
 // Every model request made in this browser is counted in the user's daily tally.
 setUsageSink(recordSpend);
+// The ceiling follows the settings of the moment; see the effect on settingsRef below.
+let currentLimit = DEFAULT_DAILY_REQUESTS;
+setUsageGate(() => spendGate(currentLimit));
 import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, deletePost, getUserProfileByName, toggleCommentLike, logout } from './services/firebase';
 import { secureStorage } from './services/encryption';
 import { resolveFollowing, isFromFollowed, FollowedProfile } from './services/social';
@@ -98,6 +103,7 @@ const App: React.FC = () => {
   const commentedRef = useRef<Set<string>>(new Set());
   const sessionStartRef = useRef(Date.now());
   const isCycleRunningRef = useRef(isCycleRunning);
+  const streamPostsRef = useRef(0);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -148,6 +154,8 @@ const App: React.FC = () => {
     return parsed;
   });
   const settingsRef = useRef(settings);
+  currentLimit = dailyLimitOf(settings);
+  const taskNotices = useTaskNotifications(settings.language);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   /**
    * Followed profiles, resolved from the uids in settings.following.
@@ -1037,6 +1045,14 @@ const App: React.FC = () => {
       await createPost(enrichedThought);
       console.log('[initiateContinuousThoughtGeneration] Post saved successfully');
 
+      // A batch, not forever: each post is public and costs a request.
+      streamPostsRef.current += 1;
+      if (streamPostsRef.current >= MAX_STREAM_POSTS) {
+        setIsThinking(false);
+        isThinkingRef.current = false;
+        return;
+      }
+
       const baseDelay = 7000; // 7 seconds default
       const randomTimeVariation = (Math.random() * 1.0 + 0.5); 
       const delay = baseDelay * randomTimeVariation;
@@ -1064,6 +1080,7 @@ const App: React.FC = () => {
 
     setIsThinking(true);
     isThinkingRef.current = true;
+    streamPostsRef.current = 0;
 
     console.log('[startThoughtGenerationStream] Starting thought loop');
 
@@ -1244,6 +1261,18 @@ const App: React.FC = () => {
       </div>
       {/* Progress belongs where it can be seen: the analysis keeps running
           while the user reads the feed, and it can be stopped from here. */}
+      {taskNotices.notices.length > 0 && (
+        <div className="fixed bottom-4 left-4 z-[140] space-y-2 max-w-[calc(100vw-2rem)] w-80">
+          {taskNotices.notices.map(notice => (
+            <div key={notice.id} className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs shadow-2xl backdrop-blur bg-slate-900/95 ${notice.ok ? 'border-emerald-500/40 text-emerald-100' : 'border-rose-500/40 text-rose-100'}`}>
+              <button onClick={() => { taskNotices.dismiss(notice.id); navigate('/boards'); }} className="flex-1 text-left leading-relaxed hover:underline">
+                {notice.ok ? '✅' : '⚠️'} {notice.text}
+              </button>
+              <button onClick={() => taskNotices.dismiss(notice.id)} className="text-slate-500 hover:text-white shrink-0" title={t.close}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
       {docProgress && (
         <div className="fixed bottom-4 right-4 z-[140] w-64 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-xl p-3 shadow-2xl space-y-2">
           <div className="flex justify-between text-[10px] font-mono text-slate-400">

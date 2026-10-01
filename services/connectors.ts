@@ -71,11 +71,17 @@ export interface MachineInfo {
     disk?: number;
     path?: string;
     entries?: MachineEntry[];
+    /** Open to the web through a preview address. */
+    public?: boolean;
 }
 
 /** `status` never wakes the machine; `list` creates or starts it. */
-export const machine = (board: string, action: 'status' | 'list' | 'stop' | 'delete', path?: string): Promise<MachineInfo> =>
+export const machine = (board: string, action: 'status' | 'list' | 'stop' | 'delete' | 'unpublish', path?: string): Promise<MachineInfo> =>
     post('/machine', { board, action, path });
+
+/** Opens a port of the machine to the web and returns its address. */
+export const previewPort = async (board: string, port: number): Promise<string> =>
+    (await post('/machine', { board, action: 'preview', port })).url;
 
 export const downloadFromMachine = async (board: string, path: string): Promise<Blob> => {
     const user = auth.currentUser;

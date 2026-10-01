@@ -25,6 +25,8 @@
  *   GET  /health
  */
 
+import { handleBotReply } from './botReplies';
+import { botKey } from './botKey';
 import {
     MAX_FILE_BYTES, keyFor, boardKeyFor, putFile,
     mayAccessConversation, conversationOfKey, boardOfKey, isBoardMember
@@ -639,7 +641,7 @@ const handleFileDownload = async (
     });
 };
 
-export default {
+const worker = {
     async fetch(request: Request, env: Env): Promise<Response> {
         const origin = request.headers.get('Origin');
         const cors = corsHeaders(env, origin);
@@ -661,6 +663,13 @@ export default {
                 serverTasks: Boolean(env.AGENT_TASKS && env.FIREBASE_WEB_API_KEY
                     && (env.TASK_SEALING_SECRET || env.PIPEDREAM_CLIENT_SECRET))
             }, 200, cors);
+        }
+
+        // The public half of the key bot replies are signed with; 404 when
+        // signing is off, which the app reads as "check nothing".
+        if (request.method === 'GET' && url.pathname === '/bots/key') {
+            const key = await botKey(env);
+            return key ? json({ publicKey: key.publicKey }, 200, cors) : json({ error: 'Signing is not configured' }, 404, cors);
         }
 
         // The provider redirects the user's browser here after sign-in; the
@@ -737,6 +746,9 @@ export default {
                 return await handleMcpRequest(request, `potok-sandbox-${provider}`, sandboxTools(env, uid, provider, board, files), cors);
             }
             if (url.pathname === '/machine') return await handleMachine(request, env, uid, reply, cors);
+            if (url.pathname === '/bots/reply') {
+                return await handleBotReply(request, env, uid, idToken, req => worker.fetch(req, env), (body, status) => json(body, status, cors));
+            }
             if (url.pathname === '/tasks/start') {
                 return await handleTaskStart(request, env, uid, idToken, (body, status) => json(body, status, cors));
             }
@@ -752,3 +764,5 @@ export default {
         }
     }
 };
+
+export default worker;

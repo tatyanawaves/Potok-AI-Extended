@@ -17,6 +17,9 @@ import {
     subscribeToMessages, sendMessage, deleteMessage, parseMentions, isBot
 } from '../services/boards';
 import { messageAuthor } from '../services/mentions';
+import { askForTaskNotifications } from '../hooks/useTaskNotifications';
+import { canReplyOnServer, replyOnServer, subscribeToApprovals, answerApproval, subscribeToDrafts, signatureState, Draft } from '../services/serverReplies';
+import { dailyLimitOf } from '../services/spendLimit';
 import {
     triggerAgentReplies, runBotDiscussion, designBot, probeToolServer, toolServersOf,
     MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, MAX_REQUESTS_PER_TURN, ToolPolicy
@@ -85,6 +88,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [lightbox, setLightbox] = useState<{ url: string, name: string } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isAgentThinking, setIsAgentThinking] = useState(false);
+    // The reply being written right now, shown until the finished message lands.
+    const [liveReply, setLiveReply] = useState<{ bot: string, text: string } | null>(null);
+    // The same for replies the server is writing, for every member of the board.
+    const [drafts, setDrafts] = useState<Draft[]>([]);
+    // Which bot messages the server signed (services/botSignature).
+    const [signatures, setSignatures] = useState<Record<string, 'signed' | 'unsigned'>>({});
     /** A person's command is running in their sandbox. */
     const [isRunning, setIsRunning] = useState(false);
     // One side panel at a time: side by side they covered each other and the input.
@@ -194,7 +203,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     // A queue, not a single slot: steps of a meeting run in parallel, and two
     // bots may ask at the same moment — one request must not replace the other.
     const [toolQueue, setToolQueue] = useState<
-        Array<{ bot: string, tool: string, args: Record<string, any>, foreign: boolean, resolve: (ok: boolean) => void }>
+        Array<{ bot: string, tool: string, args: Record<string, any>, foreign: boolean, resolve: (ok: boolean) => void, serverId?: string }>
     >([]);
     const pendingTool = toolQueue[0] || null;
 
@@ -205,6 +214,30 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         pendingTool?.resolve(allowed);
         setToolQueue(queue => queue.slice(1));
     };
+
+    useEffect(() => {
+        if (!activeBoardId || !activeChannelId) { setDrafts([]); return; }
+        return subscribeToDrafts(activeBoardId, activeChannelId, setDrafts);
+    }, [activeBoardId, activeChannelId]);
+
+    // Tool requests from bots the server runs for this person, on this board.
+    useEffect(() => {
+        if (!activeBoardId) return;
+        const boardId = activeBoardId;
+        return subscribeToApprovals(boardId, requests => {
+            setToolQueue(queue => {
+                const open = new Set(requests.map(r => r.id));
+                // Requests the server gave up on (timed out) leave the queue.
+                const kept = queue.filter(item => !item.serverId || open.has(item.serverId));
+                const known = new Set(kept.map(item => item.serverId));
+                const added = requests.filter(r => !known.has(r.id)).map(r => ({
+                    bot: r.bot, tool: r.tool, args: r.args, foreign: r.foreign, serverId: r.id,
+                    resolve: (ok: boolean) => { answerApproval(boardId, r.id, ok).catch(e => setError(String(e))); }
+                }));
+                return [...kept, ...added];
+            });
+        });
+    }, [activeBoardId]);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const modalInputRef = useRef<HTMLInputElement>(null);
@@ -269,6 +302,20 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         () => channels.find(c => c.id === activeChannelId) || null,
         [channels, activeChannelId]
     );
+
+    useEffect(() => {
+        const botIds = new Set((activeBoard?.botIds || []) as string[]);
+        let cancelled = false;
+        Promise.all(messages.filter(m => m.id && !(m.id in signatures)).map(async m => [m.id!, await signatureState(m, botIds)] as const))
+            .then(results => {
+                if (cancelled) return;
+                const found = results.filter(([, state]) => state) as Array<[string, 'signed' | 'unsigned']>;
+                if (found.length) setSignatures(previous => ({ ...previous, ...Object.fromEntries(found) }));
+            });
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [messages, activeBoard?.botIds]);
+
 
     // --- Subscriptions ---
 
@@ -563,6 +610,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
         try {
             if (meetingMode === 'orchestrator' && runOnServer) {
+                askForTaskNotifications();
                 // Handed to the worker; progress arrives through the task
                 // document, the same way for every member of the board.
                 await startServerTask({
@@ -774,10 +822,24 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
             if (!mentionsBot) return;
 
-            // Replies are generated here, on this user's key: mentioning a bot
-            // is what costs tokens, so the mentioner pays for it.
+            // Replies are generated on this user's key: mentioning a bot is
+            // what costs tokens, so the mentioner pays for it. The server
+            // writes and signs them when it can; tools on this machine keep
+            // a bot in the browser.
             setIsAgentThinking(true);
+            const mentioned = activeBoard.members.filter(m => isBot(m)
+                && mentionedNames.some(name => name.toLowerCase() === m.name.toLowerCase()));
             try {
+                if (canReplyOnServer(mentioned)) {
+                    await replyOnServer({
+                        boardId: activeBoard.id!,
+                        channelId: activeChannelId,
+                        channelName: activeChannel.name,
+                        mentions: mentionedNames,
+                        settings
+                    });
+                    return;
+                }
                 // Tools run freely, but anything that deletes or is marked
                 // unsafe waits for a yes in the approval dialog.
                 await triggerAgentReplies(
@@ -789,9 +851,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                     activeBoard.members,
                     settings,
                     'auto',
-                    requestToolApproval
+                    requestToolApproval,
+                    (bot, text) => setLiveReply({ bot, text })
                 );
             } finally {
+                setLiveReply(null);
                 setIsAgentThinking(false);
             }
         } catch (e) {
@@ -1022,7 +1086,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     className="text-[10px] font-mono text-slate-500 shrink-0 md:px-2"
                                     title={t.spendHint || 'Запросы к модели с вашего ключа за сегодня. Платит тот, кто упомянул бота.'}
                                 >
-                                    {t.today || 'сегодня'}: {spendOn(spend).requests} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}
+                                    {t.today || 'сегодня'}: {spendOn(spend).requests}{dailyLimitOf(settings) > 0 ? ` / ${dailyLimitOf(settings)}` : ''} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}
                                 </div>
                             )}
 
@@ -1056,9 +1120,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showComputer
                                             ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
                                             : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'}`}
-                                        title="Компьютер доски: файлы, которые остаются между разговорами"
+                                        title={t.computerHint || 'Компьютер доски: файлы, которые остаются между разговорами'}
                                     >
-                                        Компьютер
+                                        {t.computer || 'Компьютер'}
                                     </button>
                                 )}
 
@@ -1125,6 +1189,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 >
                                                     {author.name}
                                                 </button>
+                                                {signatures[msg.id!] === 'signed' && (
+                                                    <span className="text-[10px] text-emerald-400/80" title={t.signedHint || 'Ответ записан и подписан сервером'}>✓</span>
+                                                )}
+                                                {signatures[msg.id!] === 'unsigned' && (
+                                                    <span className="text-[10px] text-amber-300/90" title={t.unsignedHint || 'Сервер не подписывал это сообщение: его мог написать кто угодно от имени бота'}>⚠ {t.unsigned || 'не подтверждено'}</span>
+                                                )}
                                                 {author.via && (
                                                     <span className="text-[10px] text-slate-500" title={t.postedByHint || 'Кто на самом деле отправил это сообщение'}>
                                                         {t.via || 'через'} {author.via}
@@ -1308,10 +1378,42 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         <span>{t.sandboxRunning || 'выполняется в облачной песочнице…'}</span>
                                     </div>
                                 )}
-                                {isAgentThinking && !discussionProgress && (
+                                {drafts.filter(d => d.text).map(d => (
+                                    <div key={d.botId} className="flex space-x-3 opacity-90">
+                                        <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
+                                            {(Array.from(String(d.botName))[0] || '?').toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-baseline space-x-2">
+                                                <span className="text-sm font-bold text-indigo-300">{d.botName}</span>
+                                                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse self-center"></span>
+                                            </div>
+                                            <div className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
+                                                <RichText text={d.text} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                                {isAgentThinking && !discussionProgress && liveReply?.text && (
+                                    <div className="flex space-x-3 opacity-90">
+                                        <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
+                                            {(Array.from(String(liveReply.bot))[0] || '?').toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-baseline space-x-2">
+                                                <span className="text-sm font-bold text-indigo-300">{liveReply.bot}</span>
+                                                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse self-center"></span>
+                                            </div>
+                                            <div className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
+                                                <RichText text={liveReply.text} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                {isAgentThinking && !discussionProgress && !liveReply?.text && !drafts.some(d => d.text) && (
                                     <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono pl-11">
                                         <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
-                                        <span>{t.agentThinking || 'агент печатает...'}</span>
+                                        <span>{liveReply ? `${liveReply.bot}: ` : ''}{t.agentThinking || 'агент печатает...'}</span>
                                     </div>
                                 )}
 
@@ -1349,6 +1451,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {showComputer && activeBoard.id && (
                                 <ComputerPanel
                                     boardId={activeBoard.id}
+                                    language={settings.language}
                                     activity={messages.filter(m => m.terminal?.length).length}
                                     onClose={() => setSidePanel(null)}
                                 />

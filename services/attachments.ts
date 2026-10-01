@@ -86,6 +86,22 @@ export const uploadAttachment = async (
     return attachment;
 };
 
+/** An image attachment as a data: URL, for a model that sees pictures. */
+export const fetchAttachmentDataUrl = async (key: string, contentType: string): Promise<string> => {
+    if (!PIPEDREAM_WORKER_URL) throw new Error('Attachment storage is not configured');
+    const url = new URL(`${PIPEDREAM_WORKER_URL}/files`);
+    url.searchParams.set('key', key);
+    const response = await fetch(url.toString(), { headers: { 'Authorization': await authHeader() } });
+    if (!response.ok) throw new Error(`Download failed (${response.status})`);
+    const blob = new Blob([await response.arrayBuffer()], { type: contentType });
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+    });
+};
+
 /** An attachment's contents as text, with the caller's own access. */
 export const fetchAttachmentText = async (key: string): Promise<string> => {
     if (!PIPEDREAM_WORKER_URL) throw new Error('Attachment storage is not configured');

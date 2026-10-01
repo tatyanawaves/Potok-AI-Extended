@@ -1,7 +1,8 @@
-import { doc, onSnapshot, runTransaction } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, runTransaction } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { SpendState, TokenUsage } from '../types';
 import { dayKey } from './usage';
+import { overLimit, limitMessage } from './spendLimit';
 
 /**
  * What the bots have cost you.
@@ -9,8 +10,8 @@ import { dayKey } from './usage';
  * Whoever @mentions a bot pays for the reply, on their own key — so the tally
  * is per person and private, next to the read marks in users/{uid}/private.
  *
- * It is a record, not a limit: nothing here refuses a request. The point is
- * that a discussion which burned thirty model calls should not be invisible.
+ * The tally also backs the daily ceiling (services/spendLimit): spendGate
+ * refuses a request once today's count reaches it.
  */
 
 const spendRefFor = (uid: string) => doc(db, 'users', uid, 'private', 'spend');
@@ -52,8 +53,29 @@ export const recordSpend = async (usage: TokenUsage, requests = 1): Promise<void
                     }
                 }
             }, { merge: true });
+            known = { uid, day, requests: current.requests + requests };
         });
     } catch (error) {
         console.error('[Spend] Could not record usage:', error);
     }
+};
+
+// --- The daily ceiling ---------------------------------------------------------
+
+let known: { uid: string, day: string, requests: number } | null = null;
+
+const todayRequests = async (uid: string): Promise<number> => {
+    const day = dayKey();
+    if (known && known.uid === uid && known.day === day) return known.requests;
+    const snapshot = await getDoc(spendRefFor(uid)).catch(() => null);
+    const requests = (snapshot?.exists() ? (snapshot.data() as SpendState).days?.[day]?.requests : 0) || 0;
+    known = { uid, day, requests };
+    return requests;
+};
+
+/** Refuses a request once today's count reaches the person's ceiling. */
+export const spendGate = async (limit: number): Promise<void> => {
+    const uid = auth.currentUser?.uid;
+    if (!uid || limit <= 0) return;
+    if (overLimit(await todayRequests(uid), limit)) throw new Error(limitMessage(limit));
 };

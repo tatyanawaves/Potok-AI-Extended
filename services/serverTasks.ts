@@ -1,3 +1,4 @@
+import { dailyLimitOf } from './spendLimit';
 import { collection, onSnapshot, orderBy, limit, query } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { AISettings } from '../types';
@@ -98,7 +99,9 @@ export const startServerTask = async (options: StartTaskOptions): Promise<string
             apiBaseUrl: settings.apiBaseUrl || undefined,
             openRouterModel: settings.openRouterModel || undefined,
             memoryModel: settings.memoryModel || undefined,
-            embeddingModel: settings.embeddingModel || undefined
+            embeddingModel: settings.embeddingModel || undefined,
+            fallbackModel: settings.fallbackModel || undefined,
+            dailyRequestLimit: dailyLimitOf(settings)
         },
         apiKey: settings.openRouterKey,
         refreshToken: user.refreshToken,

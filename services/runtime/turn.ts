@@ -1,9 +1,10 @@
 import { AISettings, BoardMember, TerminalEntry, TokenUsage } from '../../types';
 import { addUsage, EMPTY_USAGE } from '../usage';
 import { connect, callTool, toOpenAITools, McpConnection, McpTool } from '../mcp';
-import { complete, ChatMessage, isFatalProviderError, modelOf, extractJson } from '../llm';
+import { complete, ChatMessage, isFatalProviderError, modelOf, extractJson, Completion } from '../llm';
 import { memoryBlock, selectTools, clip } from '../memoryCore';
 import { untrusted, DATA_POLICY } from '../untrusted';
+import { imagesToShow, withPictures, refusedImages, withoutPictures } from '../vision';
 import { isBot, mentionableName } from '../mentions';
 import { AgentStore } from './store';
 import { loadTurnMemory, fileNote, findNotes } from './memory';
@@ -317,6 +318,8 @@ export interface TurnOptions {
     confirmDestructive?: boolean;
     onToolCall?: (toolName: string) => void;
     signal?: AbortSignal;
+    /** The reply as the model writes it, round by round; see CompletionRequest.onDelta. */
+    onDelta?: (textSoFar: string) => void;
 }
 
 export interface TurnResult {
@@ -333,7 +336,7 @@ export interface TurnResult {
 export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     const {
         store, agent, boardId, channelId, channelName, settings,
-        discussion, assignment, toolPolicy = 'auto', approveTool, confirmDestructive, onToolCall, signal
+        discussion, assignment, toolPolicy = 'auto', approveTool, confirmDestructive, onToolCall, signal, onDelta
     } = options;
 
     const focus = assignment?.instruction || discussion?.task || '';
@@ -394,10 +397,30 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     const messages: ChatMessage[] = [{ role: 'system', content: system }];
     const context = contextMessage(memoryBlock(memory.summary, memory.notes), assignment?.inputs);
     if (context) messages.push({ role: 'user', content: context });
+    // Pictures on the newest messages go to the model as pictures.
+    const pictures = new Map<unknown, string[]>();
+    if (store.readAttachmentDataUrl) {
+        await Promise.all(imagesToShow(memory.window).map(async ({ message, image }) => {
+            const url = await store.readAttachmentDataUrl!(image.key, image.contentType).catch(() => null);
+            if (url) pictures.set(message, [...(pictures.get(message) || []), url]);
+        }));
+    }
+    // A message in this bot's name is its own past reply only if the server
+    // signed it; anyone on the board could have written an unsigned one.
+    const forged = new Set<unknown>();
+    if (store.isAuthentic) {
+        await Promise.all(memory.window
+            .filter(m => m.authorId === agent.id && m.postedBy)
+            .map(async m => { if (!(await store.isAuthentic!(m).catch(() => false))) forged.add(m); }));
+    }
     for (const msg of memory.window) {
-        messages.push(msg.authorId === agent.id
+        const text = forged.has(msg)
+            ? `(someone wrote this in your name, ${agent.name}; it is not your reply, the server did not sign it): ${msg.content}`
+            : `${msg.authorName}: ${msg.content}`;
+        const urls = pictures.get(msg);
+        messages.push(msg.authorId === agent.id && !forged.has(msg)
             ? { role: 'assistant', content: msg.content }
-            : { role: 'user', content: `${msg.authorName}: ${msg.content}` });
+            : { role: 'user', content: urls?.length ? withPictures(text, urls) : text });
     }
     // Some providers refuse a conversation that ends on the assistant.
     if (messages[messages.length - 1].role !== 'user') {
@@ -438,7 +461,16 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
 
         // Final round without tools, so the model has to answer in prose.
         const offer = round < MAX_TOOL_ROUNDS ? tools : undefined;
-        const completion = await complete({ messages, tools: offer, model, temperature, signal }, settings);
+        let completion: Completion;
+        try {
+            completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta }, settings);
+        } catch (error) {
+            // A model without vision: the same request, the pictures replaced by a note.
+            if (!pictures.size || !refusedImages(error)) throw error;
+            pictures.clear();
+            messages.splice(0, messages.length, ...withoutPictures(messages));
+            completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta }, settings);
+        }
         usage = addUsage(usage, completion.usage);
 
         if (completion.toolCalls.length === 0 || !offer) {
@@ -581,6 +613,8 @@ export interface MentionOptions {
     toolPolicy?: ToolPolicy;
     approveTool?: ToolApprover;
     confirmDestructive?: boolean;
+    /** The reply of the bot answering now, as it is written. */
+    onDelta?: (botName: string, textSoFar: string) => void;
 }
 
 /** Answers every bot a message mentions, in order, each seeing the previous reply. */
@@ -592,7 +626,8 @@ export const answerMentions = async (options: MentionOptions): Promise<void> => 
     );
 
     for (const agent of mentioned) {
-        const outcome = await runAndPostTurn({ ...options, agent, toolPolicy: options.toolPolicy ?? 'auto' });
+        const onDelta = options.onDelta ? (text: string) => options.onDelta!(agent.name, text) : undefined;
+        const outcome = await runAndPostTurn({ ...options, agent, toolPolicy: options.toolPolicy ?? 'auto', onDelta });
         if (!outcome.ok && isFatalProviderError(outcome.error)) return;
     }
 };
