@@ -67,6 +67,11 @@ export interface AISettings {
    */
   memoryModel?: string;
   /**
+   * Used when the chosen model fails, is busy or goes silent — for any
+   * model, not only free ones. Optional.
+   */
+  fallbackModel?: string;
+  /**
    * Embedding model on the same API, for finding notes by meaning. Empty
    * means keyword search only.
    */

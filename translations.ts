@@ -358,7 +358,9 @@ export const translations = {
     thought: "Thought",
     startStream: "Thought stream",
     stopStream: "Stop the stream",
-    streamConfirm: "The thought stream publishes posts to the public feed by itself — about every 10 seconds, up to 10 posts, each a request to the model on your key. Start?"
+    streamConfirm: "The thought stream publishes posts to the public feed by itself — about every 10 seconds, up to 10 posts, each a request to the model on your key. Start?",
+    fallbackModelLabel: "Fallback model",
+    fallbackModelHint: "If the main model is down, busy or silent for 45 seconds, the request goes to this one. Without it, only free models hand over to each other."
   },
   ru: {
     title: 'Potok',
@@ -458,7 +460,9 @@ export const translations = {
     thought: "Мысль",
     startStream: "Поток мыслей",
     stopStream: "Остановить поток",
-    streamConfirm: "Поток мыслей сам публикует посты в общую ленту — примерно раз в 10 секунд, до 10 постов, каждый — запрос к модели с вашего ключа. Запустить?"
+    streamConfirm: "Поток мыслей сам публикует посты в общую ленту — примерно раз в 10 секунд, до 10 постов, каждый — запрос к модели с вашего ключа. Запустить?",
+    fallbackModelLabel: "Запасная модель",
+    fallbackModelHint: "Если основная модель недоступна, перегружена или молчит 45 секунд, запрос уйдёт на эту. Без неё переход есть только между бесплатными моделями."
   },
   kk: {
     title: 'Potok',
@@ -818,6 +822,8 @@ export const translations = {
     thought: "Ой",
     startStream: "Ойлар ағыны",
     stopStream: "Ағынды тоқтату",
-    streamConfirm: "Ойлар ағыны жалпы лентаға посттарды өзі жариялайды — шамамен 10 секунд сайын, 10 постқа дейін, әрқайсысы сіздің кілтіңізбен модельге бір сұрау. Іске қосу керек пе?"
+    streamConfirm: "Ойлар ағыны жалпы лентаға посттарды өзі жариялайды — шамамен 10 секунд сайын, 10 постқа дейін, әрқайсысы сіздің кілтіңізбен модельге бір сұрау. Іске қосу керек пе?",
+    fallbackModelLabel: "Қосалқы модель",
+    fallbackModelHint: "Негізгі модель қолжетімсіз, бос емес немесе 45 секунд үнсіз болса, сұрау осыған кетеді. Онсыз ауысу тек тегін модельдер арасында болады."
   }
 };

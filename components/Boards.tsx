@@ -86,6 +86,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [lightbox, setLightbox] = useState<{ url: string, name: string } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isAgentThinking, setIsAgentThinking] = useState(false);
+    // The reply being written right now, shown until the finished message lands.
+    const [liveReply, setLiveReply] = useState<{ bot: string, text: string } | null>(null);
     /** A person's command is running in their sandbox. */
     const [isRunning, setIsRunning] = useState(false);
     // One side panel at a time: side by side they covered each other and the input.
@@ -791,9 +793,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                     activeBoard.members,
                     settings,
                     'auto',
-                    requestToolApproval
+                    requestToolApproval,
+                    (bot, text) => setLiveReply({ bot, text })
                 );
             } finally {
+                setLiveReply(null);
                 setIsAgentThinking(false);
             }
         } catch (e) {
@@ -1310,10 +1314,26 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         <span>{t.sandboxRunning || 'выполняется в облачной песочнице…'}</span>
                                     </div>
                                 )}
-                                {isAgentThinking && !discussionProgress && (
+                                {isAgentThinking && !discussionProgress && liveReply?.text && (
+                                    <div className="flex space-x-3 opacity-90">
+                                        <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
+                                            {(Array.from(String(liveReply.bot))[0] || '?').toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-baseline space-x-2">
+                                                <span className="text-sm font-bold text-indigo-300">{liveReply.bot}</span>
+                                                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse self-center"></span>
+                                            </div>
+                                            <div className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
+                                                <RichText text={liveReply.text} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                {isAgentThinking && !discussionProgress && !liveReply?.text && (
                                     <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono pl-11">
                                         <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
-                                        <span>{t.agentThinking || 'агент печатает...'}</span>
+                                        <span>{liveReply ? `${liveReply.bot}: ` : ''}{t.agentThinking || 'агент печатает...'}</span>
                                     </div>
                                 )}
 

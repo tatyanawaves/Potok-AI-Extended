@@ -66,6 +66,11 @@ export interface CompletionRequest {
     json?: boolean;
     /** Aborts the request, e.g. when the user presses stop. */
     signal?: AbortSignal;
+    /**
+     * Streams the answer: called with the text so far as it arrives, so a
+     * reply can be read while the model is still writing it.
+     */
+    onDelta?: (textSoFar: string) => void;
 }
 
 export const baseUrlOf = (settings?: AISettings): string =>
@@ -188,6 +193,86 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) 
     signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
 });
 
+/**
+ * A model that has sent nothing for this long is treated as down, and the
+ * request moves on. Free models were seen sitting on a request for a minute
+ * and more before answering, or never.
+ */
+export const SILENCE_TIMEOUT_MS = 45_000;
+/** A non-streamed answer gets longer, since nothing arrives until it is done. */
+export const ANSWER_TIMEOUT_MS = 120_000;
+
+interface StreamResult {
+    message: { content: string | null, tool_calls?: any[] } | null;
+    data: any;
+    error?: { code?: number, message?: string };
+}
+
+/**
+ * Reads an OpenAI-style server-sent event stream into one message: content
+ * deltas are joined (and reported as they come), tool call fragments are
+ * joined by index, and the last chunk carrying usage is kept.
+ */
+export const readStream = async (
+    response: Response,
+    onDelta: ((text: string) => void) | undefined,
+    onChunk: () => void
+): Promise<StreamResult> => {
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let content = '';
+    const calls: Array<{ id: string, type: 'function', function: { name: string, arguments: string } }> = [];
+    let model: string | undefined;
+    let usage: any;
+    let error: StreamResult['error'];
+
+    const handle = (line: string) => {
+        if (!line.startsWith('data:')) return;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') return;
+        let chunk: any;
+        try { chunk = JSON.parse(payload); } catch { return; }
+        if (chunk.error) { error = chunk.error; return; }
+        model ||= chunk.model;
+        if (chunk.usage) usage = chunk.usage;
+        const delta = chunk.choices?.[0]?.delta;
+        if (!delta) return;
+        if (typeof delta.content === 'string' && delta.content) {
+            content += delta.content;
+            onDelta?.(content);
+        }
+        for (const part of delta.tool_calls || []) {
+            const i = Number(part.index ?? 0);
+            calls[i] ??= { id: '', type: 'function', function: { name: '', arguments: '' } };
+            if (part.id) calls[i].id = part.id;
+            if (part.function?.name) calls[i].function.name += part.function.name;
+            if (part.function?.arguments) calls[i].function.arguments += part.function.arguments;
+        }
+    };
+
+    for (; ;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        onChunk();
+        buffer += decoder.decode(value, { stream: true });
+        let end: number;
+        while ((end = buffer.indexOf('\n')) >= 0) {
+            handle(buffer.slice(0, end).trim());
+            buffer = buffer.slice(end + 1);
+        }
+    }
+    handle(buffer.trim());
+
+    const toolCalls = calls.filter(Boolean);
+    const empty = !content && toolCalls.length === 0;
+    return {
+        message: empty && error ? null : { content: content || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) },
+        data: { model, usage },
+        error
+    };
+};
+
 /** Longest wait between retries of one model; beyond it switching models is faster. */
 const MAX_RETRY_WAIT_MS = 20_000;
 /** Models tried in one request, the chosen one included. */
@@ -218,6 +303,7 @@ export const complete = async (
         temperature: request.temperature ?? 0.7
     };
     if (request.tools?.length) body.tools = request.tools;
+    if (request.onDelta) body.stream = true;
     if (request.maxTokens) body.max_tokens = request.maxTokens;
     if (request.json) body.response_format = { type: 'json_object' };
 
@@ -233,13 +319,39 @@ export const complete = async (
         headers['X-Title'] = 'Potok';
     }
 
-    const send = () => fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: request.signal
-    });
+    // Each attempt gets its own abort, fired by the user's stop or by silence.
+    let timedOut = false;
+    let attempt: AbortController | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = (ms: number) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { timedOut = true; attempt?.abort(); }, ms);
+    };
+    const onUserStop = () => attempt?.abort();
+    request.signal?.addEventListener('abort', onUserStop);
 
+    const send = () => {
+        attempt = new AbortController();
+        timedOut = false;
+        arm(request.onDelta ? SILENCE_TIMEOUT_MS : ANSWER_TIMEOUT_MS);
+        return fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+            signal: attempt.signal
+        });
+    };
+
+    /** The answer of one attempt, streamed or not; null message means none. */
+    const receive = async (response: Response): Promise<{ message: any, data: any, error?: any }> => {
+        if (!body.stream || !(response.headers.get('content-type') || '').includes('event-stream')) {
+            const data: any = await response.json();
+            return { message: data.choices?.[0]?.message || null, data, error: data.error };
+        }
+        return readStream(response, request.onDelta, () => arm(SILENCE_TIMEOUT_MS));
+    };
+
+    const fallback = settings?.fallbackModel?.trim();
     const candidates = [model];
     let fallbacksAdded = false;
     let lastError: ProviderError = { status: 0, detail: '' };
@@ -249,28 +361,46 @@ export const complete = async (
 
         for (let retry = 0; ; retry++) {
             let response: Response;
+            let answer: { message: any, data: any, error?: any };
             try {
                 response = await send();
+                if (!response.ok) {
+                    lastError = await readError(response);
+                    answer = { message: null, data: null };
+                } else {
+                    answer = await receive(response);
+                }
             } catch (error) {
+                clearTimeout(timer);
+                if (timedOut && !request.signal?.aborted) {
+                    // Silence is not worth waiting out twice: on to the next model.
+                    lastError = { status: 504, detail: `модель не ответила за ${Math.round((request.onDelta ? SILENCE_TIMEOUT_MS : ANSWER_TIMEOUT_MS) / 1000)} с` };
+                    break;
+                }
                 // A dropped connection is as passing as a 503, but used to fail
                 // the step at once. A stop from the user is not retried.
-                if (request.signal?.aborted || (error as any)?.name === 'AbortError') throw error;
+                if (request.signal?.aborted || (error as any)?.name === 'AbortError') {
+                    request.signal?.removeEventListener('abort', onUserStop);
+                    throw error;
+                }
                 const detail = error instanceof Error ? error.message : String(error);
                 if (retry < 2) {
                     await sleep(2000 * 2 ** retry, request.signal);
                     continue;
                 }
+                request.signal?.removeEventListener('abort', onUserStop);
                 throw new Error(`Нет связи с провайдером модели (${baseUrl}): ${detail}`);
             }
+            clearTimeout(timer);
             if (response.ok) {
-                const data: any = await response.json();
-                const message = data.choices?.[0]?.message;
+                const { message, data } = answer;
                 if (message) {
                     const usage = usageFrom(data);
                     await reportUsage(usage);
+                    request.signal?.removeEventListener('abort', onUserStop);
                     return {
                         content: message.content ?? null,
-                        model: data.model || body.model,
+                        model: data?.model || body.model,
                         usage,
                         toolCalls: (message.tool_calls || []).map((call: any) => ({
                             id: call.id,
@@ -281,11 +411,9 @@ export const complete = async (
                 }
                 // OpenRouter reports an upstream failure inside a 200.
                 lastError = {
-                    status: Number(data.error?.code) || 502,
-                    detail: data.error?.message || 'модель вернула ответ без сообщения'
+                    status: Number(answer.error?.code) || 502,
+                    detail: answer.error?.message || 'модель вернула ответ без сообщения'
                 };
-            } else {
-                lastError = await readError(response);
             }
 
             // Some providers reject response_format outright; the prompt asks
@@ -307,10 +435,14 @@ export const complete = async (
         if (request.signal?.aborted) break;
         if (isDailyLimit(lastError) || isDataPolicy(lastError)) break;
         const current = body.model as string;
-        const switchable = isModelMissing(lastError) || isToolsUnsupported(lastError)
+        // The person's own fallback is there for exactly this: any model
+        // that is down, busy or silent hands over to it.
+        const toFallback = Boolean(fallback) && current !== fallback && isTransient(lastError);
+        const switchable = toFallback || isModelMissing(lastError) || isToolsUnsupported(lastError)
             || (isTransient(lastError) && current.endsWith(':free'));
         if (!switchable) break;
 
+        if (fallback && !candidates.includes(fallback)) candidates.splice(i + 1, 0, fallback);
         if (!fallbacksAdded) {
             fallbacksAdded = true;
             const main = modelOf(settings);
@@ -326,6 +458,7 @@ export const complete = async (
         }
     }
 
+    request.signal?.removeEventListener('abort', onUserStop);
     throw new Error(describeProviderError(lastError, model));
 };
 

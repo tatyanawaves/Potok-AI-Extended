@@ -317,6 +317,8 @@ export interface TurnOptions {
     confirmDestructive?: boolean;
     onToolCall?: (toolName: string) => void;
     signal?: AbortSignal;
+    /** The reply as the model writes it, round by round; see CompletionRequest.onDelta. */
+    onDelta?: (textSoFar: string) => void;
 }
 
 export interface TurnResult {
@@ -333,7 +335,7 @@ export interface TurnResult {
 export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     const {
         store, agent, boardId, channelId, channelName, settings,
-        discussion, assignment, toolPolicy = 'auto', approveTool, confirmDestructive, onToolCall, signal
+        discussion, assignment, toolPolicy = 'auto', approveTool, confirmDestructive, onToolCall, signal, onDelta
     } = options;
 
     const focus = assignment?.instruction || discussion?.task || '';
@@ -438,7 +440,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
 
         // Final round without tools, so the model has to answer in prose.
         const offer = round < MAX_TOOL_ROUNDS ? tools : undefined;
-        const completion = await complete({ messages, tools: offer, model, temperature, signal }, settings);
+        const completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta }, settings);
         usage = addUsage(usage, completion.usage);
 
         if (completion.toolCalls.length === 0 || !offer) {
@@ -581,6 +583,8 @@ export interface MentionOptions {
     toolPolicy?: ToolPolicy;
     approveTool?: ToolApprover;
     confirmDestructive?: boolean;
+    /** The reply of the bot answering now, as it is written. */
+    onDelta?: (botName: string, textSoFar: string) => void;
 }
 
 /** Answers every bot a message mentions, in order, each seeing the previous reply. */
@@ -592,7 +596,8 @@ export const answerMentions = async (options: MentionOptions): Promise<void> => 
     );
 
     for (const agent of mentioned) {
-        const outcome = await runAndPostTurn({ ...options, agent, toolPolicy: options.toolPolicy ?? 'auto' });
+        const onDelta = options.onDelta ? (text: string) => options.onDelta!(agent.name, text) : undefined;
+        const outcome = await runAndPostTurn({ ...options, agent, toolPolicy: options.toolPolicy ?? 'auto', onDelta });
         if (!outcome.ok && isFatalProviderError(outcome.error)) return;
     }
 };

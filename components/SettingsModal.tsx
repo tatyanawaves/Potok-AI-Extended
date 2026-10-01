@@ -22,6 +22,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
   const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || DEFAULT_MODEL);
   const [memoryModel, setMemoryModel] = useState(settings.memoryModel || '');
+  const [fallbackModel, setFallbackModel] = useState(settings.fallbackModel || '');
   const [embeddingModel, setEmbeddingModel] = useState(settings.embeddingModel || '');
   const [githubToken, setGithubToken] = useState(settings.githubToken || '');
   const [passwordInfo, setPasswordInfo] = useState<string | null>(null);
@@ -129,6 +130,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       openRouterModel,
       aiProvider: 'openrouter',
       memoryModel: memoryModel.trim() || undefined,
+      fallbackModel: fallbackModel.trim() || undefined,
       embeddingModel: embeddingModel.trim() || undefined,
       githubToken: githubToken.trim(),
       apiBaseUrl,
@@ -330,6 +332,22 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                     />
                     <p className="text-[10px] text-slate-600 leading-relaxed">
                       {t.memoryModelHint || 'Сжатие памяти, план и проверки совещаний. Дешёвая быстрая модель здесь экономит токены, не трогая ответы ботов.'}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+                      {t.fallbackModelLabel || 'Запасная модель'} ({t.optional || 'необязательно'})
+                    </label>
+                    <input
+                      type="text"
+                      value={fallbackModel}
+                      onChange={(e) => setFallbackModel(e.target.value)}
+                      placeholder="author/model"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
+                    />
+                    <p className="text-[10px] text-slate-600 leading-relaxed">
+                      {t.fallbackModelHint || 'Если основная модель недоступна, перегружена или молчит 45 секунд, запрос уйдёт на эту. Без неё переход есть только между бесплатными моделями.'}
                     </p>
                   </div>
 
