@@ -6,7 +6,7 @@ import { spendOn, formatTokens, estimateDiscussionRequests, formatCost } from '.
 import { SpendState } from '../types';
 import { AISettings, Board, BoardChannel, BoardMember, BoardMessage, MessageAttachment } from '../types';
 import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
-import { AttachmentView, ImageLightbox } from './Attachments';
+import { ImageLightbox } from './Attachments';
 import { translations } from '../translations';
 import { auth, getClonableAgentProfiles, searchProfiles } from '../services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -34,13 +34,15 @@ import { subscribeToBotLibrary, saveBotToLibrary, removeBotFromLibrary, SavedBot
 import MemoryPanel from './MemoryPanel';
 import ComputerPanel from './ComputerPanel';
 import ModelPicker from './ModelPicker';
+import MessageItem from './boards/MessageItem';
+import MembersPanel from './boards/MembersPanel';
+import ToolApprovalDialog from './boards/ToolApprovalDialog';
+import LiveReplies from './boards/LiveReplies';
 import CodeSaveDialog from './CodeSaveDialog';
-import TerminalBlock from './TerminalBlock';
-import { RichText } from './RichText';
 import ToolAdvisor from './ToolAdvisor';
 import { Hint } from './Learning';
 import { cloudBrowserUrl, connectedMcpUrl, startOAuthConnection, OAUTH_PRESETS, sandboxUrl, cloudRunUrl } from '../services/connectors';
-import { extractCodeFiles, toFile, CodeFile } from '../services/codeSave';
+import { toFile, CodeFile } from '../services/codeSave';
 import { parseTerminalCommand, runnableBlocks, RunRequest } from '../services/terminal';
 import { runInSandbox } from '../services/sandboxRun';
 import {
@@ -51,7 +53,6 @@ import {
     isPipedreamConfigured, listConnectedAccounts, toolServerUrlFor, ConnectedAccount
 } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
-import { ForwardButton, ForwardedLabel } from './Forward';
 
 /** Tool server URLs typed one per line (or separated by spaces or commas). */
 const splitUrls = (text: string): string[] =>
@@ -222,6 +223,13 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
         const remembered = rememberedDecision(settingsNow.current.toolPermissions, boardId, bot, tool, reason === 'foreign');
         if (remembered) return Promise.resolve(remembered === 'allow');
         return new Promise<boolean>(resolve => setToolQueue(queue => [...queue, { bot, tool, args, foreign: reason === 'foreign', boardId, resolve }]));
+    };
+
+    const deleteBoardMessage = async (msg: BoardMessage) => {
+        if (!activeBoardId || !window.confirm(t.deleteMessageConfirm || 'Удалить сообщение?')) return;
+        // Keys live only on the message; delete the files before it is gone.
+        await deleteAttachments(msg.attachments || []);
+        await deleteMessage(activeBoardId, msg.channelId, msg.id!);
     };
 
     const answerToolApproval = (allowed: boolean) => {
@@ -1205,139 +1213,24 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                         {t.noMessages || 'Сообщений пока нет.'}<br />
                                         {t.mentionHint || 'Упомяните агента через @имя, чтобы он ответил.'}
                                     </p>
-                                ) : messages.map(msg => { const author = messageAuthor(msg, activeBoard.members); return (
-                                    <div key={msg.id} className="group flex space-x-3">
-                                        <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono ${msg.authorType === 'agent'
-                                            ? 'bg-indigo-950/60 text-indigo-300 border border-indigo-500/30'
-                                            : 'bg-slate-800 text-slate-300 border border-slate-700'
-                                            }`}>
-                                            {(Array.from(String(author.name).replace(/^\P{L}+/u, ''))[0] || '?').toUpperCase()}
-                                        </div>
-
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-baseline space-x-2">
-                                                <button
-                                                    onClick={() => onViewProfile(author.name, msg.authorId)}
-                                                    className={`text-sm font-bold hover:underline ${msg.authorType === 'agent' ? 'text-indigo-300' : 'text-slate-200'}`}
-                                                >
-                                                    {author.name}
-                                                </button>
-                                                {signatures[msg.id!] === 'signed' && (
-                                                    <span className="text-[10px] text-emerald-400/80" title={t.signedHint || 'Ответ записан и подписан сервером'}>✓</span>
-                                                )}
-                                                {signatures[msg.id!] === 'unsigned' && (
-                                                    <span className="text-[10px] text-amber-300/90" title={t.unsignedHint || 'Сервер не подписывал это сообщение: его мог написать кто угодно от имени бота'}>⚠ {t.unsigned || 'не подтверждено'}</span>
-                                                )}
-                                                {author.via && (
-                                                    <span className="text-[10px] text-slate-500" title={t.postedByHint || 'Кто на самом деле отправил это сообщение'}>
-                                                        {t.via || 'через'} {author.via}
-                                                    </span>
-                                                )}
-                                                {msg.authorType === 'agent' && (
-                                                    <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-950/50 text-indigo-400 border border-indigo-500/20">
-                                                        AI
-                                                    </span>
-                                                )}
-                                                <span className="text-[10px] text-slate-600 font-mono">
-                                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                </span>
-                                                {msg.content.includes('```') && (
-                                                    <button
-                                                        onClick={() => setCodeToSave(extractCodeFiles(msg.content))}
-                                                        className="text-[11px] text-slate-500 hover:text-cyan-300 md:opacity-0 md:group-hover:opacity-100"
-                                                        title={t.saveCode || 'Сохранить код'}
-                                                    >
-                                                        💾
-                                                    </button>
-                                                )}
-                                                {runnableBlocks(msg.content).length > 0 && (
-                                                    <button
-                                                        onClick={() => runMessageCode(msg)}
-                                                        disabled={isRunning}
-                                                        className="text-[11px] text-slate-500 hover:text-emerald-300 md:opacity-0 md:group-hover:opacity-100 disabled:opacity-40"
-                                                        title={t.runInSandbox || 'Запустить в облачной песочнице'}
-                                                    >
-                                                        ▶
-                                                    </button>
-                                                )}
-                                                <ForwardButton
-                                                    title={t.forward || 'Переслать'}
-                                                    className="md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
-                                                    payload={() => ({
-                                                        text: msg.content,
-                                                        attachments: msg.attachments,
-                                                        // A copy of a copy still credits the original author.
-                                                        origin: msg.forwardedFrom || {
-                                                            kind: 'board',
-                                                            authorName: msg.authorName,
-                                                            authorId: msg.authorId,
-                                                            place: `#${activeChannel?.name || ''} · ${activeBoard.name}`,
-                                                            timestamp: msg.timestamp
-                                                        }
-                                                    })}
-                                                />
-                                                {msg.authorId === currentUid && (
-                                                    <button
-                                                        onClick={async () => {
-                                                            if (!window.confirm(t.deleteMessageConfirm || 'Удалить сообщение?')) return;
-                                                            // Keys live only on the message; delete
-                                                            // the files before it is gone.
-                                                            await deleteAttachments(msg.attachments || []);
-                                                            await deleteMessage(activeBoard.id!, msg.channelId, msg.id!);
-                                                        }}
-                                                        className="text-slate-700 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100 transition-opacity text-[10px]"
-                                                    >
-                                                        ✕
-                                                    </button>
-                                                )}
-                                            </div>
-                                            {msg.forwardedFrom && (
-                                                <div className="mt-1 -mb-0.5">
-                                                    <ForwardedLabel origin={msg.forwardedFrom} language={settings.language} />
-                                                </div>
-                                            )}
-                                            {/* A /sh, /py or /js message is its terminal: the command
-                                                is already at the prompt there, so only the command
-                                                word is shown here. The text stays stored, for bots
-                                                and for forwarding. */}
-                                            <div className={`text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5 ${msg.forwardedFrom ? 'border-l-2 border-cyan-500/30 pl-2' : ''}`}>
-                                                {msg.terminal?.length && parseTerminalCommand(msg.content)
-                                                    ? msg.content.trim().split(/\s/)[0]
-                                                    : <RichText text={msg.content} />}
-                                            </div>
-
-                                            {msg.attachments?.map(a => (
-                                                <AttachmentView
-                                                    key={a.key}
-                                                    attachment={a}
-                                                    failedLabel={t.downloadFailed || 'не удалось открыть'}
-                                                    saveLabel={t.saveFile || 'скачать'}
-                                                    onOpen={(url, at) => setLightbox({ url, name: at.name })}
-                                                />
-                                            ))}
-                                            {msg.terminal?.length ? <TerminalBlock entries={msg.terminal} /> : null}
-                                            {msg.toolsUsed?.some(tool => !(msg.terminal?.length && tool.startsWith('sandbox_'))) ? (
-                                                <div className="flex flex-wrap gap-1 mt-2">
-                                                    {msg.toolsUsed.filter(tool => !(msg.terminal?.length && tool.startsWith('sandbox_'))).map(tool => (
-                                                        <span
-                                                            key={tool}
-                                                            className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-500/20"
-                                                        >
-                                                            ⚒ {tool}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            ) : null}
-                                            {msg.modelName && (
-                                                <div className="text-[9px] font-mono text-slate-700 mt-1">
-                                                    {msg.modelName}
-                                                    {msg.tokensUsed ? ` · ${formatTokens(msg.tokensUsed)} ${t.tokensShort || 'ток.'}` : ''}
-                                                    {msg.costUsd ? ` · ${formatCost(msg.costUsd)}` : ''}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                ); })}
+                                ) : messages.map(msg => (
+                                    <MessageItem
+                                        key={msg.id}
+                                        msg={msg}
+                                        author={messageAuthor(msg, activeBoard.members)}
+                                        signature={signatures[msg.id!]}
+                                        place={`#${activeChannel?.name || ''} · ${activeBoard.name}`}
+                                        canDelete={msg.authorId === currentUid}
+                                        isRunning={isRunning}
+                                        language={settings.language}
+                                        t={t}
+                                        onViewProfile={onViewProfile}
+                                        onSaveCode={setCodeToSave}
+                                        onRunCode={runMessageCode}
+                                        onDelete={deleteBoardMessage}
+                                        onOpenImage={(url, name) => setLightbox({ url, name })}
+                                    />
+                                ))}
 
                                 {serverTasks
                                     .filter(task => task.channelId === activeChannelId
@@ -1412,38 +1305,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                         <span>{t.sandboxRunning || 'выполняется в облачной песочнице…'}</span>
                                     </div>
                                 )}
-                                {drafts.filter(d => d.text).map(d => (
-                                    <div key={d.botId} className="flex space-x-3 opacity-90">
-                                        <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
-                                            {(Array.from(String(d.botName))[0] || '?').toUpperCase()}
-                                        </div>
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-baseline space-x-2">
-                                                <span className="text-sm font-bold text-indigo-300">{d.botName}</span>
-                                                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse self-center"></span>
-                                            </div>
-                                            <div className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
-                                                <RichText text={d.text} />
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                                {isAgentThinking && !discussionProgress && liveReply?.text && (
-                                    <div className="flex space-x-3 opacity-90">
-                                        <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
-                                            {(Array.from(String(liveReply.bot))[0] || '?').toUpperCase()}
-                                        </div>
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-baseline space-x-2">
-                                                <span className="text-sm font-bold text-indigo-300">{liveReply.bot}</span>
-                                                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse self-center"></span>
-                                            </div>
-                                            <div className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
-                                                <RichText text={liveReply.text} />
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
+                                <LiveReplies drafts={drafts} liveReply={isAgentThinking && !discussionProgress ? liveReply : null} />
                                 {isAgentThinking && !discussionProgress && !liveReply?.text && !drafts.some(d => d.text) && (
                                     <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono pl-11">
                                         <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
@@ -1491,116 +1353,21 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                 />
                             )}
 
-                            {/* Members panel */}
                             {showMembers && (
-                                <aside className="absolute lg:relative inset-y-0 right-0 z-20 w-full max-w-xs md:w-64 shrink-0 border-l border-slate-800 bg-slate-900 lg:bg-slate-900/30 flex flex-col shadow-2xl lg:shadow-none overflow-y-auto">
-                                    <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-slate-400 flex items-center justify-between">
-                                        {t.members || 'Участники'}
-                                        <button
-                                            onClick={() => setSidePanel(null)}
-                                            className="text-slate-500 hover:text-white"
-                                            title={t.close || 'Закрыть'}
-                                        >
-                                            ✕
-                                        </button>
-                                    </div>
-
-                                    <div className="flex-1 p-2 space-y-1">
-                                        {activeBoard.members.map(member => (
-                                            <div key={member.id} className="group px-3 py-2 rounded-lg hover:bg-slate-800/50 flex items-center justify-between">
-                                                <div className="min-w-0">
-                                                    <button
-                                                        onClick={() => onViewProfile(
-                                                            member.sourceAgentName || member.name,
-                                                            member.sourceAgentId || member.id
-                                                        )}
-                                                        className={`text-sm truncate hover:underline block ${isBot(member) ? 'text-indigo-300' : 'text-slate-300'}`}
-                                                    >
-                                                        {member.name}
-                                                    </button>
-                                                    <span className="text-[9px] font-mono text-slate-600 uppercase block">
-                                                        {isBot(member) ? 'Bot' : 'Human'}
-                                                        {member.role === 'owner' && ` · ${t.owner || 'владелец'}`}
-                                                    </span>
-                                                    {isBot(member) && member.sourceAgentName && (
-                                                        <span className="text-[9px] font-mono text-slate-700 block truncate">
-                                                            ↳ {member.sourceAgentName}
-                                                        </span>
-                                                    )}
-                                                    {toolServersOf(member).length > 0 && (
-                                                        <span
-                                                            className="text-[9px] font-mono text-emerald-500/70 block truncate"
-                                                            title={toolServersOf(member).join('\n')}
-                                                        >
-                                                            ⚒ {toolServersOf(member).map(u => { try { return new URL(u).hostname; } catch { return u; } }).join(', ')}
-                                                        </span>
-                                                    )}
-                                                </div>
-
-                                                {isBot(member) && (
-                                                    <button
-                                                        onClick={() => handleSaveBot(member).catch(e => setError(e instanceof Error ? e.message : String(e)))}
-                                                        className={`${savedBots.some(b => b.name.toLowerCase() === member.name.toLowerCase()) ? 'text-amber-300/80' : 'text-slate-600 md:opacity-0 md:group-hover:opacity-100'} hover:text-amber-200 transition-opacity shrink-0 mr-2 text-xs`}
-                                                        title={t.saveBotHint || 'Сохранить в «Мои боты» — чтобы добавлять его в другие доски'}
-                                                    >
-                                                        {savedBots.some(b => b.name.toLowerCase() === member.name.toLowerCase()) ? '★' : '☆'}
-                                                    </button>
-                                                )}
-                                                {activeBoard.ownerId === currentUid && isBot(member) && (
-                                                    <button
-                                                        onClick={() => openModal({ kind: 'editBot', botId: member.id, botName: member.name })}
-                                                        className="text-slate-600 hover:text-indigo-300 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0 mr-2 text-xs"
-                                                        title={t.editBot || 'Изменить бота'}
-                                                    >
-                                                        ✎
-                                                    </button>
-                                                )}
-                                                {activeBoard.ownerId === currentUid && member.role !== 'owner' && (
-                                                    <button
-                                                        onClick={() => {
-                                                            if (!window.confirm(`${t.removeMemberConfirm || 'Убрать с доски'}: ${member.name}?`)) return;
-                                                            removeMember(activeBoard.id!, member.id).catch(e => setError(String(e)));
-                                                        }}
-                                                        className="text-slate-600 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0"
-                                                    >
-                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                                                            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                                                        </svg>
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    {activeBoard.ownerId === currentUid && (
-                                        <div className="p-3 border-t border-slate-800 space-y-2">
-                                            <button
-                                                onClick={() => openModal({ kind: 'createBot' })}
-                                                className="w-full py-2 rounded-lg bg-indigo-900/30 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/50 transition-colors"
-                                            >
-                                                + {t.createBot || 'Создать бота'}
-                                            </button>
-                                            <button
-                                                onClick={() => openModal({ kind: 'library' })}
-                                                className="w-full py-2 rounded-lg bg-amber-900/10 text-amber-200/90 border border-amber-500/20 text-[10px] font-mono uppercase tracking-wider hover:bg-amber-900/30 transition-colors"
-                                            >
-                                                + {t.fromMyBots || 'Из моих ботов'}{savedBots.length ? ` (${savedBots.length})` : ''}
-                                            </button>
-                                            <button
-                                                onClick={() => openModal({ kind: 'cloneAgent' })}
-                                                className="w-full py-2 rounded-lg bg-indigo-900/20 text-indigo-300/80 border border-indigo-500/20 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/40 transition-colors"
-                                            >
-                                                + {t.cloneAgent || 'Бот из персоны'}
-                                            </button>
-                                            <button
-                                                onClick={() => openModal({ kind: 'addHuman' })}
-                                                className="w-full py-2 rounded-lg bg-slate-800/50 text-slate-300 border border-slate-700 text-[10px] font-mono uppercase tracking-wider hover:bg-slate-800 transition-colors"
-                                            >
-                                                + {t.addHuman || 'Добавить человека'}
-                                            </button>
-                                        </div>
-                                    )}
-                                </aside>
+                                <MembersPanel
+                                    activeBoard={activeBoard}
+                                    currentUid={currentUid}
+                                    savedBots={savedBots}
+                                    t={t}
+                                    onClose={() => setSidePanel(null)}
+                                    onViewProfile={onViewProfile}
+                                    onSaveBot={member => handleSaveBot(member).catch(e => setError(e instanceof Error ? e.message : String(e)))}
+                                    onRemove={member => {
+                                        if (!window.confirm(`${t.removeMemberConfirm || 'Убрать с доски'}: ${member.name}?`)) return;
+                                        removeMember(activeBoard.id!, member.id).catch(e => setError(String(e)));
+                                    }}
+                                    openModal={openModal}
+                                />
                             )}
                         </div>
 
@@ -1712,59 +1479,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
             )}
 
             {pendingTool && (
-                <div className="fixed inset-0 z-[170] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-                    <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl shadow-2xl max-w-md w-full p-6">
-                        <h3 className="text-lg font-bold font-display text-white mb-1">
-                            {t.toolRequest || 'Запрос инструмента'}
-                        </h3>
-                        <p className="text-slate-500 text-xs mb-4">
-                            <span className="text-indigo-300">{pendingTool.bot}</span>{' '}
-                            {t.wantsToCall || 'хочет вызвать инструмент. Это действие в вашем подключённом аккаунте.'}
-                        </p>
-                        {pendingTool.foreign && (
-                            <p className="text-amber-200/90 text-xs leading-relaxed mb-4 px-3 py-2 rounded-lg bg-amber-950/30 border border-amber-500/30">
-                                {t.foreignBotWarning || 'Этого бота настроили не вы: его инструкции и сервисы выбрал другой человек, а действие выполнится от вашего имени, на ваших ключах. Разрешайте, только если понимаете, зачем оно нужно.'}
-                            </p>
-                        )}
-
-                        <div className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 mb-4">
-                            <div className="text-[11px] font-mono text-emerald-400 break-all">
-                                ⚒ {pendingTool.tool}
-                            </div>
-                            {Object.keys(pendingTool.args).length > 0 && (
-                                <pre className="text-[10px] text-slate-500 mt-2 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-                                    {JSON.stringify(pendingTool.args, null, 2)}
-                                </pre>
-                            )}
-                        </div>
-
-                        {onUpdateSettings && (
-                            <label className="flex items-start gap-2 mb-4 text-[11px] text-slate-400 cursor-pointer">
-                                <input type="checkbox" checked={rememberAnswer} onChange={e => setRememberAnswer(e.target.checked)} className="mt-0.5 accent-emerald-500" />
-                                <span>
-                                    {pendingTool.foreign
-                                        ? (t.rememberDenyOnly || 'Запомнить отказ для этого бота и инструмента (разрешение чужому боту каждый раз спрашивается заново)')
-                                        : (t.rememberAnswer || 'Запомнить ответ для этого бота и инструмента — больше не спрашивать')}
-                                </span>
-                            </label>
-                        )}
-
-                        <div className="flex space-x-3">
-                            <button
-                                onClick={() => answerToolApproval(false)}
-                                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
-                            >
-                                {t.deny || 'Отклонить'}
-                            </button>
-                            <button
-                                onClick={() => answerToolApproval(true)}
-                                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg shadow-emerald-900/20 transition-colors"
-                            >
-                                {t.allow || 'Разрешить'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <ToolApprovalDialog
+                    request={pendingTool}
+                    rememberAnswer={rememberAnswer}
+                    canRemember={Boolean(onUpdateSettings)}
+                    t={t}
+                    onRemember={setRememberAnswer}
+                    onAnswer={answerToolApproval}
+                />
             )}
 
             {showCatalog && (
