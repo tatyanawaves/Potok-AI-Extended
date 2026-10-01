@@ -263,7 +263,9 @@ const LIST_SCRIPT = [
  * POST /machine { board, action, path? } — the board's computer, for its panel.
  * `status` never wakes the machine; `list` and `download` do.
  */
-export const handleMachine = async (request: Request, env: SandboxEnv, uid: string, json: Json): Promise<Response> => {
+export const handleMachine = async (
+    request: Request, env: SandboxEnv, uid: string, json: Json, cors: Record<string, string>
+): Promise<Response> => {
     const body: any = await request.json().catch(() => ({}));
     const board = String(body.board || '');
     if (!BOARD_ID.test(board)) return json({ error: 'board is required' }, 400);
@@ -296,7 +298,7 @@ export const handleMachine = async (request: Request, env: SandboxEnv, uid: stri
             const running = await ensureDaytona(env, uid, key, board);
             const r = await fetch(`${running.toolbox}/${running.id}/files/download?path=${encodeURIComponent(path)}`, { headers: daytonaAuth(key) });
             if (!r.ok) await failed(r, 'Daytona download');
-            return new Response(r.body, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } });
+            return new Response(r.body, { status: 200, headers: { ...cors, 'Content-Type': 'application/octet-stream' } });
         }
         case 'stop': {
             if (box) await fetch(`${DAYTONA_API}/sandbox/${box.id}/stop`, { method: 'POST', headers: daytonaAuth(key) });

@@ -736,7 +736,7 @@ export default {
                 } : undefined;
                 return await handleMcpRequest(request, `potok-sandbox-${provider}`, sandboxTools(env, uid, provider, board, files), cors);
             }
-            if (url.pathname === '/machine') return await handleMachine(request, env, uid, reply);
+            if (url.pathname === '/machine') return await handleMachine(request, env, uid, reply, cors);
             if (url.pathname === '/tasks/start') {
                 return await handleTaskStart(request, env, uid, idToken, (body, status) => json(body, status, cors));
             }

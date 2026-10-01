@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { machine, downloadFromMachine, MachineInfo } from '../services/connectors';
 import { formatSize } from '../services/attachments';
 
@@ -9,6 +9,8 @@ import { formatSize } from '../services/attachments';
 
 interface ComputerPanelProps {
     boardId: string;
+    /** How many terminal blocks the channel has; a new one means the machine changed. */
+    activity: number;
     onClose: () => void;
 }
 
@@ -24,7 +26,7 @@ const STATE_LABEL: Record<string, string> = {
 const parentOf = (path: string) => path.replace(/\/[^/]+\/?$/, '') || '/';
 const join = (dir: string, name: string) => `${dir === '/' ? '' : dir}/${name}`;
 
-const ComputerPanel: React.FC<ComputerPanelProps> = ({ boardId, onClose }) => {
+const ComputerPanel: React.FC<ComputerPanelProps> = ({ boardId, activity, onClose }) => {
     const [info, setInfo] = useState<MachineInfo | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -48,6 +50,16 @@ const ComputerPanel: React.FC<ComputerPanelProps> = ({ boardId, onClose }) => {
     }, [boardId, run]);
 
     const open = (path?: string) => run('Открываю…', () => machine(boardId, 'list', path));
+
+    // Something just ran: the machine may have been created, and its files changed.
+    const seen = useRef(activity);
+    useEffect(() => {
+        if (activity === seen.current) return;
+        seen.current = activity;
+        if (info?.entries) open(info.path);
+        else run('Проверяю…', () => machine(boardId, 'status'));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activity]);
 
     const download = (name: string) => run('Скачиваю…', async () => {
         const blob = await downloadFromMachine(boardId, join(info!.path!, name));

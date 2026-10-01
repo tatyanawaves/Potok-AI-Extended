@@ -1337,7 +1337,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             )}
 
                             {showComputer && activeBoard.id && (
-                                <ComputerPanel boardId={activeBoard.id} onClose={() => setShowComputer(false)} />
+                                <ComputerPanel
+                                    boardId={activeBoard.id}
+                                    activity={messages.filter(m => m.terminal?.length).length}
+                                    onClose={() => setShowComputer(false)}
+                                />
                             )}
 
                             {/* Members panel */}
