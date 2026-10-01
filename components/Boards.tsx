@@ -17,6 +17,7 @@ import {
     subscribeToMessages, sendMessage, deleteMessage, parseMentions, isBot
 } from '../services/boards';
 import { messageAuthor } from '../services/mentions';
+import { askForTaskNotifications } from '../hooks/useTaskNotifications';
 import {
     triggerAgentReplies, runBotDiscussion, designBot, probeToolServer, toolServersOf,
     MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, MAX_REQUESTS_PER_TURN, ToolPolicy
@@ -563,6 +564,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
         try {
             if (meetingMode === 'orchestrator' && runOnServer) {
+                askForTaskNotifications();
                 // Handed to the worker; progress arrives through the task
                 // document, the same way for every member of the board.
                 await startServerTask({
