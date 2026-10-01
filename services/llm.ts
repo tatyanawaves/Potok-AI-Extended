@@ -23,8 +23,22 @@ let usageSink: UsageSink = () => { };
 /** Where every request's token count goes — the browser keeps a daily tally. */
 export const setUsageSink = (sink: UsageSink): void => { usageSink = sink; };
 
-const reportUsage = async (usage: TokenUsage) => {
-    try { await usageSink(usage); } catch { /* a counter must not break a reply */ }
+type UsageGate = () => Promise<void> | void;
+let usageGate: UsageGate = () => { };
+
+/** Asked before every request; throws to refuse it (the daily ceiling, services/spendLimit). */
+export const setUsageGate = (gate: UsageGate): void => { usageGate = gate; };
+
+const reportUsage = async (usage: TokenUsage, settings?: AISettings) => {
+    try {
+        if (settings?.usageHooks) await settings.usageHooks.record(usage.totalTokens);
+        else await usageSink(usage);
+    } catch { /* a counter must not break a reply */ }
+};
+
+const checkGate = async (settings?: AISettings) => {
+    if (settings?.usageHooks) await settings.usageHooks.gate();
+    else await usageGate();
 };
 
 export const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -150,7 +164,7 @@ export const describeHttpError = async (response: Response): Promise<string> =>
 
 /** Errors no retry can fix: the key, the balance, the model, the daily quota. */
 export const isFatalProviderError = (error: unknown): boolean =>
-    /^HTTP 40[1234]\b|дневной лимит|настроек приватности/.test(error instanceof Error ? error.message : String(error));
+    /^HTTP 40[1234]\b|дневной лимит|настроек приватности/i.test(error instanceof Error ? error.message : String(error));
 
 // --- Fallback models ---------------------------------------------------------
 
@@ -295,6 +309,7 @@ export const complete = async (
     request: CompletionRequest,
     settings?: AISettings
 ): Promise<Completion> => {
+    await checkGate(settings);
     const baseUrl = baseUrlOf(settings);
     const model = request.model || modelOf(settings);
     const openRouter = baseUrl.includes('openrouter.ai');
@@ -398,7 +413,7 @@ export const complete = async (
                 const { message, data } = answer;
                 if (message) {
                     const usage = usageFrom(data);
-                    await reportUsage(usage);
+                    await reportUsage(usage, settings);
                     request.signal?.removeEventListener('abort', onUserStop);
                     return {
                         content: message.content ?? null,
@@ -510,7 +525,7 @@ export const embed = async (texts: string[], settings?: AISettings): Promise<num
         throw new Error('Провайдер вернул эмбеддинги в неожиданном виде');
     }
 
-    await reportUsage(usageFrom(data));
+    await reportUsage(usageFrom(data), settings);
     return vectors;
 };
 

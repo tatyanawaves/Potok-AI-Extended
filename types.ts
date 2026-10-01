@@ -71,6 +71,10 @@ export interface AISettings {
    * model, not only free ones. Optional.
    */
   fallbackModel?: string;
+  /** Requests to the model per day, counted across browser and server; 0 means no ceiling. */
+  dailyRequestLimit?: number;
+  /** Server only, never stored: counts and limits one task's requests. */
+  usageHooks?: import('./services/spendLimit').UsageHooks;
   /**
    * Embedding model on the same API, for finding notes by meaning. Empty
    * means keyword search only.

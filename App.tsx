@@ -17,11 +17,15 @@ import { finishOpenRouterLogin } from './services/openrouterAuth';
 import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
 import { Thought, SavedSession, AISettings, CognitiveState } from './types';
 import { translations } from './translations';
-import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink } from './services/llm';
-import { recordSpend } from './services/spend';
+import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink, setUsageGate } from './services/llm';
+import { DEFAULT_DAILY_REQUESTS, dailyLimitOf } from './services/spendLimit';
+import { recordSpend, spendGate } from './services/spend';
 
 // Every model request made in this browser is counted in the user's daily tally.
 setUsageSink(recordSpend);
+// The ceiling follows the settings of the moment; see the effect on settingsRef below.
+let currentLimit = DEFAULT_DAILY_REQUESTS;
+setUsageGate(() => spendGate(currentLimit));
 import { updateUserProfile, getUserProfile, getUserPosts, createPost, subscribeToGlobalThoughtFeed, addComment, deleteComment, toggleLike, auth, deletePost, getUserProfileByName, toggleCommentLike, logout } from './services/firebase';
 import { secureStorage } from './services/encryption';
 import { resolveFollowing, isFromFollowed, FollowedProfile } from './services/social';
@@ -150,6 +154,7 @@ const App: React.FC = () => {
     return parsed;
   });
   const settingsRef = useRef(settings);
+  currentLimit = dailyLimitOf(settings);
   const taskNotices = useTaskNotifications(settings.language);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   /**

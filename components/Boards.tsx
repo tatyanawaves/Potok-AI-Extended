@@ -18,6 +18,7 @@ import {
 } from '../services/boards';
 import { messageAuthor } from '../services/mentions';
 import { askForTaskNotifications } from '../hooks/useTaskNotifications';
+import { dailyLimitOf } from '../services/spendLimit';
 import {
     triggerAgentReplies, runBotDiscussion, designBot, probeToolServer, toolServersOf,
     MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, MAX_REQUESTS_PER_TURN, ToolPolicy
@@ -1028,7 +1029,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     className="text-[10px] font-mono text-slate-500 shrink-0 md:px-2"
                                     title={t.spendHint || 'Запросы к модели с вашего ключа за сегодня. Платит тот, кто упомянул бота.'}
                                 >
-                                    {t.today || 'сегодня'}: {spendOn(spend).requests} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}
+                                    {t.today || 'сегодня'}: {spendOn(spend).requests}{dailyLimitOf(settings) > 0 ? ` / ${dailyLimitOf(settings)}` : ''} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}
                                 </div>
                             )}
 

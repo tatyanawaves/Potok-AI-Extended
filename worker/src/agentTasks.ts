@@ -21,6 +21,8 @@ import { setMcpFetch } from '../../services/mcp';
 import { MAX_ORCHESTRATED_STEPS } from '../../services/orchestratorCore';
 import type { TaskContext } from '../../services/runtime/orchestrate';
 import { FirestoreRest, TokenSource, restAgentStore, type FirestoreConfig } from './firestoreRest';
+import { dailyLimitOf, overLimit, limitMessage, addToDay, type UsageHooks } from '../../services/spendLimit';
+import { dayKey } from '../../services/usage';
 import { seal, open } from './taskCrypto';
 
 /** The Workflow binding, typed structurally so tests need no Cloudflare globals. */
@@ -55,7 +57,7 @@ export interface TaskParams {
     bots: BoardMember[];
     author: { id: string, name: string };
     /** Non-secret model settings. */
-    settings: Pick<AISettings, 'apiBaseUrl' | 'openRouterModel' | 'memoryModel' | 'embeddingModel'>;
+    settings: Pick<AISettings, 'apiBaseUrl' | 'openRouterModel' | 'memoryModel' | 'embeddingModel' | 'fallbackModel' | 'dailyRequestLimit'>;
     /** { apiKey, refreshToken, mcpTokens }, sealed. */
     sealed: string;
     /** This worker's public origin, to reach its own Pipedream bridge in-process. */
@@ -143,8 +145,29 @@ export const openRuntime = async (
         }
     });
 
+    // The person's daily ceiling holds on the server too, counted in the same
+    // tally as in the browser. Per run, not module-wide: tasks of different
+    // people share this process.
+    const spendPath = `users/${params.author.id}/private/spend`;
+    const limit = dailyLimitOf(params.settings);
+    const usageHooks: UsageHooks = {
+        gate: async () => {
+            if (limit <= 0) return;
+            const doc = await rest.get(spendPath).catch(() => null);
+            const used = Number(doc?.data?.days?.[dayKey()]?.requests || 0);
+            if (overLimit(used, limit)) throw new Error(limitMessage(limit));
+        },
+        record: async tokens => {
+            const doc = await rest.get(spendPath).catch(() => null);
+            const days = addToDay(doc?.data?.days, dayKey(), tokens);
+            if (doc) await rest.update(spendPath, { days });
+            else await rest.create(`users/${params.author.id}/private`, { days }, 'spend');
+        }
+    };
+
     const settings: AISettings = {
         ...params.settings,
+        usageHooks,
         openRouterKey: secrets.apiKey,
         openRouterModel: params.settings.openRouterModel || '',
         aiProvider: 'openrouter',
@@ -237,7 +260,9 @@ export const handleTaskStart = async (
             apiBaseUrl: body.settings?.apiBaseUrl || undefined,
             openRouterModel: body.settings?.openRouterModel || undefined,
             memoryModel: body.settings?.memoryModel || undefined,
-            embeddingModel: body.settings?.embeddingModel || undefined
+            embeddingModel: body.settings?.embeddingModel || undefined,
+            fallbackModel: typeof body.settings?.fallbackModel === 'string' ? body.settings.fallbackModel.slice(0, 200) || undefined : undefined,
+            dailyRequestLimit: Number.isFinite(Number(body.settings?.dailyRequestLimit)) ? Math.max(0, Math.floor(Number(body.settings.dailyRequestLimit))) : undefined
         },
         sealed: await seal({ apiKey, refreshToken, mcpTokens: body.mcpTokens || {} } satisfies Secrets, sealingSecret(env)),
         selfOrigin: new URL(request.url).origin
