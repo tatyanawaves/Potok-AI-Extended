@@ -32,6 +32,7 @@ import { mentionableName, freeName } from '../services/mentions';
 import { subscribeToBotLibrary, saveBotToLibrary, removeBotFromLibrary, SavedBot } from '../services/botLibrary';
 import MemoryPanel from './MemoryPanel';
 import ComputerPanel from './ComputerPanel';
+import ModelPicker from './ModelPicker';
 import CodeSaveDialog from './CodeSaveDialog';
 import TerminalBlock from './TerminalBlock';
 import { RichText } from './RichText';
@@ -2137,13 +2138,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-4 font-mono"
                                 />
 
-                                <input
-                                    type="text"
-                                    value={botModel}
-                                    onChange={(e) => setBotModel(e.target.value)}
-                                    placeholder={`${t.botModelPlaceholder || 'Модель (необязательно), по умолчанию'}: ${settings.openRouterModel || 'из настроек'}`}
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs font-mono mb-3"
-                                />
+                                <div className="mb-3">
+                                    <ModelPicker
+                                        value={botModel}
+                                        onChange={setBotModel}
+                                        placeholder={`${t.botModelPlaceholder || 'Модель (необязательно), по умолчанию'}: ${settings.openRouterModel || 'из настроек'}`}
+                                        language={settings.language}
+                                        toolsOnly={botToolUrl.trim().length > 0}
+                                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs font-mono"
+                                    />
+                                </div>
                                 <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
                                     {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'} <Hint id="oauth-connectors" always /> <Hint id="mcp" />
                                 </label>

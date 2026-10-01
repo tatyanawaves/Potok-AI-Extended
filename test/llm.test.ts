@@ -172,3 +172,18 @@ describe('complete: a stream that stalls', () => {
         }
     });
 });
+
+describe('parseFreeModels', () => {
+    it('keeps usable free models, names them and puts the tool-capable first', async () => {
+        const { parseFreeModels } = await import('../services/llm');
+        const list = parseFreeModels({ data: [
+            { id: 'a/chat:free', name: 'A Chat (free)', context_length: 32000, supported_parameters: [] },
+            { id: 'b/agent:free', name: 'B Agent (free)', context_length: 128000, supported_parameters: ['tools'], architecture: { input_modalities: ['text', 'image'] } },
+            { id: 'c/paid', name: 'Paid', context_length: 128000 },
+            { id: 'd/guard:free', name: 'Llama Guard', context_length: 128000 },
+            { id: 'e/tiny:free', name: 'Tiny', context_length: 4000 }
+        ] });
+        expect(list.map(m => m.id)).toEqual(['b/agent:free', 'a/chat:free']);
+        expect(list[0]).toEqual({ id: 'b/agent:free', name: 'B Agent', tools: true, vision: true, contextLength: 128000 });
+    });
+});

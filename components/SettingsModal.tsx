@@ -1,3 +1,4 @@
+import ModelPicker from './ModelPicker';
 import { dailyLimitOf } from '../services/spendLimit';
 import React, { useState, useEffect, useCallback } from 'react';
 import { AISettings, Language } from '../types';
@@ -43,7 +44,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   useEffect(() => { if (isPipedreamConfigured()) gcpConnected().then(setGcpSet).catch(() => { }); }, []);
   // Free models change every few weeks; offer the ones OpenRouter lists today.
   const [freeModelIds, setFreeModelIds] = useState<string[]>([]);
-  useEffect(() => { openRouterFreeModels().then(list => setFreeModelIds(list.filter(m => m.tools).map(m => m.id))); }, []);
+  useEffect(() => { openRouterFreeModels().then(list => setFreeModelIds(list.map(m => m.id))); }, []);
   const [quota, setQuota] = useState<{ used: number, limit: number, remaining: number } | null>(null);
   useEffect(() => { openRouterQuota(settings).then(setQuota); }, [settings]);
 
@@ -295,17 +296,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
                       {t.modelLabel || 'Модель'} <a href="https://openrouter.ai/models?max_price=0" target="_blank" rel="noopener noreferrer" className="normal-case tracking-normal text-[10px] text-cyan-400/80 underline">бесплатные ↗</a>
                     </label>
-                    <input
-                      type="text"
-                      value={openRouterModel}
-                      onChange={(e) => setOpenRouterModel(e.target.value)}
-                      placeholder="author/model:free"
-                      list="potok-free-models"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
-                    <datalist id="potok-free-models">
-                      {freeModelIds.map(id => <option key={id} value={id} />)}
-                    </datalist>
+                    <ModelPicker value={openRouterModel} onChange={setOpenRouterModel} placeholder="author/model:free" language={language} />
                     {freeModelIds.length > 0 && (!apiBaseUrl.trim() || apiBaseUrl.includes('openrouter.ai'))
                       && openRouterModel.endsWith(':free') && !freeModelIds.includes(openRouterModel.trim()) && (
                       <p className="text-[10px] text-amber-300/90">
@@ -326,13 +317,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
                       {t.memoryModelLabel || 'Модель для служебных задач'} ({t.optional || 'необязательно'}) <Hint id="memory-model" />
                     </label>
-                    <input
-                      type="text"
-                      value={memoryModel}
-                      onChange={(e) => setMemoryModel(e.target.value)}
-                      placeholder={t.memoryModelPlaceholder || 'та же, что выше'}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
+                    <ModelPicker value={memoryModel} onChange={setMemoryModel} placeholder={t.memoryModelPlaceholder || 'та же, что выше'} language={language} />
                     <p className="text-[10px] text-slate-600 leading-relaxed">
                       {t.memoryModelHint || 'Сжатие памяти, план и проверки совещаний. Дешёвая быстрая модель здесь экономит токены, не трогая ответы ботов.'}
                     </p>
@@ -342,13 +327,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
                       {t.fallbackModelLabel || 'Запасная модель'} ({t.optional || 'необязательно'})
                     </label>
-                    <input
-                      type="text"
-                      value={fallbackModel}
-                      onChange={(e) => setFallbackModel(e.target.value)}
-                      placeholder="author/model"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono text-sm"
-                    />
+                    <ModelPicker value={fallbackModel} onChange={setFallbackModel} placeholder="author/model" language={language} />
                     <p className="text-[10px] text-slate-600 leading-relaxed">
                       {t.fallbackModelHint || 'Если основная модель недоступна, перегружена или молчит 45 секунд, запрос уйдёт на эту. Без неё переход есть только между бесплатными моделями.'}
                     </p>
