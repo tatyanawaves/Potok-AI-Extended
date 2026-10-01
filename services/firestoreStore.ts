@@ -4,6 +4,7 @@ import {
 import { db, auth } from './firebase';
 import { getMessagesSince, sendMessage } from './boards';
 import { fetchAttachmentText, fetchAttachmentDataUrl } from './attachments';
+import { isAuthentic } from './serverReplies';
 import { AISettings } from '../types';
 import { ChannelSummary, EMPTY_SUMMARY, MemoryNote } from './memoryCore';
 import { AgentStore } from './runtime/store';
@@ -56,6 +57,7 @@ export const firestoreStore = (settings: AISettings): AgentStore => ({
 
     readAttachment: fetchAttachmentText,
     readAttachmentDataUrl: fetchAttachmentDataUrl,
+    isAuthentic,
 
     async postMessage(message) {
         await sendMessage(message);

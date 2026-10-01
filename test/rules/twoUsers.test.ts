@@ -156,3 +156,38 @@ describe("Bob calls Alice's bot", () => {
         expect(reply.postedBy).toBe('alice');
     });
 });
+
+describe('tool requests and drafts from the server', () => {
+    const as = (uid: string) => env.authenticatedContext(uid).firestore();
+
+    it('lets only the person asked see and answer a tool request, and only its status', async () => {
+        const { assertFails, assertSucceeds } = await import('@firebase/rules-unit-testing');
+        const { getDoc, updateDoc } = await import('firebase/firestore');
+        const request = { requestedBy: 'bob', bot: 'Helper', tool: 'sandbox_shell', args: '{}', status: 'pending', createdAt: 1 };
+
+        await assertFails(setDoc(doc(as('alice'), 'boards/b1/approvals/a0'), request));
+        await assertFails(setDoc(doc(as('bob'), 'boards/b1/approvals/a0'), { ...request, status: 'allowed' }));
+        await assertSucceeds(setDoc(doc(as('bob'), 'boards/b1/approvals/a1'), request));
+
+        await assertFails(getDoc(doc(as('alice'), 'boards/b1/approvals/a1')));
+        await assertSucceeds(getDoc(doc(as('bob'), 'boards/b1/approvals/a1')));
+
+        await assertFails(updateDoc(doc(as('alice'), 'boards/b1/approvals/a1'), { status: 'allowed' }));
+        await assertFails(updateDoc(doc(as('bob'), 'boards/b1/approvals/a1'), { tool: 'delete_everything' }));
+        await assertFails(updateDoc(doc(as('bob'), 'boards/b1/approvals/a1'), { status: 'maybe' }));
+        await assertSucceeds(updateDoc(doc(as('bob'), 'boards/b1/approvals/a1'), { status: 'allowed' }));
+    });
+
+    it('takes drafts only for the board\'s bots, signed by the writer', async () => {
+        const { assertFails, assertSucceeds } = await import('@firebase/rules-unit-testing');
+        const { getDoc } = await import('firebase/firestore');
+        const draft = (postedBy: string) => ({ botName: 'Helper', text: 'Пишу…', postedBy, updatedAt: 1 });
+
+        await assertSucceeds(setDoc(doc(as('bob'), `boards/b1/channels/c1/drafts/${BOT}`), draft('bob')));
+        await assertFails(setDoc(doc(as('bob'), `boards/b1/channels/c1/drafts/${BOT}`), draft('alice')));
+        await assertFails(setDoc(doc(as('bob'), 'boards/b1/channels/c1/drafts/alice'), draft('bob')));
+        await assertFails(setDoc(doc(as('stranger'), `boards/b1/channels/c1/drafts/${BOT}`), draft('stranger')));
+        await assertSucceeds(getDoc(doc(as('alice'), `boards/b1/channels/c1/drafts/${BOT}`)));
+        await assertFails(getDoc(doc(as('stranger'), `boards/b1/channels/c1/drafts/${BOT}`)));
+    });
+});

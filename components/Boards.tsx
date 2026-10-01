@@ -18,6 +18,7 @@ import {
 } from '../services/boards';
 import { messageAuthor } from '../services/mentions';
 import { askForTaskNotifications } from '../hooks/useTaskNotifications';
+import { canReplyOnServer, replyOnServer, subscribeToApprovals, answerApproval, subscribeToDrafts, signatureState, Draft } from '../services/serverReplies';
 import { dailyLimitOf } from '../services/spendLimit';
 import {
     triggerAgentReplies, runBotDiscussion, designBot, probeToolServer, toolServersOf,
@@ -89,6 +90,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [isAgentThinking, setIsAgentThinking] = useState(false);
     // The reply being written right now, shown until the finished message lands.
     const [liveReply, setLiveReply] = useState<{ bot: string, text: string } | null>(null);
+    // The same for replies the server is writing, for every member of the board.
+    const [drafts, setDrafts] = useState<Draft[]>([]);
+    // Which bot messages the server signed (services/botSignature).
+    const [signatures, setSignatures] = useState<Record<string, 'signed' | 'unsigned'>>({});
     /** A person's command is running in their sandbox. */
     const [isRunning, setIsRunning] = useState(false);
     // One side panel at a time: side by side they covered each other and the input.
@@ -198,7 +203,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     // A queue, not a single slot: steps of a meeting run in parallel, and two
     // bots may ask at the same moment — one request must not replace the other.
     const [toolQueue, setToolQueue] = useState<
-        Array<{ bot: string, tool: string, args: Record<string, any>, foreign: boolean, resolve: (ok: boolean) => void }>
+        Array<{ bot: string, tool: string, args: Record<string, any>, foreign: boolean, resolve: (ok: boolean) => void, serverId?: string }>
     >([]);
     const pendingTool = toolQueue[0] || null;
 
@@ -209,6 +214,30 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         pendingTool?.resolve(allowed);
         setToolQueue(queue => queue.slice(1));
     };
+
+    useEffect(() => {
+        if (!activeBoardId || !activeChannelId) { setDrafts([]); return; }
+        return subscribeToDrafts(activeBoardId, activeChannelId, setDrafts);
+    }, [activeBoardId, activeChannelId]);
+
+    // Tool requests from bots the server runs for this person, on this board.
+    useEffect(() => {
+        if (!activeBoardId) return;
+        const boardId = activeBoardId;
+        return subscribeToApprovals(boardId, requests => {
+            setToolQueue(queue => {
+                const open = new Set(requests.map(r => r.id));
+                // Requests the server gave up on (timed out) leave the queue.
+                const kept = queue.filter(item => !item.serverId || open.has(item.serverId));
+                const known = new Set(kept.map(item => item.serverId));
+                const added = requests.filter(r => !known.has(r.id)).map(r => ({
+                    bot: r.bot, tool: r.tool, args: r.args, foreign: r.foreign, serverId: r.id,
+                    resolve: (ok: boolean) => { answerApproval(boardId, r.id, ok).catch(e => setError(String(e))); }
+                }));
+                return [...kept, ...added];
+            });
+        });
+    }, [activeBoardId]);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const modalInputRef = useRef<HTMLInputElement>(null);
@@ -273,6 +302,20 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         () => channels.find(c => c.id === activeChannelId) || null,
         [channels, activeChannelId]
     );
+
+    useEffect(() => {
+        const botIds = new Set((activeBoard?.botIds || []) as string[]);
+        let cancelled = false;
+        Promise.all(messages.filter(m => m.id && !(m.id in signatures)).map(async m => [m.id!, await signatureState(m, botIds)] as const))
+            .then(results => {
+                if (cancelled) return;
+                const found = results.filter(([, state]) => state) as Array<[string, 'signed' | 'unsigned']>;
+                if (found.length) setSignatures(previous => ({ ...previous, ...Object.fromEntries(found) }));
+            });
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [messages, activeBoard?.botIds]);
+
 
     // --- Subscriptions ---
 
@@ -779,10 +822,24 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
             if (!mentionsBot) return;
 
-            // Replies are generated here, on this user's key: mentioning a bot
-            // is what costs tokens, so the mentioner pays for it.
+            // Replies are generated on this user's key: mentioning a bot is
+            // what costs tokens, so the mentioner pays for it. The server
+            // writes and signs them when it can; tools on this machine keep
+            // a bot in the browser.
             setIsAgentThinking(true);
+            const mentioned = activeBoard.members.filter(m => isBot(m)
+                && mentionedNames.some(name => name.toLowerCase() === m.name.toLowerCase()));
             try {
+                if (canReplyOnServer(mentioned)) {
+                    await replyOnServer({
+                        boardId: activeBoard.id!,
+                        channelId: activeChannelId,
+                        channelName: activeChannel.name,
+                        mentions: mentionedNames,
+                        settings
+                    });
+                    return;
+                }
                 // Tools run freely, but anything that deletes or is marked
                 // unsafe waits for a yes in the approval dialog.
                 await triggerAgentReplies(
@@ -1132,6 +1189,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 >
                                                     {author.name}
                                                 </button>
+                                                {signatures[msg.id!] === 'signed' && (
+                                                    <span className="text-[10px] text-emerald-400/80" title={t.signedHint || 'Ответ записан и подписан сервером'}>✓</span>
+                                                )}
+                                                {signatures[msg.id!] === 'unsigned' && (
+                                                    <span className="text-[10px] text-amber-300/90" title={t.unsignedHint || 'Сервер не подписывал это сообщение: его мог написать кто угодно от имени бота'}>⚠ {t.unsigned || 'не подтверждено'}</span>
+                                                )}
                                                 {author.via && (
                                                     <span className="text-[10px] text-slate-500" title={t.postedByHint || 'Кто на самом деле отправил это сообщение'}>
                                                         {t.via || 'через'} {author.via}
@@ -1315,6 +1378,22 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         <span>{t.sandboxRunning || 'выполняется в облачной песочнице…'}</span>
                                     </div>
                                 )}
+                                {drafts.filter(d => d.text).map(d => (
+                                    <div key={d.botId} className="flex space-x-3 opacity-90">
+                                        <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
+                                            {(Array.from(String(d.botName))[0] || '?').toUpperCase()}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-baseline space-x-2">
+                                                <span className="text-sm font-bold text-indigo-300">{d.botName}</span>
+                                                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse self-center"></span>
+                                            </div>
+                                            <div className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
+                                                <RichText text={d.text} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
                                 {isAgentThinking && !discussionProgress && liveReply?.text && (
                                     <div className="flex space-x-3 opacity-90">
                                         <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
@@ -1331,7 +1410,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         </div>
                                     </div>
                                 )}
-                                {isAgentThinking && !discussionProgress && !liveReply?.text && (
+                                {isAgentThinking && !discussionProgress && !liveReply?.text && !drafts.some(d => d.text) && (
                                     <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono pl-11">
                                         <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
                                         <span>{liveReply ? `${liveReply.bot}: ` : ''}{t.agentThinking || 'агент печатает...'}</span>

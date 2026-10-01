@@ -362,7 +362,10 @@ export const translations = {
     fallbackModelLabel: "Fallback model",
     fallbackModelHint: "If the main model is down, busy or silent for 45 seconds, the request goes to this one. Without it, only free models hand over to each other.",
     dailyLimitLabel: "Daily limit of requests to the model",
-    dailyLimitHint: "Bots, meetings, server tasks and the thought stream together. Once reached, new requests are refused until tomorrow. 0 means no limit."
+    dailyLimitHint: "Bots, meetings, server tasks and the thought stream together. Once reached, new requests are refused until tomorrow. 0 means no limit.",
+    signedHint: "Written and signed by the server",
+    unsignedHint: "The server did not sign this message: anyone could have written it in the bot's name",
+    unsigned: "not verified"
   },
   ru: {
     title: 'Potok',
@@ -466,7 +469,10 @@ export const translations = {
     fallbackModelLabel: "Запасная модель",
     fallbackModelHint: "Если основная модель недоступна, перегружена или молчит 45 секунд, запрос уйдёт на эту. Без неё переход есть только между бесплатными моделями.",
     dailyLimitLabel: "Лимит запросов к модели в день",
-    dailyLimitHint: "Боты, совещания, задачи на сервере и поток мыслей вместе. Когда лимит достигнут, новые запросы отклоняются до завтра. 0 — без лимита."
+    dailyLimitHint: "Боты, совещания, задачи на сервере и поток мыслей вместе. Когда лимит достигнут, новые запросы отклоняются до завтра. 0 — без лимита.",
+    signedHint: "Ответ записан и подписан сервером",
+    unsignedHint: "Сервер не подписывал это сообщение: его мог написать кто угодно от имени бота",
+    unsigned: "не подтверждено"
   },
   kk: {
     title: 'Potok',
@@ -830,6 +836,9 @@ export const translations = {
     fallbackModelLabel: "Қосалқы модель",
     fallbackModelHint: "Негізгі модель қолжетімсіз, бос емес немесе 45 секунд үнсіз болса, сұрау осыған кетеді. Онсыз ауысу тек тегін модельдер арасында болады.",
     dailyLimitLabel: "Модельге күндік сұрау шегі",
-    dailyLimitHint: "Боттар, кеңестер, сервердегі тапсырмалар және ойлар ағыны бірге. Шекке жеткенде жаңа сұраулар ертеңге дейін қабылданбайды. 0 — шексіз."
+    dailyLimitHint: "Боттар, кеңестер, сервердегі тапсырмалар және ойлар ағыны бірге. Шекке жеткенде жаңа сұраулар ертеңге дейін қабылданбайды. 0 — шексіз.",
+    signedHint: "Жауапты сервер жазып, қол қойды",
+    unsignedHint: "Сервер бұл хабарламаға қол қоймаған: оны боттың атынан кез келген адам жазуы мүмкін",
+    unsigned: "расталмаған"
   }
 };
