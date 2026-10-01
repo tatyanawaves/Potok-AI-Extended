@@ -45,7 +45,7 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, 
     });
 
     return (
-        <aside className="absolute md:relative inset-y-0 right-0 z-20 w-72 shrink-0 border-l border-slate-800 bg-slate-900 md:bg-slate-900/30 flex flex-col">
+        <aside className="absolute lg:relative inset-y-0 right-0 z-20 w-full max-w-xs md:max-w-none md:w-72 shrink-0 border-l border-slate-800 bg-slate-900 lg:bg-slate-900/30 flex flex-col shadow-2xl lg:shadow-none">
             <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-amber-300/80 flex items-center justify-between">
                 <span>{t.memory || 'Память'} <Hint id="memory" always /></span>
                 <button onClick={onClose} className="text-slate-500 hover:text-white" title={t.close || 'Закрыть'}>✕</button>

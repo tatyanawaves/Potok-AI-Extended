@@ -20,3 +20,11 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #475569;
 }
+
+/* A row that may scroll sideways on a phone without showing a scrollbar. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

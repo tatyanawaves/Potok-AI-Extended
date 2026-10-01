@@ -20,7 +20,7 @@
  *   POST /tasks/cancel      → ask a running one to stop
  *   POST /tools/browser     → cloud browser for bots, as MCP (./cloudBrowser)
  *   POST /oauth/*, /connect/mcp → OAuth MCP servers such as Higgsfield (./oauthConnect)
- *   POST /keys/*, /tools/sandbox → E2B / Daytona sandboxes on each user's key (./sandbox)
+ *   POST /keys/*, /tools/sandbox, /machine → E2B / Daytona sandboxes on each user's key (./sandbox)
  *   POST /tools/cloudrun    → Google Cloud Run deployments in the user's project (./cloudRun)
  *   GET  /health
  */
@@ -32,7 +32,7 @@ import {
 import { handleTaskStart, handleTaskCancel, type TaskEnv } from './agentTasks';
 import { handleMcpRequest } from './mcpServer';
 import { browserTools } from './cloudBrowser';
-import { sandboxTools, isProvider, handleKeySet, handleKeyStatus, handleKeyDelete, userGcp } from './sandbox';
+import { sandboxTools, isProvider, handleKeySet, handleKeyStatus, handleKeyDelete, userGcp, handleMachine, BOARD_ID, type AttachmentSource } from './sandbox';
 import { cloudRunTools } from './cloudRun';
 import {
     handleOAuthStart, handleOAuthCallback, handleOAuthStatus, handleOAuthDisconnect,
@@ -52,6 +52,7 @@ interface AttachmentBucket {
     ): Promise<unknown>;
     get(key: string): Promise<{
         body: ReadableStream | null;
+        arrayBuffer(): Promise<ArrayBuffer>;
         httpMetadata?: { contentType?: string };
     } | null>;
     delete(key: string): Promise<void>;
@@ -727,8 +728,15 @@ export default {
             if (url.pathname === '/tools/sandbox') {
                 const provider = url.searchParams.get('provider');
                 if (!isProvider(provider)) return json({ error: 'provider must be e2b or daytona' }, 400, cors);
-                return await handleMcpRequest(request, `potok-sandbox-${provider}`, sandboxTools(env, uid, provider), cors);
+                const board = url.searchParams.get('board') || undefined;
+                if (board !== undefined && !BOARD_ID.test(board)) return json({ error: 'bad board id' }, 400, cors);
+                const files: AttachmentSource | undefined = board && env.FILES ? {
+                    get: key => env.FILES!.get(key),
+                    mayRead: b => isBoardMember(env.FIREBASE_PROJECT_ID, b, idToken, env.FIRESTORE_EMULATOR_HOST)
+                } : undefined;
+                return await handleMcpRequest(request, `potok-sandbox-${provider}`, sandboxTools(env, uid, provider, board, files), cors);
             }
+            if (url.pathname === '/machine') return await handleMachine(request, env, uid, reply, cors);
             if (url.pathname === '/tasks/start') {
                 return await handleTaskStart(request, env, uid, idToken, (body, status) => json(body, status, cors));
             }

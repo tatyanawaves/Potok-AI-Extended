@@ -58,6 +58,40 @@ export const sandboxKeyStatus = async (): Promise<Record<SandboxProvider, boolea
 
 export const deleteSandboxKey = (provider: SandboxProvider | 'gcp'): Promise<void> => post('/keys/delete', { provider });
 
+// --- The board's computer (a Daytona sandbox kept per board) ----------------------------
+
+export interface MachineEntry { name: string, dir: boolean, size: number }
+export interface MachineInfo {
+    key: boolean;
+    exists?: boolean;
+    /** started, stopped, archived, starting… as Daytona reports it */
+    state?: string;
+    cpu?: number;
+    memory?: number;
+    disk?: number;
+    path?: string;
+    entries?: MachineEntry[];
+}
+
+/** `status` never wakes the machine; `list` creates or starts it. */
+export const machine = (board: string, action: 'status' | 'list' | 'stop' | 'delete', path?: string): Promise<MachineInfo> =>
+    post('/machine', { board, action, path });
+
+export const downloadFromMachine = async (board: string, path: string): Promise<Blob> => {
+    const user = auth.currentUser;
+    if (!user || !workerUrl) throw new Error('Коннекторы недоступны');
+    const response = await fetch(`${workerUrl}/machine`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${await user.getIdToken()}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ board, action: 'download', path })
+    });
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || `Сервер ответил ${response.status}`);
+    }
+    return response.blob();
+};
+
 // --- Google Cloud Run in the user's own project ------------------------------------------
 
 export const cloudRunUrl = (): string => `${workerUrl}/tools/cloudrun`;

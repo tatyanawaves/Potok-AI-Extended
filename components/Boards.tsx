@@ -27,6 +27,7 @@ import { updateBot } from '../services/boards';
 import { mentionableName, freeName } from '../services/mentions';
 import { subscribeToBotLibrary, saveBotToLibrary, removeBotFromLibrary, SavedBot } from '../services/botLibrary';
 import MemoryPanel from './MemoryPanel';
+import ComputerPanel from './ComputerPanel';
 import CodeSaveDialog from './CodeSaveDialog';
 import TerminalBlock from './TerminalBlock';
 import { RichText } from './RichText';
@@ -85,7 +86,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [isAgentThinking, setIsAgentThinking] = useState(false);
     /** A person's command is running in their sandbox. */
     const [isRunning, setIsRunning] = useState(false);
-    const [showMembers, setShowMembers] = useState(false);
+    // One side panel at a time: side by side they covered each other and the input.
+    const [sidePanel, setSidePanel] = useState<'members' | 'memory' | 'computer' | null>(null);
+    const showMembers = sidePanel === 'members';
+    const togglePanel = (panel: 'members' | 'memory' | 'computer') => setSidePanel(current => current === panel ? null : panel);
     const [error, setError] = useState<string | null>(null);
     const [reads, setReads] = useState(EMPTY_READ_STATE);
     const [spend, setSpend] = useState<SpendState | null>(null);
@@ -158,7 +162,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     const [designing, setDesigning] = useState(false);
     const [toolHint, setToolHint] = useState('');
     const [toolProbe, setToolProbe] = useState<{ state: 'idle' | 'loading' | 'ok' | 'error', text: string }>({ state: 'idle', text: '' });
-    const [showMemory, setShowMemory] = useState(false);
+    const showMemory = sidePanel === 'memory';
+    const showComputer = sidePanel === 'computer';
 
     // Server tasks: meetings the worker runs, which outlive this tab.
     const [runOnServer, setRunOnServer] = useState(false);
@@ -807,7 +812,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setIsRunning(true);
         setError(null);
         try {
-            const { entries } = await runInSandbox(requests);
+            const { entries } = await runInSandbox(requests, activeBoard.id!);
             await sendMessage({
                 channelId: activeChannelId,
                 boardId: activeBoard.id!,
@@ -904,7 +909,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 {board.ownerId === currentUid && (
                                     <button
                                         onClick={(e) => { e.stopPropagation(); openModal({ kind: 'deleteBoard', boardId: board.id!, boardName: board.name }); }}
-                                        className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                                        className="text-slate-600 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0"
                                         title={t.delete || 'Удалить'}
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
@@ -970,7 +975,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                             e.stopPropagation();
                                             openModal({ kind: 'deleteChannel', channelId: channel.id!, channelName: channel.name });
                                         }}
-                                        className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                                        className="text-slate-600 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0"
                                         title={t.delete || 'Удалить'}
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
@@ -1003,7 +1008,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 </svg>
                             </button>
 
-                            <div className="min-w-0">
+                            <div className="min-w-[7rem] flex-1">
                                 <div className="font-mono text-sm text-slate-200 truncate">
                                     #{activeChannel?.name || '—'}
                                 </div>
@@ -1020,7 +1025,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 </div>
                             )}
 
-                            <div className="flex items-center space-x-2 shrink-0">
+                            <div className="flex flex-wrap items-center gap-1.5 md:gap-2 min-w-0">
                                 {isPipedreamConfigured() && (
                                     <button
                                         onClick={() => setShowCatalog(true)}
@@ -1033,7 +1038,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
 
                                 {activeChannelId && (
                                     <button
-                                        onClick={() => setShowMemory(v => !v)}
+                                        onClick={() => togglePanel('memory')}
                                         className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showMemory
                                             ? 'bg-amber-950/30 border-amber-500/30 text-amber-300'
                                             : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'}`}
@@ -1043,6 +1048,18 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     </button>
                                 )}
                                 {activeChannelId && <Hint id="memory" />}
+
+                                {activeChannelId && (
+                                    <button
+                                        onClick={() => togglePanel('computer')}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showComputer
+                                            ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+                                            : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'}`}
+                                        title="Компьютер доски: файлы, которые остаются между разговорами"
+                                    >
+                                        Компьютер
+                                    </button>
+                                )}
 
                                 {activeChannelId && (
                                     <button
@@ -1056,7 +1073,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 {activeChannelId && <Hint id="meeting" />}
 
                                 <button
-                                    onClick={() => setShowMembers(!showMembers)}
+                                    onClick={() => togglePanel('members')}
                                     className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showMembers
                                         ? 'bg-cyan-950/30 border-cyan-500/30 text-cyan-300'
                                         : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'
@@ -1153,12 +1170,13 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 {msg.authorId === currentUid && (
                                                     <button
                                                         onClick={async () => {
+                                                            if (!window.confirm(t.deleteMessageConfirm || 'Удалить сообщение?')) return;
                                                             // Keys live only on the message; delete
                                                             // the files before it is gone.
                                                             await deleteAttachments(msg.attachments || []);
                                                             await deleteMessage(activeBoard.id!, msg.channelId, msg.id!);
                                                         }}
-                                                        className="text-slate-700 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity text-[10px]"
+                                                        className="text-slate-700 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100 transition-opacity text-[10px]"
                                                     >
                                                         ✕
                                                     </button>
@@ -1318,25 +1336,33 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     isOwner={activeBoard.ownerId === currentUid}
                                     language={settings.language}
                                     settings={settings}
-                                    onClose={() => setShowMemory(false)}
+                                    onClose={() => setSidePanel(null)}
+                                />
+                            )}
+
+                            {showComputer && activeBoard.id && (
+                                <ComputerPanel
+                                    boardId={activeBoard.id}
+                                    activity={messages.filter(m => m.terminal?.length).length}
+                                    onClose={() => setSidePanel(null)}
                                 />
                             )}
 
                             {/* Members panel */}
                             {showMembers && (
-                                <aside className="absolute md:relative inset-y-0 right-0 z-20 w-64 shrink-0 border-l border-slate-800 bg-slate-900 md:bg-slate-900/30 flex flex-col">
+                                <aside className="absolute lg:relative inset-y-0 right-0 z-20 w-full max-w-xs md:w-64 shrink-0 border-l border-slate-800 bg-slate-900 lg:bg-slate-900/30 flex flex-col shadow-2xl lg:shadow-none overflow-y-auto">
                                     <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-slate-400 flex items-center justify-between">
                                         {t.members || 'Участники'}
                                         <button
-                                            onClick={() => setShowMembers(false)}
-                                            className="md:hidden text-slate-500 hover:text-white"
+                                            onClick={() => setSidePanel(null)}
+                                            className="text-slate-500 hover:text-white"
                                             title={t.close || 'Закрыть'}
                                         >
                                             ✕
                                         </button>
                                     </div>
 
-                                    <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                                    <div className="flex-1 p-2 space-y-1">
                                         {activeBoard.members.map(member => (
                                             <div key={member.id} className="group px-3 py-2 rounded-lg hover:bg-slate-800/50 flex items-center justify-between">
                                                 <div className="min-w-0">
@@ -1388,8 +1414,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                                 )}
                                                 {activeBoard.ownerId === currentUid && member.role !== 'owner' && (
                                                     <button
-                                                        onClick={() => removeMember(activeBoard.id!, member.id).catch(e => setError(String(e)))}
-                                                        className="text-slate-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                                                        onClick={() => {
+                                                            if (!window.confirm(`${t.removeMemberConfirm || 'Убрать с доски'}: ${member.name}?`)) return;
+                                                            removeMember(activeBoard.id!, member.id).catch(e => setError(String(e)));
+                                                        }}
+                                                        className="text-slate-600 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0"
                                                     >
                                                         <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
                                                             <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
@@ -1489,7 +1518,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         // where the field is one line tall — so it is cut in
                                         // half rather than shown.
                                         ? (isWide
-                                            ? `${t.messagePlaceholder || 'Сообщение в'} #${activeChannel.name}  ·  @${t.mentionAgentHint || 'имя для вызова агента'}  ·  /sh ${t.terminalHint || 'команда — терминал'}`
+                                            ? `#${activeChannel.name}  ·  @${t.mentionAgentShort || 'бот'}  ·  /sh ${t.terminalShort || 'терминал'}`
                                             : `#${activeChannel.name}  ·  @${t.mentionAgentHint || 'имя'}`)
                                         : (t.noChannel || 'Создайте канал')}
                                     className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors resize-none h-[46px] max-h-32 disabled:opacity-40"

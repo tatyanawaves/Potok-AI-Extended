@@ -24,6 +24,7 @@ describe('attachmentsForBots', () => {
 
     it('names a file without text', () => {
         expect(attachmentsForBots([{ name: 'p.png', size: 5 }])).toBe('[вложение: p.png, 5 байт] (содержимое недоступно боту)');
+        expect(attachmentsForBots([{ key: 'board/b/x-p.png', name: 'p.png', size: 5 }])).toBe('[вложение: p.png, 5 байт, key=board/b/x-p.png] (содержимое недоступно боту)');
     });
 
     it('keeps at most MAX_KEPT_CHARS', () => {
@@ -38,7 +39,8 @@ describe('attachmentsForBots', () => {
 });
 
 describe('hydrateAttachments', () => {
-    const csv = (text?: string) => ({ key: 'board/b/1-a.csv', name: 'a.csv', size: 200_000, contentType: 'text/csv', ...(text !== undefined ? { text } : {}) });
+    type File = { key: string; name: string; size: number; contentType: string; text?: string };
+    const csv = (text?: string): File => ({ key: 'board/b/1-a.csv', name: 'a.csv', size: 200_000, contentType: 'text/csv', ...(text !== undefined ? { text } : {}) });
 
     it('reads text files stored without text, even large ones', async () => {
         const messages = [{ attachments: [csv()] }];
@@ -47,7 +49,7 @@ describe('hydrateAttachments', () => {
     });
 
     it('leaves kept text, binaries and failed reads alone', async () => {
-        const png = { key: 'k2', name: 'p.png', size: 5, contentType: 'image/png' };
+        const png: File = { key: 'k2', name: 'p.png', size: 5, contentType: 'image/png' };
         const messages = [{ attachments: [csv('kept'), png] }, { attachments: [{ ...csv(), key: 'bad' }] }];
         const read = vi.fn(async (key: string) => { if (key === 'bad') throw new Error('403'); return 'x'; });
         await hydrateAttachments(messages, read);
