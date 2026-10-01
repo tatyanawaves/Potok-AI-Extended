@@ -365,7 +365,13 @@ export const translations = {
     dailyLimitHint: "Bots, meetings, server tasks and the thought stream together. Once reached, new requests are refused until tomorrow. 0 means no limit.",
     signedHint: "Written and signed by the server",
     unsignedHint: "The server did not sign this message: anyone could have written it in the bot's name",
-    unsigned: "not verified"
+    unsigned: "not verified",
+    rememberAnswer: "Remember this answer for this bot and tool — do not ask again",
+    rememberDenyOnly: "Remember a refusal for this bot and tool (allowing someone else's bot is asked every time)",
+    toolPermissionsLabel: "Remembered tool answers",
+    toolPermissionsEmpty: "Nothing remembered. Tick \"Remember\" in a tool request to stop being asked.",
+    allowAlways: "always allow",
+    denyAlways: "always refuse"
   },
   ru: {
     title: 'Potok',
@@ -472,7 +478,13 @@ export const translations = {
     dailyLimitHint: "Боты, совещания, задачи на сервере и поток мыслей вместе. Когда лимит достигнут, новые запросы отклоняются до завтра. 0 — без лимита.",
     signedHint: "Ответ записан и подписан сервером",
     unsignedHint: "Сервер не подписывал это сообщение: его мог написать кто угодно от имени бота",
-    unsigned: "не подтверждено"
+    unsigned: "не подтверждено",
+    rememberAnswer: "Запомнить ответ для этого бота и инструмента — больше не спрашивать",
+    rememberDenyOnly: "Запомнить отказ для этого бота и инструмента (разрешение чужому боту каждый раз спрашивается заново)",
+    toolPermissionsLabel: "Запомненные ответы на запросы инструментов",
+    toolPermissionsEmpty: "Пока ничего. Отметьте «Запомнить» в запросе инструмента, чтобы бот больше не спрашивал.",
+    allowAlways: "всегда разрешать",
+    denyAlways: "всегда запрещать"
   },
   kk: {
     title: 'Potok',
@@ -839,6 +851,12 @@ export const translations = {
     dailyLimitHint: "Боттар, кеңестер, сервердегі тапсырмалар және ойлар ағыны бірге. Шекке жеткенде жаңа сұраулар ертеңге дейін қабылданбайды. 0 — шексіз.",
     signedHint: "Жауапты сервер жазып, қол қойды",
     unsignedHint: "Сервер бұл хабарламаға қол қоймаған: оны боттың атынан кез келген адам жазуы мүмкін",
-    unsigned: "расталмаған"
+    unsigned: "расталмаған",
+    rememberAnswer: "Осы бот пен құрал үшін жауапты есте сақтау — енді сұрамау",
+    rememberDenyOnly: "Осы бот пен құрал үшін бас тартуды есте сақтау (басқаның ботына рұқсат әр жолы сұралады)",
+    toolPermissionsLabel: "Құрал сұрауларына сақталған жауаптар",
+    toolPermissionsEmpty: "Әзірге ештеңе жоқ. Бот енді сұрамауы үшін құрал сұрауында «Есте сақтау» белгісін қойыңыз.",
+    allowAlways: "әрқашан рұқсат",
+    denyAlways: "әрқашан тыйым"
   }
 };

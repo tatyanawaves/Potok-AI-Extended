@@ -1,3 +1,4 @@
+import { forget, type ToolPermissions } from '../services/toolPermissions';
 import ModelPicker from './ModelPicker';
 import { dailyLimitOf } from '../services/spendLimit';
 import React, { useState, useEffect, useCallback } from 'react';
@@ -25,6 +26,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
   const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || DEFAULT_MODEL);
   const [memoryModel, setMemoryModel] = useState(settings.memoryModel || '');
   const [fallbackModel, setFallbackModel] = useState(settings.fallbackModel || '');
+  const [toolPermissions, setToolPermissions] = useState<ToolPermissions>(settings.toolPermissions || {});
   const [dailyLimit, setDailyLimit] = useState(String(dailyLimitOf(settings)));
   const [embeddingModel, setEmbeddingModel] = useState(settings.embeddingModel || '');
   const [githubToken, setGithubToken] = useState(settings.githubToken || '');
@@ -134,6 +136,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
       aiProvider: 'openrouter',
       memoryModel: memoryModel.trim() || undefined,
       fallbackModel: fallbackModel.trim() || undefined,
+      toolPermissions,
       dailyRequestLimit: Math.max(0, Math.floor(Number(dailyLimit) || 0)),
       embeddingModel: embeddingModel.trim() || undefined,
       githubToken: githubToken.trim(),
@@ -582,6 +585,29 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
               )}
             </div>
           )}
+
+          <div className="space-y-2">
+            <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
+              {t.toolPermissionsLabel || 'Запомненные ответы на запросы инструментов'}
+            </label>
+            {Object.keys(toolPermissions).length === 0 ? (
+              <p className="text-[10px] text-slate-500">{t.toolPermissionsEmpty || 'Пока ничего. Отметьте «Запомнить» в запросе инструмента, чтобы бот больше не спрашивал.'}</p>
+            ) : (
+              <ul className="space-y-1">
+                {Object.entries(toolPermissions).map(([key, item]) => (
+                  <li key={key} className="flex items-center justify-between gap-2 text-[11px] bg-slate-950 border border-slate-800 rounded-md px-2.5 py-1.5">
+                    <span className="truncate font-mono text-slate-300">{item.label}</span>
+                    <span className="shrink-0 flex items-center gap-2">
+                      <span className={item.decision === 'allow' ? 'text-emerald-400' : 'text-rose-300'}>
+                        {item.decision === 'allow' ? (t.allowAlways || 'всегда разрешать') : (t.denyAlways || 'всегда запрещать')}
+                      </span>
+                      <button type="button" onClick={() => setToolPermissions(forget(toolPermissions, key))} className="text-slate-500 hover:text-rose-300" title={t.remove || 'Убрать'}>✕</button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
           <div className="space-y-2">
             <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">

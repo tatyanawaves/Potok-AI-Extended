@@ -20,6 +20,7 @@ import { messageAuthor } from '../services/mentions';
 import { askForTaskNotifications } from '../hooks/useTaskNotifications';
 import { canReplyOnServer, replyOnServer, subscribeToApprovals, answerApproval, subscribeToDrafts, signatureState, Draft } from '../services/serverReplies';
 import { dailyLimitOf } from '../services/spendLimit';
+import { rememberedDecision, canRemember, remember } from '../services/toolPermissions';
 import {
     triggerAgentReplies, runBotDiscussion, designBot, probeToolServer, toolServersOf,
     MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, MAX_REQUESTS_PER_TURN, ToolPolicy
@@ -59,9 +60,11 @@ const splitUrls = (text: string): string[] =>
 interface BoardsProps {
     settings: AISettings;
     onViewProfile: (name: string, id?: string) => void;
+    /** Saves settings changed from here, such as a remembered tool answer. */
+    onUpdateSettings?: (settings: AISettings) => void;
 }
 
-const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
+const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettings }) => {
     const t = translations[settings.language] as any;
 
     /**
@@ -204,14 +207,35 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     // A queue, not a single slot: steps of a meeting run in parallel, and two
     // bots may ask at the same moment — one request must not replace the other.
     const [toolQueue, setToolQueue] = useState<
-        Array<{ bot: string, tool: string, args: Record<string, any>, foreign: boolean, resolve: (ok: boolean) => void, serverId?: string }>
+        Array<{ bot: string, tool: string, args: Record<string, any>, foreign: boolean, boardId: string, resolve: (ok: boolean) => void, serverId?: string }>
     >([]);
     const pendingTool = toolQueue[0] || null;
+    // Read when a request comes in, which may be long after this render.
+    const settingsNow = useRef(settings);
+    settingsNow.current = settings;
+    const boardIdNow = useRef<string | null>(null);
+    const [rememberAnswer, setRememberAnswer] = useState(false);
+    useEffect(() => setRememberAnswer(false), [pendingTool]);
 
-    const requestToolApproval = (bot: string, tool: string, args: Record<string, any>, reason?: 'foreign') =>
-        new Promise<boolean>(resolve => setToolQueue(queue => [...queue, { bot, tool, args, foreign: reason === 'foreign', resolve }]));
+    const requestToolApproval = (bot: string, tool: string, args: Record<string, any>, reason?: 'foreign') => {
+        const boardId = boardIdNow.current || '';
+        const remembered = rememberedDecision(settingsNow.current.toolPermissions, boardId, bot, tool, reason === 'foreign');
+        if (remembered) return Promise.resolve(remembered === 'allow');
+        return new Promise<boolean>(resolve => setToolQueue(queue => [...queue, { bot, tool, args, foreign: reason === 'foreign', boardId, resolve }]));
+    };
 
     const answerToolApproval = (allowed: boolean) => {
+        if (pendingTool && rememberAnswer && onUpdateSettings) {
+            const decision = allowed ? 'allow' : 'deny';
+            if (canRemember(decision, pendingTool.foreign)) {
+                const boardName = boards.find(b => b.id === pendingTool.boardId)?.name || '';
+                onUpdateSettings({
+                    ...settingsNow.current,
+                    toolPermissions: remember(settingsNow.current.toolPermissions, pendingTool.boardId, pendingTool.bot, pendingTool.tool, decision,
+                        `${boardName} · ${pendingTool.bot} · ${pendingTool.tool}`)
+                });
+            }
+        }
         pendingTool?.resolve(allowed);
         setToolQueue(queue => queue.slice(1));
     };
@@ -231,8 +255,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 // Requests the server gave up on (timed out) leave the queue.
                 const kept = queue.filter(item => !item.serverId || open.has(item.serverId));
                 const known = new Set(kept.map(item => item.serverId));
-                const added = requests.filter(r => !known.has(r.id)).map(r => ({
-                    bot: r.bot, tool: r.tool, args: r.args, foreign: r.foreign, serverId: r.id,
+                const added = requests.filter(r => !known.has(r.id)).filter(r => {
+                    // Answered at once when the person said "remember" before.
+                    const remembered = rememberedDecision(settingsNow.current.toolPermissions, boardId, r.bot, r.tool, r.foreign);
+                    if (!remembered) return true;
+                    answerApproval(boardId, r.id, remembered === 'allow').catch(e => setError(String(e)));
+                    return false;
+                }).map(r => ({
+                    bot: r.bot, tool: r.tool, args: r.args, foreign: r.foreign, serverId: r.id, boardId,
                     resolve: (ok: boolean) => { answerApproval(boardId, r.id, ok).catch(e => setError(String(e))); }
                 }));
                 return [...kept, ...added];
@@ -294,6 +324,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setBotToolUrl('');
         setSelectedClone(null);
     };
+
+    boardIdNow.current = activeBoardId;
 
     const activeBoard = useMemo(
         () => boards.find(b => b.id === activeBoardId) || null,
@@ -1705,6 +1737,17 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 </pre>
                             )}
                         </div>
+
+                        {onUpdateSettings && (
+                            <label className="flex items-start gap-2 mb-4 text-[11px] text-slate-400 cursor-pointer">
+                                <input type="checkbox" checked={rememberAnswer} onChange={e => setRememberAnswer(e.target.checked)} className="mt-0.5 accent-emerald-500" />
+                                <span>
+                                    {pendingTool.foreign
+                                        ? (t.rememberDenyOnly || 'Запомнить отказ для этого бота и инструмента (разрешение чужому боту каждый раз спрашивается заново)')
+                                        : (t.rememberAnswer || 'Запомнить ответ для этого бота и инструмента — больше не спрашивать')}
+                                </span>
+                            </label>
+                        )}
 
                         <div className="flex space-x-3">
                             <button

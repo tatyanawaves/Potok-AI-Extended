@@ -71,6 +71,8 @@ export interface AISettings {
    * model, not only free ones. Optional.
    */
   fallbackModel?: string;
+  /** Remembered answers to tool requests, this person's own; see services/toolPermissions. Browser only. */
+  toolPermissions?: import('./services/toolPermissions').ToolPermissions;
   /** Requests to the model per day, counted across browser and server; 0 means no ceiling. */
   dailyRequestLimit?: number;
   /** Server only, never stored: counts and limits one task's requests. */

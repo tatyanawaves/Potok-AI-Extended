@@ -1408,7 +1408,7 @@ const App: React.FC = () => {
 
           {/* Own Profile */}
           <Route path="/boards" element={
-            <Boards settings={settings} onViewProfile={handleViewProfile} />
+            <Boards settings={settings} onViewProfile={handleViewProfile} onUpdateSettings={handleSaveSettings} />
           } />
           <Route path="/messages" element={
             <Messages settings={settings} onViewProfile={handleViewProfile} onFollow={handleFollow} followedProfiles={followedProfiles} />
