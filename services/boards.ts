@@ -2,7 +2,7 @@ import {
     collection, addDoc, query, where, onSnapshot, limit, orderBy,
     doc, updateDoc, getDoc, getDocs, deleteDoc, arrayUnion, arrayRemove, runTransaction
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, auth } from './firebase';
 import { isBot, parseMentions, botIdsOf, botIdsInSync } from './mentions';
 import { deleteAttachments } from './attachments';
 import { listenWithRetry } from './listen';
@@ -309,9 +309,10 @@ export const subscribeToMessages = (
     }, onError), 'Boards/messages');
 };
 
-export const sendMessage = async (message: Omit<BoardMessage, 'id' | 'timestamp' | 'mentions'>) => {
+export const sendMessage = async (message: Omit<BoardMessage, 'id' | 'timestamp' | 'mentions' | 'postedBy'>) => {
     const payload: any = {
         ...message,
+        postedBy: auth.currentUser?.uid,
         mentions: parseMentions(message.content),
         timestamp: Date.now()
     };

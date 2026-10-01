@@ -163,8 +163,10 @@ describe('orchestrated run', () => {
             await new Promise(r => setTimeout(r, 20));
             running.delete(name);
             order.push(name);
-            // The combining step must be handed both earlier results.
-            const sawInputs = system.includes('RESULTS YOU BUILD ON') && system.includes('result of A') && system.includes('result of B');
+            // The combining step must be handed both earlier results, as data
+            // in the context message rather than in its instructions.
+            const context = body.messages.slice(1).map((m: any) => m.content).join('\n');
+            const sawInputs = !system.includes('result of A') && context.includes('result of A') && context.includes('result of B');
             return reply(name === 'C' ? `combined:${sawInputs}` : `result of ${name}`);
         }));
 

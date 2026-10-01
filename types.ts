@@ -298,8 +298,13 @@ export interface BoardMessage {
   /** Denormalized from the channel so security rules need a single lookup. */
   boardId: string;
   authorId: string;
+  /** As the sender typed it; shown from the board's roster where possible. */
   authorName: string;
   authorType: 'human' | 'agent';
+  /** The account that wrote the message, checked by the rules. Absent on old messages. */
+  postedBy?: string;
+  /** Posted by the orchestrator of a task, on behalf of postedBy. */
+  orchestrator?: boolean;
   content: string;
   /** Names mentioned via @name, used to wake up agents. */
   mentions: string[];

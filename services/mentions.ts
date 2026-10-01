@@ -65,3 +65,23 @@ export const freeName = (name: string, taken: string[]): string => {
     for (let n = 2; used.has(candidate.toLowerCase()); n++) candidate = `${name}${n}`;
     return candidate;
 };
+
+/**
+ * Who a message is from, as the board knows it. The stored authorName is
+ * whatever the sender's browser wrote, so a member could have signed as
+ * someone else; the roster and the rules-checked postedBy decide instead.
+ * `via` names the person who really posted a bot's reply or a task message.
+ * Messages from before postedBy keep their stored name.
+ */
+export const messageAuthor = (
+    message: { authorId: string, authorName: string, postedBy?: string, orchestrator?: boolean },
+    members: BoardMember[]
+): { name: string, via?: string } => {
+    if (!message.postedBy) return { name: message.authorName };
+    const nameOf = (id: string) => members.find(m => m.id === id)?.name;
+    const via = message.postedBy !== message.authorId || message.orchestrator
+        ? nameOf(message.postedBy) || '?'
+        : undefined;
+    if (message.orchestrator) return { name: '🧭 Оркестратор', via };
+    return { name: nameOf(message.authorId) || message.authorName, via };
+};

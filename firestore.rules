@@ -305,7 +305,12 @@ service cloud.firestore {
         match /messages/{messageId} {
           allow read: if isBoardMember(boardId);
 
+          // A member posts as themselves or as one of the board's bots (a
+          // bot's reply is written from the browser of whoever invoked it).
+          // Either way postedBy names the account that really wrote it, so a
+          // message dressed up as a bot or the orchestrator can be traced.
           allow create: if isBoardMember(boardId)
+                        && request.resource.data.postedBy == request.auth.uid
                         && (request.resource.data.authorId == request.auth.uid
                             || request.resource.data.authorId in boardData(boardId).get('botIds', []));
 

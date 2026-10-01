@@ -117,7 +117,7 @@ describe('textForBots', () => {
             content: '/sh ls /nope',
             terminal: [{ kind: 'shell', input: 'ls /nope', output: 'exit 2\nls: cannot access', failed: true }]
         });
-        expect(text).toBe('/sh ls /nope\n[терминал]\n$ ls /nope  [ошибка]\nexit 2\nls: cannot access');
+        expect(text).toBe('/sh ls /nope\n[терминал]\n$ ls /nope  [ошибка]\n<untrusted source="terminal output">\nexit 2\nls: cannot access\n</untrusted>');
     });
 
     it('strips colour codes from outputs stored before they were stripped on write', () => {
@@ -131,7 +131,7 @@ describe('textForBots', () => {
             content: '▶',
             terminal: [{ kind: 'python', input: 'run()', output: `${'x'.repeat(2000)}Traceback: boom` }]
         });
-        expect(text.endsWith('Traceback: boom')).toBe(true);
+        expect(text.endsWith('Traceback: boom\n</untrusted>')).toBe(true);
         expect(text.length).toBeLessThan(500);
     });
 });
