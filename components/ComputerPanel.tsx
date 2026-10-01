@@ -87,7 +87,7 @@ const ComputerPanel: React.FC<ComputerPanelProps> = ({ boardId, activity, onClos
     const button = 'px-2.5 py-1 rounded-md border text-[10px] font-mono uppercase tracking-wider transition-colors disabled:opacity-40';
 
     return (
-        <aside className="absolute md:relative inset-y-0 right-0 z-20 w-80 shrink-0 border-l border-slate-800 bg-slate-900 md:bg-slate-900/30 flex flex-col">
+        <aside className="absolute lg:relative inset-y-0 right-0 z-20 w-full max-w-xs md:max-w-none md:w-80 shrink-0 border-l border-slate-800 bg-slate-900 lg:bg-slate-900/30 flex flex-col shadow-2xl lg:shadow-none">
             <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-emerald-300/80 flex items-center justify-between">
                 <span>Компьютер доски</span>
                 <button onClick={onClose} className="text-slate-500 hover:text-white" title="Закрыть">✕</button>
