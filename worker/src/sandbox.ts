@@ -259,9 +259,35 @@ const LIST_SCRIPT = [
     "print(json.dumps({'path': os.path.abspath(p), 'entries': out[:500]}))"
 ].join('\n');
 
+export const MIN_PORT = 1024;
+export const MAX_PORT = 65535;
+
 /**
- * POST /machine { board, action, path? } — the board's computer, for its panel.
- * `status` never wakes the machine; `list` and `download` do.
+ * Opens a port of the machine to the web and returns its address, so a site
+ * or dashboard a bot started can be looked at. Daytona serves previews only
+ * of public sandboxes to a plain browser, so the machine is made public: the
+ * address is long and random, but anyone holding it can open any port until
+ * closePreview.
+ */
+const openPreview = async (key: string, box: DaytonaBox, port: number): Promise<string> => {
+    if (!Number.isInteger(port) || port < MIN_PORT || port > MAX_PORT) throw new Error(`Порт должен быть числом от ${MIN_PORT} до ${MAX_PORT}`);
+    const pub = await fetch(`${DAYTONA_API}/sandbox/${box.id}/public/true`, { method: 'POST', headers: daytonaAuth(key) });
+    if (!pub.ok) await failed(pub, 'Daytona: не удалось открыть доступ');
+    const r = await fetch(`${DAYTONA_API}/sandbox/${box.id}/ports/${port}/preview-url`, { headers: daytonaAuth(key) });
+    if (!r.ok) await failed(r, 'Daytona: нет адреса для порта');
+    const data: any = await r.json();
+    if (!data.url) throw new Error('Daytona не вернул адрес');
+    return String(data.url);
+};
+
+const closePreview = async (key: string, box: DaytonaBox): Promise<void> => {
+    const r = await fetch(`${DAYTONA_API}/sandbox/${box.id}/public/false`, { method: 'POST', headers: daytonaAuth(key) });
+    if (!r.ok) await failed(r, 'Daytona: не удалось закрыть доступ');
+};
+
+/**
+ * POST /machine { board, action, path?, port? } — the board's computer, for its panel.
+ * `status` never wakes the machine; `list`, `download` and `preview` do.
  */
 export const handleMachine = async (
     request: Request, env: SandboxEnv, uid: string, json: Json, cors: Record<string, string>
@@ -282,7 +308,7 @@ export const handleMachine = async (
         case 'status': {
             const s = box ? await daytonaState(key, box.id) : null;
             if (!s || GONE.includes(s.state)) return json({ key: true, exists: false }, 200);
-            return json({ key: true, exists: true, state: s.state, cpu: s.cpu, memory: s.memory, disk: s.disk }, 200);
+            return json({ key: true, exists: true, state: s.state, cpu: s.cpu, memory: s.memory, disk: s.disk, public: Boolean(s.public) }, 200);
         }
         case 'list': {
             const backend = daytonaBackend(key, await ensureDaytona(env, uid, key, board));
@@ -300,6 +326,14 @@ export const handleMachine = async (
             if (!r.ok) await failed(r, 'Daytona download');
             return new Response(r.body, { status: 200, headers: { ...cors, 'Content-Type': 'application/octet-stream' } });
         }
+        case 'preview': {
+            const running = await ensureDaytona(env, uid, key, board);
+            return json({ url: await openPreview(key, running, Number(body.port)) }, 200);
+        }
+        case 'unpublish': {
+            if (box) await closePreview(key, box);
+            return json({ ok: true }, 200);
+        }
         case 'stop': {
             if (box) await fetch(`${DAYTONA_API}/sandbox/${box.id}/stop`, { method: 'POST', headers: daytonaAuth(key) });
             return json({ ok: true }, 200);
@@ -313,7 +347,7 @@ export const handleMachine = async (
             return json({ ok: true }, 200);
         }
         default:
-            return json({ error: 'action must be status, list, download, stop or delete' }, 400);
+            return json({ error: 'action must be status, list, download, preview, unpublish, stop or delete' }, 400);
     }
 };
 
@@ -448,6 +482,19 @@ export const sandboxTools = (
             run: async a => (await get()).readFile(String(a.path || ''))
         }
     ];
+
+    if (persistent) {
+        tools.push({
+            name: 'sandbox_publish_port',
+            description: "Open a port of the board's computer to the web and get its address, to show a site, app or dashboard you started (bind it to 0.0.0.0). Anyone with the address can open it until the owner closes access in the board's Computer panel.",
+            inputSchema: { type: 'object', properties: { port: { type: 'number' } }, required: ['port'] },
+            run: async a => {
+                const key = await userKey(env, uid, 'daytona');
+                if (!key) throw new Error('Ключ Daytona не сохранён');
+                return `Preview: ${await openPreview(key, await ensureDaytona(env, uid, key, board), Number(a.port))}`;
+            }
+        });
+    }
 
     if (board && files) {
         tools.push({

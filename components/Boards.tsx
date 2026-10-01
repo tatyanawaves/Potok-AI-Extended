@@ -1056,9 +1056,9 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${showComputer
                                             ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
                                             : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'}`}
-                                        title="Компьютер доски: файлы, которые остаются между разговорами"
+                                        title={t.computerHint || 'Компьютер доски: файлы, которые остаются между разговорами'}
                                     >
-                                        Компьютер
+                                        {t.computer || 'Компьютер'}
                                     </button>
                                 )}
 
@@ -1349,6 +1349,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                             {showComputer && activeBoard.id && (
                                 <ComputerPanel
                                     boardId={activeBoard.id}
+                                    language={settings.language}
                                     activity={messages.filter(m => m.terminal?.length).length}
                                     onClose={() => setSidePanel(null)}
                                 />
