@@ -13,6 +13,7 @@
 
 import type { AISettings, BoardMember } from '../../types';
 import { answerMentions } from '../../services/runtime/turn';
+import { untilAborted } from '../../services/llm';
 import { setMcpFetch } from '../../services/mcp';
 import { FirestoreRest, restAgentStore } from './firestoreRest';
 import { firestoreConfig, fixedToken, type TaskEnv } from './agentTasks';
@@ -21,6 +22,9 @@ import { signerFor, verifierFor } from './botKey';
 import { BOARD_ID } from './sandbox';
 
 type Json = (body: unknown, status: number) => Response;
+
+/** The longest one mention may take on the server, all bots and tool rounds included. */
+export const REPLY_DEADLINE_MS = 4 * 60_000;
 
 const str = (value: unknown, max: number) => typeof value === 'string' ? value.slice(0, max) : '';
 
@@ -76,9 +80,14 @@ export const handleBotReply = async (
 
     const drafts = draftWriter(rest, boardId, channelId, uid);
     const idOf = (name: string) => members.find(m => m.name === name)?.id || name;
+    // However slow the models are, the person hears back in bounded time.
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), REPLY_DEADLINE_MS);
 
     try {
-        await answerMentions({
+        // Raced as a whole too: a stuck tool call does not take the signal.
+        await untilAborted(answerMentions({
+            signal: deadline.signal,
             store, mentions, authorId: uid, boardId, channelId,
             channelName: str(body.channelName, 100) || 'general',
             members, settings,
@@ -86,8 +95,17 @@ export const handleBotReply = async (
             approveTool: approvalVia(rest, boardId, uid),
             confirmDestructive: true,
             onDelta: (botName, text) => drafts.write(idOf(botName), botName, text)
-        });
+        }), deadline.signal);
+    } catch (error) {
+        if (!deadline.signal.aborted) throw error;
+        // A bot cut off by the deadline leaves a note rather than silence.
+        await store.postMessage({
+            boardId, channelId, authorId: uid, authorName: 'Potok', authorType: 'human',
+            content: `⏱ Модель не успела ответить за ${Math.round(REPLY_DEADLINE_MS / 60000)} мин. Попробуйте ещё раз или выберите в Настройках другую (или запасную) модель.`
+        }).catch(() => { });
+        return json({ ok: false, error: 'deadline' }, 200);
     } finally {
+        clearTimeout(timer);
         await drafts.done();
     }
     return json({ ok: true }, 200);

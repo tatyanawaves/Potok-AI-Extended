@@ -134,3 +134,41 @@ describe('complete: the person\'s fallback model', () => {
         expect(asked.at(-1)).toBe('backup/model');
     }, 15_000);
 });
+
+describe('complete: a stream that stalls', () => {
+    it('gives up after the silence timeout even when the body ignores the abort', async () => {
+        vi.useFakeTimers();
+        try {
+            // One chunk, then nothing, ever; and the body never notices aborts.
+            vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Нач"}}]}\n\n'));
+                }
+            }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })));
+            const pending = complete({ ...request, onDelta: () => { } }, { ...settings, openRouterModel: 'paid/model' });
+            const outcome = pending.then(() => 'answered', (e: Error) => e.message);
+            await vi.advanceTimersByTimeAsync(46_000);
+            expect(await outcome).toMatch(/HTTP 504.*не ответила/);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('stops at the attempt limit even when keep-alives keep arriving', async () => {
+        vi.useFakeTimers();
+        try {
+            vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream({
+                start(controller) {
+                    const keepAlive = () => { try { controller.enqueue(new TextEncoder().encode(': OPENROUTER PROCESSING\n\n')); } catch { return; } setTimeout(keepAlive, 10_000); };
+                    keepAlive();
+                }
+            }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })));
+            const outcome = complete({ ...request, onDelta: () => { } }, { ...settings, openRouterModel: 'paid/model' })
+                .then(() => 'answered', (e: Error) => e.message);
+            await vi.advanceTimersByTimeAsync(151_000);
+            expect(await outcome).toMatch(/HTTP 504/);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});

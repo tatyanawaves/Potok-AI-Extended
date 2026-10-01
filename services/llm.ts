@@ -217,6 +217,32 @@ const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve) 
 export const SILENCE_TIMEOUT_MS = 45_000;
 /** A non-streamed answer gets longer, since nothing arrives until it is done. */
 export const ANSWER_TIMEOUT_MS = 120_000;
+/**
+ * No attempt runs longer than this, whatever arrives: OpenRouter sends
+ * "still processing" comments that would otherwise keep a stuck request
+ * alive without end.
+ */
+export const ATTEMPT_LIMIT_MS = 150_000;
+
+const abortError = () => Object.assign(new Error('The request was aborted'), { name: 'AbortError' });
+
+/**
+ * Resolves with `promise`, or rejects as soon as `signal` aborts. Aborting a
+ * fetch is not always passed on to a body already being read (in the worker
+ * runtime it was not), which left a reply waiting forever.
+ */
+export const untilAborted = <T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> => {
+    if (!signal) return promise;
+    if (signal.aborted) return Promise.reject(abortError());
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = () => reject(abortError());
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(
+            value => { signal.removeEventListener('abort', onAbort); resolve(value); },
+            error => { signal.removeEventListener('abort', onAbort); reject(error); }
+        );
+    });
+};
 
 interface StreamResult {
     message: { content: string | null, tool_calls?: any[] } | null;
@@ -232,9 +258,11 @@ interface StreamResult {
 export const readStream = async (
     response: Response,
     onDelta: ((text: string) => void) | undefined,
-    onChunk: () => void
+    onChunk: () => void,
+    signal?: AbortSignal
 ): Promise<StreamResult> => {
     const reader = response.body!.getReader();
+    signal?.addEventListener('abort', () => { reader.cancel().catch(() => { }); }, { once: true });
     const decoder = new TextDecoder();
     let buffer = '';
     let content = '';
@@ -268,7 +296,7 @@ export const readStream = async (
     };
 
     for (; ;) {
-        const { done, value } = await reader.read();
+        const { done, value } = await untilAborted(reader.read(), signal);
         if (done) break;
         onChunk();
         buffer += decoder.decode(value, { stream: true });
@@ -340,10 +368,12 @@ export const complete = async (
     let timedOut = false;
     let attempt: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let limit: ReturnType<typeof setTimeout> | undefined;
     const arm = (ms: number) => {
         clearTimeout(timer);
         timer = setTimeout(() => { timedOut = true; attempt?.abort(); }, ms);
     };
+    const disarm = () => { clearTimeout(timer); clearTimeout(limit); };
     const onUserStop = () => attempt?.abort();
     request.signal?.addEventListener('abort', onUserStop);
 
@@ -351,6 +381,8 @@ export const complete = async (
         attempt = new AbortController();
         timedOut = false;
         arm(request.onDelta ? SILENCE_TIMEOUT_MS : ANSWER_TIMEOUT_MS);
+        clearTimeout(limit);
+        limit = setTimeout(() => { timedOut = true; attempt?.abort(); }, ATTEMPT_LIMIT_MS);
         return fetch(`${baseUrl}/chat/completions`, {
             method: 'POST',
             headers,
@@ -361,11 +393,12 @@ export const complete = async (
 
     /** The answer of one attempt, streamed or not; null message means none. */
     const receive = async (response: Response): Promise<{ message: any, data: any, error?: any }> => {
+        const signal = attempt?.signal;
         if (!body.stream || !(response.headers.get('content-type') || '').includes('event-stream')) {
-            const data: any = await response.json();
+            const data: any = await untilAborted(response.json(), signal);
             return { message: data.choices?.[0]?.message || null, data, error: data.error };
         }
-        return readStream(response, request.onDelta, () => arm(SILENCE_TIMEOUT_MS));
+        return readStream(response, request.onDelta, () => arm(SILENCE_TIMEOUT_MS), signal);
     };
 
     const fallback = settings?.fallbackModel?.trim();
@@ -380,7 +413,7 @@ export const complete = async (
             let response: Response;
             let answer: { message: any, data: any, error?: any };
             try {
-                response = await send();
+                response = await untilAborted(send(), attempt!.signal);
                 if (!response.ok) {
                     lastError = await readError(response);
                     answer = { message: null, data: null };
@@ -388,7 +421,7 @@ export const complete = async (
                     answer = await receive(response);
                 }
             } catch (error) {
-                clearTimeout(timer);
+                disarm();
                 if (timedOut && !request.signal?.aborted) {
                     // Silence is not worth waiting out twice: on to the next model.
                     lastError = { status: 504, detail: `модель не ответила за ${Math.round((request.onDelta ? SILENCE_TIMEOUT_MS : ANSWER_TIMEOUT_MS) / 1000)} с` };
@@ -408,7 +441,7 @@ export const complete = async (
                 request.signal?.removeEventListener('abort', onUserStop);
                 throw new Error(`Нет связи с провайдером модели (${baseUrl}): ${detail}`);
             }
-            clearTimeout(timer);
+            disarm();
             if (response.ok) {
                 const { message, data } = answer;
                 if (message) {
