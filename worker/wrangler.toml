@@ -36,6 +36,13 @@ name = "potok-agent-tasks"
 binding = "AGENT_TASKS"
 class_name = "AgentTaskWorkflow"
 
+# Server replies to mentions (src/botReplies.ts): each one a durable instance,
+# so it is posted even when the tab that asked closes.
+[[workflows]]
+name = "potok-bot-replies"
+binding = "BOT_REPLIES"
+class_name = "BotReplyWorkflow"
+
 # Cloud browser for bots (src/cloudBrowser.ts): Cloudflare Browser Rendering.
 [browser]
 binding = "BROWSER"

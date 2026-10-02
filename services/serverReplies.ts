@@ -33,17 +33,27 @@ export const replyOnServer = async (options: {
     // A little longer than the server's own deadline (worker/src/botReplies.ts).
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(), 5 * 60_000);
-    const response = await fetch(`${WORKER}/bots/reply`, {
+    const post = async (path: string, body: unknown) => fetch(`${WORKER}${path}`, {
         signal: deadline.signal,
         method: 'POST',
         headers: { Authorization: `Bearer ${await user.getIdToken()}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(body)
+    });
+    const failure = async (response: Response) => {
+        const data = await response.json().catch(() => ({}));
+        return new Error((data as any).error || `Сервер ответил ${response.status}`);
+    };
+
+    try {
+        const response = await post('/bots/reply', {
             boardId: options.boardId,
             channelId: options.channelId,
             channelName: options.channelName,
             mentions: options.mentions,
             threadId: options.threadId,
             apiKey: settings.openRouterKey,
+            // Lets the server finish the reply on its own if this tab closes.
+            refreshToken: user.refreshToken,
             mcpTokens: settings.mcpTokens || {},
             settings: {
                 apiBaseUrl: settings.apiBaseUrl || undefined,
@@ -54,13 +64,24 @@ export const replyOnServer = async (options: {
                 dailyRequestLimit: dailyLimitOf(settings),
                 language: settings.language
             }
-        })
-    }).catch(error => {
+        });
+        if (!response.ok) throw await failure(response);
+        const { runId } = await response.json().catch(() => ({})) as { runId?: string };
+        if (!runId) return; // answered inline, already posted
+
+        // A durable run on the server: follow it until it is over.
+        for (;;) {
+            await new Promise(resolve => setTimeout(resolve, 2500));
+            const status = await post('/bots/reply/status', { runId });
+            if (!status.ok) throw await failure(status);
+            const { state, error } = await status.json() as { state: string, error?: string };
+            if (state === 'done') return; // a deadline note, if any, is already in the channel
+            if (state === 'failed') throw new Error(error || 'Сервер не смог ответить');
+        }
+    } catch (error) {
         throw deadline.signal.aborted ? new Error('Сервер не ответил за 5 минут — бот, похоже, завис. Попробуйте ещё раз.') : error;
-    }).finally(() => clearTimeout(timer));
-    if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error((data as any).error || `Сервер ответил ${response.status}`);
+    } finally {
+        clearTimeout(timer);
     }
 };
 

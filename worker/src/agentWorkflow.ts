@@ -13,7 +13,10 @@
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { startRun, iterate, finishRun, type RunState } from '../../services/runtime/orchestrate';
-import { openRuntime, type TaskParams } from './agentTasks';
+import { openRuntime, firestoreConfig, sealingSecret, type TaskParams } from './agentTasks';
+import { runBotReply, type ReplyParams, type ReplySecrets } from './botReplies';
+import { TokenSource } from './firestoreRest';
+import { open } from './taskCrypto';
 import worker, { type Env } from './index';
 
 /** Upper bound on waves, far above what MAX_ORCHESTRATED_STEPS allows. */
@@ -95,5 +98,21 @@ export class AgentTaskWorkflow extends WorkflowEntrypoint<Env, TaskParams> {
             await rt.setTask({ status: 'failed', error: String((error as Error)?.message || error).slice(0, 500) });
             throw error;
         }
+    }
+}
+
+/**
+ * One server reply to a mention (./botReplies), run as a Workflow so it is
+ * not tied to the request that asked for it. A single step, never retried:
+ * it posts messages, and a retry would post them twice.
+ */
+export class BotReplyWorkflow extends WorkflowEntrypoint<Env, ReplyParams> {
+    async run(event: Readonly<WorkflowEvent<ReplyParams>>, step: WorkflowStep): Promise<unknown> {
+        const params = event.payload;
+        return step.do('reply', { retries: { limit: 0, delay: 0 }, timeout: '10 minutes' }, async () => {
+            const secrets = await open<ReplySecrets>(params.sealed, sealingSecret(this.env));
+            const tokens = new TokenSource(firestoreConfig(this.env), secrets.refreshToken || '');
+            return plain(await runBotReply(this.env, params, secrets, tokens, request => worker.fetch(request, this.env)));
+        });
     }
 }
