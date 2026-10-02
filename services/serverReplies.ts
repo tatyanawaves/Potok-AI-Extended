@@ -22,7 +22,7 @@ export const canReplyOnServer = (bots: BoardMember[]): boolean =>
     Boolean(WORKER) && bots.every(bot => !toolServersOf(bot).some(isLocal));
 
 export const replyOnServer = async (options: {
-    boardId: string, channelId: string, channelName: string, mentions: string[], settings: AISettings
+    boardId: string, channelId: string, channelName: string, mentions: string[], settings: AISettings, threadId?: string
 }): Promise<void> => {
     const user = auth.currentUser;
     if (!user) throw new Error('Not signed in');
@@ -42,6 +42,7 @@ export const replyOnServer = async (options: {
             channelId: options.channelId,
             channelName: options.channelName,
             mentions: options.mentions,
+            threadId: options.threadId,
             apiKey: settings.openRouterKey,
             mcpTokens: settings.mcpTokens || {},
             settings: {

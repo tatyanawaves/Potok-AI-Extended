@@ -371,7 +371,13 @@ export const translations = {
     toolPermissionsLabel: "Remembered tool answers",
     toolPermissionsEmpty: "Nothing remembered. Tick \"Remember\" in a tool request to stop being asked.",
     allowAlways: "always allow",
-    denyAlways: "always refuse"
+    denyAlways: "always refuse",
+    thread: "Thread",
+    threadRootMissing: "The original message was not found — it may be deleted or older than what is loaded.",
+    replyInThread: "Reply in thread · @bot",
+    repliesShort: "replies",
+    replyInThreadShort: "reply in thread",
+    mentionedYou: "mentioned you"
   },
   ru: {
     title: 'Potok',
@@ -484,7 +490,13 @@ export const translations = {
     toolPermissionsLabel: "Запомненные ответы на запросы инструментов",
     toolPermissionsEmpty: "Пока ничего. Отметьте «Запомнить» в запросе инструмента, чтобы бот больше не спрашивал.",
     allowAlways: "всегда разрешать",
-    denyAlways: "всегда запрещать"
+    denyAlways: "всегда запрещать",
+    thread: "Ветка",
+    threadRootMissing: "Исходное сообщение не найдено — возможно, оно удалено или старше загруженных.",
+    replyInThread: "Ответить в ветке · @бот",
+    repliesShort: "отв.",
+    replyInThreadShort: "ответить в ветке",
+    mentionedYou: "упомянул(а) вас"
   },
   kk: {
     title: 'Potok',
@@ -857,6 +869,12 @@ export const translations = {
     toolPermissionsLabel: "Құрал сұрауларына сақталған жауаптар",
     toolPermissionsEmpty: "Әзірге ештеңе жоқ. Бот енді сұрамауы үшін құрал сұрауында «Есте сақтау» белгісін қойыңыз.",
     allowAlways: "әрқашан рұқсат",
-    denyAlways: "әрқашан тыйым"
+    denyAlways: "әрқашан тыйым",
+    thread: "Тармақ",
+    threadRootMissing: "Бастапқы хабарлама табылмады — ол жойылған немесе жүктелгендерден ескі болуы мүмкін.",
+    replyInThread: "Тармақта жауап беру · @бот",
+    repliesShort: "жауап",
+    replyInThreadShort: "тармақта жауап беру",
+    mentionedYou: "сізді атады"
   }
 };

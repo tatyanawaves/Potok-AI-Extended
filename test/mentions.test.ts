@@ -115,3 +115,17 @@ describe('messageAuthor', () => {
         expect(messageAuthor({ authorId: 'alice', authorName: 'Old name' }, members)).toEqual({ name: 'Old name' });
     });
 });
+
+describe('mentioned people', () => {
+    it('finds the people a message names, not bots and not the writer', async () => {
+        const { mentionedPeople, mentionLink } = await import('../services/mentions');
+        const members = [
+            { id: 'a', name: 'Alice', type: 'human', role: 'owner', addedAt: 1 },
+            { id: 'b', name: 'Bob Smith', type: 'human', role: 'member', addedAt: 2 },
+            { id: 'bot', name: 'Helper', type: 'bot', role: 'member', addedAt: 3 }
+        ] as any;
+        expect(mentionedPeople(['alice', 'Helper'], members, 'b').map(m => m.id)).toEqual(['a']);
+        expect(mentionedPeople(['Alice'], members, 'a')).toEqual([]);
+        expect(mentionLink({ boardId: 'B', channelId: 'C', threadId: 'T' })).toBe('/boards?board=B&channel=C&thread=T');
+    });
+});

@@ -37,6 +37,9 @@ import ModelPicker from './ModelPicker';
 import MessageItem from './boards/MessageItem';
 import MembersPanel from './boards/MembersPanel';
 import ToolApprovalDialog from './boards/ToolApprovalDialog';
+import ThreadPanel from './boards/ThreadPanel';
+import { mentionedPeople, notifyMentioned } from '../services/mentionNotifications';
+import { useLocation } from 'react-router-dom';
 import LiveReplies from './boards/LiveReplies';
 import CodeSaveDialog from './CodeSaveDialog';
 import ToolAdvisor from './ToolAdvisor';
@@ -102,7 +105,11 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
     /** A person's command is running in their sandbox. */
     const [isRunning, setIsRunning] = useState(false);
     // One side panel at a time: side by side they covered each other and the input.
-    const [sidePanel, setSidePanel] = useState<'members' | 'memory' | 'computer' | null>(null);
+    const [sidePanel, setSidePanel] = useState<'members' | 'memory' | 'computer' | 'thread' | null>(null);
+    // The thread open in the side panel (its root message's id), and its reply box.
+    const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+    const [threadDraft, setThreadDraft] = useState('');
+    const openThread = (id: string) => { setOpenThreadId(id); setSidePanel('thread'); };
     const showMembers = sidePanel === 'members';
     const togglePanel = (panel: 'members' | 'memory' | 'computer') => setSidePanel(current => current === panel ? null : panel);
     const [error, setError] = useState<string | null>(null);
@@ -343,6 +350,47 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
         () => channels.find(c => c.id === activeChannelId) || null,
         [channels, activeChannelId]
     );
+
+    /** Replies per thread root, among the loaded messages. */
+    const replyCounts = useMemo(() => {
+        const counts: Record<string, number> = {};
+        for (const m of messages) if (m.threadId) counts[m.threadId] = (counts[m.threadId] || 0) + 1;
+        return counts;
+    }, [messages]);
+
+    const renderMessage = (msg: BoardMessage, below?: React.ReactNode) => activeBoard ? (
+        <MessageItem
+            msg={msg}
+            author={messageAuthor(msg, activeBoard.members)}
+            signature={signatures[msg.id!]}
+            place={`#${activeChannel?.name || ''} · ${activeBoard.name}`}
+            canDelete={msg.authorId === currentUid}
+            isRunning={isRunning}
+            language={settings.language}
+            t={t}
+            onViewProfile={onViewProfile}
+            onSaveCode={setCodeToSave}
+            onRunCode={runMessageCode}
+            onDelete={deleteBoardMessage}
+            onOpenImage={(url, name) => setLightbox({ url, name })}
+        >
+            {below}
+        </MessageItem>
+    ) : null;
+
+    // A link from a mention notice: /boards?board=…&channel=…&thread=…
+    const location = useLocation();
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        const board = params.get('board');
+        if (!board) return;
+        setActiveBoardId(board);
+        const channel = params.get('channel');
+        if (channel) setActiveChannelId(channel);
+        const thread = params.get('thread');
+        if (thread) openThread(thread);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [location.search]);
 
     useEffect(() => {
         const botIds = new Set((activeBoard?.botIds || []) as string[]);
@@ -804,14 +852,20 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
         setPending(prev => [...prev, ...chosen]);
     };
 
-    const handleSend = async () => {
-        const content = draft.trim();
-        const files = pending;
+    /** Sends the channel's draft, or with `threadId` the reply box of that thread. */
+    const handleSend = async (threadId?: string) => {
+        const content = (threadId ? threadDraft : draft).trim();
+        const files = threadId ? [] : pending;
 
         if ((!content && files.length === 0) || !activeChannelId || !currentUid || !activeChannel || !activeBoard) return;
 
-        setDraft('');
-        setPending([]);
+        // What was typed goes back into its box if sending fails.
+        const restore = () => {
+            if (threadId) setThreadDraft(content);
+            else { setDraft(content); setPending(files); }
+        };
+        if (threadId) setThreadDraft('');
+        else { setDraft(''); setPending([]); }
         setError(null);
 
         // /sh, /py, /js: run in this user's sandbox and post what it printed.
@@ -820,10 +874,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
         if (command) {
             if (!command.input) {
                 setError(t.terminalUsage || 'Напишите команду после /sh, код после /py или /js');
-                setDraft(content);
+                restore();
                 return;
             }
-            await runAndPost([command], content);
+            await runAndPost([command], content, threadId);
             return;
         }
 
@@ -858,8 +912,22 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                 authorName: settings.agentName || 'User',
                 authorType: settings.userType === 'agent' ? 'agent' : 'human',
                 content,
-                ...(attachments.length ? { attachments } : {})
+                ...(attachments.length ? { attachments } : {}),
+                ...(threadId ? { threadId } : {})
             });
+
+            // People mentioned by name hear about it, wherever they are in the app.
+            const people = mentionedPeople(mentionedNames, activeBoard.members, currentUid);
+            if (people.length) {
+                notifyMentioned({
+                    people,
+                    from: { id: currentUid, name: settings.agentName || 'User' },
+                    board: { id: activeBoard.id!, name: activeBoard.name },
+                    channel: { id: activeChannelId, name: activeChannel.name },
+                    threadId: threadId || sent?.id,
+                    text: content
+                });
+            }
 
             if (!mentionsBot) return;
 
@@ -877,7 +945,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                         channelId: activeChannelId,
                         channelName: activeChannel.name,
                         mentions: mentionedNames,
-                        settings
+                        settings,
+                        threadId
                     });
                     return;
                 }
@@ -893,7 +962,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                     settings,
                     'auto',
                     requestToolApproval,
-                    (bot, text) => setLiveReply({ bot, text })
+                    (bot, text) => setLiveReply({ bot, text }),
+                    threadId
                 );
             } finally {
                 setLiveReply(null);
@@ -901,8 +971,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
             }
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
-            setDraft(content);
-            setPending(files);
+            restore();
         } finally {
             setUploading(false);
         }
@@ -912,7 +981,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
      * Runs code in this user's cloud sandbox and posts the result under their
      * name, so the channel — bots included — sees what ran and what it printed.
      */
-    const runAndPost = async (requests: RunRequest[], content: string) => {
+    const runAndPost = async (requests: RunRequest[], content: string, threadId?: string) => {
         if (!activeChannelId || !currentUid || !activeBoard) return;
 
         setIsRunning(true);
@@ -926,7 +995,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                 authorName: settings.agentName || 'User',
                 authorType: settings.userType === 'agent' ? 'agent' : 'human',
                 content,
-                terminal: entries
+                terminal: entries,
+                ...(threadId ? { threadId } : {})
             });
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -1213,23 +1283,21 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                         {t.noMessages || 'Сообщений пока нет.'}<br />
                                         {t.mentionHint || 'Упомяните агента через @имя, чтобы он ответил.'}
                                     </p>
-                                ) : messages.map(msg => (
-                                    <MessageItem
-                                        key={msg.id}
-                                        msg={msg}
-                                        author={messageAuthor(msg, activeBoard.members)}
-                                        signature={signatures[msg.id!]}
-                                        place={`#${activeChannel?.name || ''} · ${activeBoard.name}`}
-                                        canDelete={msg.authorId === currentUid}
-                                        isRunning={isRunning}
-                                        language={settings.language}
-                                        t={t}
-                                        onViewProfile={onViewProfile}
-                                        onSaveCode={setCodeToSave}
-                                        onRunCode={runMessageCode}
-                                        onDelete={deleteBoardMessage}
-                                        onOpenImage={(url, name) => setLightbox({ url, name })}
-                                    />
+                                ) : messages.filter(msg => !msg.threadId).map(msg => (
+                                    <React.Fragment key={msg.id}>
+                                        {renderMessage(msg, (
+                                            <button
+                                                onClick={() => openThread(msg.id!)}
+                                                className={`mt-1 text-[11px] font-mono ${replyCounts[msg.id!]
+                                                    ? 'text-cyan-400/90 hover:text-cyan-300'
+                                                    : 'text-slate-600 hover:text-cyan-300 md:opacity-0 md:group-hover:opacity-100'}`}
+                                            >
+                                                {replyCounts[msg.id!]
+                                                    ? `💬 ${replyCounts[msg.id!]} ${t.repliesShort || 'отв.'}`
+                                                    : `↳ ${t.replyInThreadShort || 'ответить в ветке'}`}
+                                            </button>
+                                        ))}
+                                    </React.Fragment>
                                 ))}
 
                                 {serverTasks
@@ -1344,6 +1412,20 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                 />
                             )}
 
+                            {sidePanel === 'thread' && openThreadId && (
+                                <ThreadPanel
+                                    root={messages.find(m => m.id === openThreadId) || null}
+                                    replies={messages.filter(m => m.threadId === openThreadId)}
+                                    draft={threadDraft}
+                                    busy={isAgentThinking || isRunning}
+                                    t={t}
+                                    renderMessage={m => renderMessage(m)}
+                                    onDraft={setThreadDraft}
+                                    onSend={() => handleSend(openThreadId)}
+                                    onClose={() => { setSidePanel(null); setOpenThreadId(null); }}
+                                />
+                            )}
+
                             {showComputer && activeBoard.id && (
                                 <ComputerPanel
                                     boardId={activeBoard.id}
@@ -1434,7 +1516,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                     className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors resize-none h-[46px] max-h-32 disabled:opacity-40"
                                 />
                                 <button
-                                    onClick={handleSend}
+                                    onClick={() => handleSend()}
                                     disabled={(!draft.trim() && pending.length === 0) || !activeChannelId || uploading || isRunning}
                                     className="h-[46px] px-5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-bold transition-all active:scale-95 shrink-0"
                                 >

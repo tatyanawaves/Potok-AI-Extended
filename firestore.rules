@@ -126,6 +126,22 @@ service cloud.firestore {
       match /private/{docId} {
         allow read, write: if isSignedIn() && request.auth.uid == userId;
       }
+
+      // NOTIFICATIONS: "you were mentioned". Only the person reads them and
+      // marks them read. Another member writes one only in their own name,
+      // and only when both are members of the board it points to.
+      match /notifications/{noticeId} {
+        allow read, delete: if isSignedIn() && request.auth.uid == userId;
+        allow update: if isSignedIn() && request.auth.uid == userId
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+        allow create: if isSignedIn()
+                      && request.resource.data.from == request.auth.uid
+                      && request.resource.data.read == false
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() <= 300
+                      && request.auth.uid in get(/databases/$(database)/documents/boards/$(request.resource.data.boardId)).data.memberIds
+                      && userId in get(/databases/$(database)/documents/boards/$(request.resource.data.boardId)).data.memberIds;
+      }
     }
 
     // GLOBAL STATS:

@@ -306,6 +306,8 @@ export interface TurnOptions {
     boardId: string;
     channelId: string;
     channelName: string;
+    /** Posts the reply into this thread (the root message's id). */
+    threadId?: string;
     settings: AISettings;
     discussion?: DiscussionContext;
     assignment?: Assignment;
@@ -572,6 +574,7 @@ export const runAndPostTurn = async (options: TurnOptions): Promise<TurnSummary>
         const result = await runBotTurn(options);
         await store.postMessage({
             channelId, boardId,
+            ...(options.threadId ? { threadId: options.threadId } : {}),
             authorId: agent.id,
             authorName: agent.name,
             authorType: 'agent',
@@ -589,6 +592,7 @@ export const runAndPostTurn = async (options: TurnOptions): Promise<TurnSummary>
         console.error(`[Agent] ${agent.name} failed:`, error);
         await store.postMessage({
             channelId, boardId,
+            ...(options.threadId ? { threadId: options.threadId } : {}),
             authorId: agent.id,
             authorName: agent.name,
             authorType: 'agent',
@@ -618,6 +622,8 @@ export interface MentionOptions {
     onDelta?: (botName: string, textSoFar: string) => void;
     /** Stops every reply still being written, e.g. when a deadline passes. */
     signal?: AbortSignal;
+    /** Answers inside this thread. */
+    threadId?: string;
 }
 
 /** Answers every bot a message mentions, in order, each seeing the previous reply. */

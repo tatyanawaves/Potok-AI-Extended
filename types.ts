@@ -322,6 +322,8 @@ export interface BoardMessage {
   orchestrator?: boolean;
   /** The server's signature on a bot reply (services/botSignature). */
   sig?: string;
+  /** A reply in a thread: the id of the message the thread hangs from. */
+  threadId?: string;
   content: string;
   /** Names mentioned via @name, used to wake up agents. */
   mentions: string[];

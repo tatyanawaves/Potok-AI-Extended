@@ -90,6 +90,7 @@ export const handleBotReply = async (
             signal: deadline.signal,
             store, mentions, authorId: uid, boardId, channelId,
             channelName: str(body.channelName, 100) || 'general',
+            threadId: BOARD_ID.test(str(body.threadId, 128)) ? str(body.threadId, 128) : undefined,
             members, settings,
             toolPolicy: body.toolPolicy === 'off' ? 'off' : 'auto',
             approveTool: approvalVia(rest, boardId, uid),

@@ -191,3 +191,28 @@ describe('tool requests and drafts from the server', () => {
         await assertFails(getDoc(doc(as('stranger'), `boards/b1/channels/c1/drafts/${BOT}`)));
     });
 });
+
+describe('mention notices', () => {
+    const as = (uid: string) => env.authenticatedContext(uid).firestore();
+    const notice = (from: string, boardId = 'b1') => ({ from, fromName: 'X', boardId, boardName: 'Team', channelId: 'c1', channelName: 'general', text: '@Bob глянь', createdAt: 1, read: false });
+
+    it('lets a member notify another member of the same board, in their own name only', async () => {
+        const { assertFails, assertSucceeds } = await import('@firebase/rules-unit-testing');
+        const { addDoc, collection } = await import('firebase/firestore');
+        await assertSucceeds(addDoc(collection(as('alice'), 'users/bob/notifications'), notice('alice')));
+        await assertFails(addDoc(collection(as('alice'), 'users/bob/notifications'), notice('bob')));
+        await assertFails(addDoc(collection(as('alice'), 'users/stranger/notifications'), notice('alice')));
+        await assertFails(addDoc(collection(as('stranger'), 'users/bob/notifications'), notice('stranger')));
+        await assertFails(addDoc(collection(as('alice'), 'users/bob/notifications'), { ...notice('alice'), read: true }));
+    });
+
+    it('lets only the person read their notices and only mark them read', async () => {
+        const { assertFails, assertSucceeds } = await import('@firebase/rules-unit-testing');
+        const { getDoc, updateDoc } = await import('firebase/firestore');
+        await env.withSecurityRulesDisabled(async c => { await setDoc(doc(c.firestore(), 'users/bob/notifications/n1'), notice('alice')); });
+        await assertFails(getDoc(doc(as('alice'), 'users/bob/notifications/n1')));
+        await assertSucceeds(getDoc(doc(as('bob'), 'users/bob/notifications/n1')));
+        await assertFails(updateDoc(doc(as('bob'), 'users/bob/notifications/n1'), { text: 'changed' }));
+        await assertSucceeds(updateDoc(doc(as('bob'), 'users/bob/notifications/n1'), { read: true }));
+    });
+});
