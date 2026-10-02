@@ -377,7 +377,18 @@ export const translations = {
     replyInThread: "Reply in thread · @bot",
     repliesShort: "replies",
     replyInThreadShort: "reply in thread",
-    mentionedYou: "mentioned you"
+    mentionedYou: "mentioned you",
+    schedules: "Schedule",
+    schedulesHint: "A bot on a schedule: a summary every morning, say",
+    schedulesEmpty: "Nothing yet. For example: weekdays at 9:00 — @bot, a news digest on the topic.",
+    schedulesNeedServer: "Schedules run on the server, which is not connected.",
+    schedulesNeedBot: "Add a bot to the board first.",
+    schedulePlaceholder: "What to ask, e.g. gather fresh news on the topic and summarise",
+    addSchedule: "Add to",
+    scheduleCostNote: "Requests go in your name and on your key. Time zone:",
+    deleteScheduleConfirm: "Delete the schedule",
+    pause: "pause",
+    resume: "resume"
   },
   ru: {
     title: 'Potok',
@@ -496,7 +507,18 @@ export const translations = {
     replyInThread: "Ответить в ветке · @бот",
     repliesShort: "отв.",
     replyInThreadShort: "ответить в ветке",
-    mentionedYou: "упомянул(а) вас"
+    mentionedYou: "упомянул(а) вас",
+    schedules: "Расписание",
+    schedulesHint: "Бот по расписанию: например, каждое утро сводка",
+    schedulesEmpty: "Пока ничего. Например: по будням в 9:00 — @бот, сводка новостей по теме.",
+    schedulesNeedServer: "Расписание работает на сервере, а он не подключён.",
+    schedulesNeedBot: "Сначала добавьте на доску бота.",
+    schedulePlaceholder: "Что попросить, например: собери свежие новости по теме и сделай сводку",
+    addSchedule: "Добавить в",
+    scheduleCostNote: "Запросы идут от вашего имени и на вашем ключе. Часовой пояс:",
+    deleteScheduleConfirm: "Удалить расписание",
+    pause: "пауза",
+    resume: "включить"
   },
   kk: {
     title: 'Potok',
@@ -875,6 +897,17 @@ export const translations = {
     replyInThread: "Тармақта жауап беру · @бот",
     repliesShort: "жауап",
     replyInThreadShort: "тармақта жауап беру",
-    mentionedYou: "сізді атады"
+    mentionedYou: "сізді атады",
+    schedules: "Кесте",
+    schedulesHint: "Кесте бойынша бот: мысалы, күн сайын таңертең шолу",
+    schedulesEmpty: "Әзірге ештеңе жоқ. Мысалы: жұмыс күндері 9:00 — @бот, тақырып бойынша жаңалықтар шолуы.",
+    schedulesNeedServer: "Кесте серверде жұмыс істейді, ал ол қосылмаған.",
+    schedulesNeedBot: "Алдымен тақтаға бот қосыңыз.",
+    schedulePlaceholder: "Не сұрау керек, мысалы: тақырып бойынша жаңалықтарды жинап, шолу жаса",
+    addSchedule: "Қосу:",
+    scheduleCostNote: "Сұраулар сіздің атыңыздан және кілтіңізбен жіберіледі. Уақыт белдеуі:",
+    deleteScheduleConfirm: "Кестені жою",
+    pause: "кідірту",
+    resume: "қосу"
   }
 };

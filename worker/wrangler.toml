@@ -43,6 +43,11 @@ name = "potok-bot-replies"
 binding = "BOT_REPLIES"
 class_name = "BotReplyWorkflow"
 
+# Scheduled bot requests (src/schedules.ts): every 5 minutes, run the ones due.
+# Keep in step with STEP_MINUTES in services/schedule.ts.
+[triggers]
+crons = ["*/5 * * * *"]
+
 # Cloud browser for bots (src/cloudBrowser.ts): Cloudflare Browser Rendering.
 [browser]
 binding = "BROWSER"

@@ -216,3 +216,36 @@ describe('mention notices', () => {
         await assertSucceeds(updateDoc(doc(as('bob'), 'users/bob/notifications/n1'), { read: true }));
     });
 });
+
+describe('schedules', () => {
+    const as = (uid: string) => env.authenticatedContext(uid).firestore();
+    const schedule = (createdBy: string, extra: Record<string, unknown> = {}) => ({
+        bot: 'Helper', text: 'сводка новостей', time: '09:00', days: [1, 2, 3, 4, 5], tz: 'Asia/Almaty',
+        channelId: 'c1', channelName: 'general', createdBy, createdByName: 'X', enabled: true, createdAt: 1, ...extra
+    });
+
+    it('lets a member schedule in their own name, with a sane time', async () => {
+        const { assertFails, assertSucceeds } = await import('@firebase/rules-unit-testing');
+        await assertSucceeds(setDoc(doc(as('bob'), 'boards/b1/schedules/s1'), schedule('bob')));
+        await assertFails(setDoc(doc(as('bob'), 'boards/b1/schedules/s2'), schedule('alice')));
+        await assertFails(setDoc(doc(as('stranger'), 'boards/b1/schedules/s3'), schedule('stranger')));
+        await assertFails(setDoc(doc(as('bob'), 'boards/b1/schedules/s4'), schedule('bob', { time: '25:00' })));
+        await assertFails(setDoc(doc(as('bob'), 'boards/b1/schedules/s5'), schedule('bob', { text: '' })));
+    });
+
+    it('lets only the creator change it, and the creator or the owner remove it', async () => {
+        const { assertFails, assertSucceeds } = await import('@firebase/rules-unit-testing');
+        const { getDoc, updateDoc, deleteDoc } = await import('firebase/firestore');
+        await env.withSecurityRulesDisabled(async c => {
+            await setDoc(doc(c.firestore(), 'boards/b1/schedules/s1'), schedule('bob'));
+            await setDoc(doc(c.firestore(), 'boards/b1/schedules/s2'), schedule('bob'));
+        });
+        await assertSucceeds(getDoc(doc(as('alice'), 'boards/b1/schedules/s1')));
+        await assertFails(getDoc(doc(as('stranger'), 'boards/b1/schedules/s1')));
+        await assertFails(updateDoc(doc(as('alice'), 'boards/b1/schedules/s1'), { text: 'чужое' }));
+        await assertSucceeds(updateDoc(doc(as('bob'), 'boards/b1/schedules/s1'), { enabled: false }));
+        await assertFails(updateDoc(doc(as('bob'), 'boards/b1/schedules/s1'), { createdBy: 'alice' }));
+        await assertSucceeds(deleteDoc(doc(as('alice'), 'boards/b1/schedules/s1')));
+        await assertSucceeds(deleteDoc(doc(as('bob'), 'boards/b1/schedules/s2')));
+    });
+});

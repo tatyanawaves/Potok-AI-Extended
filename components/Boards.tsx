@@ -38,6 +38,7 @@ import MessageItem from './boards/MessageItem';
 import MembersPanel from './boards/MembersPanel';
 import ToolApprovalDialog from './boards/ToolApprovalDialog';
 import ThreadPanel from './boards/ThreadPanel';
+import SchedulesPanel from './boards/SchedulesPanel';
 import { mentionedPeople, notifyMentioned } from '../services/mentionNotifications';
 import { useLocation } from 'react-router-dom';
 import LiveReplies from './boards/LiveReplies';
@@ -105,13 +106,13 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
     /** A person's command is running in their sandbox. */
     const [isRunning, setIsRunning] = useState(false);
     // One side panel at a time: side by side they covered each other and the input.
-    const [sidePanel, setSidePanel] = useState<'members' | 'memory' | 'computer' | 'thread' | null>(null);
+    const [sidePanel, setSidePanel] = useState<'members' | 'memory' | 'computer' | 'thread' | 'schedules' | null>(null);
     // The thread open in the side panel (its root message's id), and its reply box.
     const [openThreadId, setOpenThreadId] = useState<string | null>(null);
     const [threadDraft, setThreadDraft] = useState('');
     const openThread = (id: string) => { setOpenThreadId(id); setSidePanel('thread'); };
     const showMembers = sidePanel === 'members';
-    const togglePanel = (panel: 'members' | 'memory' | 'computer') => setSidePanel(current => current === panel ? null : panel);
+    const togglePanel = (panel: 'members' | 'memory' | 'computer' | 'schedules') => setSidePanel(current => current === panel ? null : panel);
     const [error, setError] = useState<string | null>(null);
     const [reads, setReads] = useState(EMPTY_READ_STATE);
     const [spend, setSpend] = useState<SpendState | null>(null);
@@ -1239,6 +1240,18 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
 
                                 {activeChannelId && (
                                     <button
+                                        onClick={() => togglePanel('schedules')}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${sidePanel === 'schedules'
+                                            ? 'bg-amber-950/30 border-amber-500/30 text-amber-300'
+                                            : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'}`}
+                                        title={t.schedulesHint || 'Бот по расписанию: например, каждое утро сводка'}
+                                    >
+                                        {t.schedules || 'Расписание'}
+                                    </button>
+                                )}
+
+                                {activeChannelId && (
+                                    <button
                                         onClick={() => openModal({ kind: 'discussion' })}
                                         disabled={Boolean(discussionProgress || orchestration)}
                                         className="px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border border-indigo-500/30 bg-indigo-950/30 text-indigo-300 hover:bg-indigo-900/40 transition-all disabled:opacity-40"
@@ -1423,6 +1436,20 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                     onDraft={setThreadDraft}
                                     onSend={() => handleSend(openThreadId)}
                                     onClose={() => { setSidePanel(null); setOpenThreadId(null); }}
+                                />
+                            )}
+
+                            {sidePanel === 'schedules' && activeBoard.id && activeChannel && currentUid && (
+                                <SchedulesPanel
+                                    boardId={activeBoard.id}
+                                    channel={{ id: activeChannel.id!, name: activeChannel.name }}
+                                    bots={activeBoard.members.filter(m => isBot(m) && canReplyOnServer([m])).map(m => m.name)}
+                                    currentUid={currentUid}
+                                    currentName={settings.agentName || 'User'}
+                                    isOwner={activeBoard.ownerId === currentUid}
+                                    settings={settings}
+                                    t={t}
+                                    onClose={() => setSidePanel(null)}
                                 />
                             )}
 

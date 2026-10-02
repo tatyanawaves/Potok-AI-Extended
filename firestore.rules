@@ -295,6 +295,28 @@ service cloud.firestore {
                       && (resource.data.startedBy == request.auth.uid || isBoardOwner(boardId));
       }
 
+      // SCHEDULES: "every weekday at 9:00, @bot do this". Every member sees
+      // them; each runs as the member who made it (worker/src/schedules.ts),
+      // who alone changes it. The board owner may remove any.
+      match /schedules/{scheduleId} {
+        allow read: if isBoardMember(boardId);
+        allow create: if isBoardMember(boardId)
+                      && request.resource.data.createdBy == request.auth.uid
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() > 0
+                      && request.resource.data.text.size() <= 2000
+                      && request.resource.data.time is string
+                      && request.resource.data.time.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+                      && request.resource.data.days is list
+                      && request.resource.data.days.size() <= 7;
+        allow update: if isBoardMember(boardId)
+                      && resource.data.createdBy == request.auth.uid
+                      && request.resource.data.createdBy == request.auth.uid
+                      && request.resource.data.text.size() <= 2000;
+        allow delete: if isSignedIn()
+                      && (resource.data.createdBy == request.auth.uid || isBoardOwner(boardId));
+      }
+
       // CHANNELS: readable by board members, managed by the board owner.
       // APPROVALS: a tool request from a bot the server runs for someone;
       // only that person sees it and only they answer it.
