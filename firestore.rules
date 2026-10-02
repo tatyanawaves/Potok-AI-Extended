@@ -317,6 +317,32 @@ service cloud.firestore {
                       && (resource.data.createdBy == request.auth.uid || isBoardOwner(boardId));
       }
 
+      // KNOWLEDGE BASE: documents members uploaded (one entry each) and their
+      // passages, which bots read every turn (services/knowledgeCore). Any
+      // member adds in their own name; the uploader or the owner removes.
+      // A passage's vector may be filled in later by any member's turn.
+      match /knowledge/{docId} {
+        allow read: if isBoardMember(boardId);
+        allow create: if isBoardMember(boardId)
+                      && request.resource.data.addedBy == request.auth.uid
+                      && request.resource.data.title is string
+                      && request.resource.data.title.size() <= 120;
+        allow delete: if isSignedIn()
+                      && (resource.data.addedBy == request.auth.uid || isBoardOwner(boardId));
+      }
+      match /kbChunks/{chunkId} {
+        allow read: if isBoardMember(boardId);
+        allow create: if isBoardMember(boardId)
+                      && request.resource.data.addedBy == request.auth.uid
+                      && request.resource.data.docId is string
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() <= 4000;
+        allow update: if isBoardMember(boardId)
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['embedding', 'embeddingModel']);
+        allow delete: if isSignedIn()
+                      && (resource.data.addedBy == request.auth.uid || isBoardOwner(boardId));
+      }
+
       // CHANNELS: readable by board members, managed by the board owner.
       // APPROVALS: a tool request from a bot the server runs for someone;
       // only that person sees it and only they answer it.

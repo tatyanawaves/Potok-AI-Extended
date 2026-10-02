@@ -249,3 +249,34 @@ describe('schedules', () => {
         await assertSucceeds(deleteDoc(doc(as('bob'), 'boards/b1/schedules/s2')));
     });
 });
+
+describe('knowledge base', () => {
+    const as = (uid: string) => env.authenticatedContext(uid).firestore();
+    const passage = (addedBy: string, extra: Record<string, unknown> = {}) => ({
+        docId: 'd1', title: 'Регламент', index: 1, text: 'Отпуск — 28 дней.', author: 'Регламент', addedBy, createdAt: 1, ...extra
+    });
+
+    it('lets members add documents in their own name, within size', async () => {
+        const { assertFails, assertSucceeds } = await import('@firebase/rules-unit-testing');
+        await assertSucceeds(setDoc(doc(as('bob'), 'boards/b1/knowledge/d1'), { title: 'Регламент', chunks: 1, chars: 17, addedBy: 'bob', addedByName: 'Bob', createdAt: 1 }));
+        await assertSucceeds(setDoc(doc(as('bob'), 'boards/b1/kbChunks/d1-1'), passage('bob')));
+        await assertFails(setDoc(doc(as('bob'), 'boards/b1/kbChunks/d1-2'), passage('alice')));
+        await assertFails(setDoc(doc(as('stranger'), 'boards/b1/kbChunks/d1-3'), passage('stranger')));
+        await assertFails(setDoc(doc(as('bob'), 'boards/b1/kbChunks/d1-4'), passage('bob', { text: 'x'.repeat(4001) })));
+    });
+
+    it('lets any member fill in a vector but change nothing else; uploader or owner removes', async () => {
+        const { assertFails, assertSucceeds } = await import('@firebase/rules-unit-testing');
+        const { getDoc, updateDoc, deleteDoc } = await import('firebase/firestore');
+        await env.withSecurityRulesDisabled(async c => {
+            await setDoc(doc(c.firestore(), 'boards/b1/kbChunks/d1-1'), passage('bob'));
+            await setDoc(doc(c.firestore(), 'boards/b1/kbChunks/d1-2'), passage('bob'));
+        });
+        await assertSucceeds(getDoc(doc(as('alice'), 'boards/b1/kbChunks/d1-1')));
+        await assertFails(getDoc(doc(as('stranger'), 'boards/b1/kbChunks/d1-1')));
+        await assertSucceeds(updateDoc(doc(as('alice'), 'boards/b1/kbChunks/d1-1'), { embedding: 'AAAA', embeddingModel: 'm' }));
+        await assertFails(updateDoc(doc(as('alice'), 'boards/b1/kbChunks/d1-1'), { text: 'Отпуск — 90 дней.' }));
+        await assertSucceeds(deleteDoc(doc(as('alice'), 'boards/b1/kbChunks/d1-1')));
+        await assertSucceeds(deleteDoc(doc(as('bob'), 'boards/b1/kbChunks/d1-2')));
+    });
+});

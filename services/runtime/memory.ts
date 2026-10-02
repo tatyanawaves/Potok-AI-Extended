@@ -5,6 +5,7 @@ import {
     rankByRelevance, rankHybrid, selectWindow, WINDOW_MESSAGES, needsEmbedding, packVector, clip, AUTO_NOTES
 } from '../memoryCore';
 import { AgentStore } from './store';
+import { KnowledgeChunk, AUTO_PASSAGES } from '../knowledgeCore';
 import { hydrateAttachments } from '../attachmentText';
 
 /**
@@ -99,6 +100,39 @@ export const findNotes = async (
 };
 
 /**
+ * Passages of the board's knowledge base relevant to a request, ranked like
+ * notes. Passages uploaded without a vector (no embedding model then) get one
+ * here, a batch at a time, once a model is set.
+ */
+export const findKnowledge = async (
+    store: AgentStore,
+    settings: AISettings,
+    boardId: string,
+    query: string,
+    limit = AUTO_PASSAGES
+): Promise<KnowledgeChunk[]> => {
+    if (!store.loadKnowledge || !query.trim()) return [];
+    const chunks = await store.loadKnowledge(boardId);
+    if (chunks.length === 0) return [];
+    if (!semanticSearchOn(settings)) return rankByRelevance(query, chunks, c => c.text, limit);
+
+    const model = settings.embeddingModel!.trim();
+    try {
+        const missing = needsEmbedding(chunks, model).slice(0, BACKFILL_BATCH) as KnowledgeChunk[];
+        const [queryVector, ...vectors] = await embed([query, ...missing.map(c => c.text)], settings);
+        await Promise.all(missing.map((chunk, i) => {
+            chunk.embedding = packVector(vectors[i]);
+            chunk.embeddingModel = model;
+            return store.setChunkEmbedding?.(boardId, chunk.id!, chunk.embedding, model).catch(() => { });
+        }));
+        return rankHybrid(query, queryVector, chunks, model, limit) as KnowledgeChunk[];
+    } catch (error) {
+        noteFailure(settings, error);
+        return rankByRelevance(query, chunks, c => c.text, limit);
+    }
+};
+
+/**
  * Folds old messages into the running summary when enough have piled up.
  * Best effort: a failed compaction only means the next turn tries again.
  */
@@ -143,6 +177,8 @@ export const compactIfNeeded = async (
 export interface TurnMemory {
     summary: ChannelSummary;
     notes: MemoryNote[];
+    /** Passages from the board's knowledge base relevant to the request. */
+    knowledge: KnowledgeChunk[];
     /** Recent messages sent verbatim. */
     window: BoardMessage[];
     /** The newest message in the channel, if any. */
@@ -172,9 +208,12 @@ export const loadTurnMemory = async (
 
     const latest = history[history.length - 1];
     const query = [focus, latest?.content].filter(Boolean).join(' ');
-    const notes = await findNotes(store, settings, boardId, query).catch(() => []);
+    const [notes, knowledge] = await Promise.all([
+        findNotes(store, settings, boardId, query).catch(() => []),
+        findKnowledge(store, settings, boardId, query).catch(() => [])
+    ]);
 
     const fresh = history.filter(m => (m.timestamp || 0) > summary.coveredUntil);
     await hydrateAttachments(fresh.slice(-WINDOW_MESSAGES), store.readAttachment?.bind(store));
-    return { summary, notes, window: selectWindow(fresh), latest };
+    return { summary, notes, knowledge, window: selectWindow(fresh), latest };
 };

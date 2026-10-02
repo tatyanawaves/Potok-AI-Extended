@@ -7,7 +7,8 @@ import { untrusted, DATA_POLICY } from '../untrusted';
 import { imagesToShow, withPictures, refusedImages, withoutPictures } from '../vision';
 import { isBot, mentionableName } from '../mentions';
 import { AgentStore } from './store';
-import { loadTurnMemory, fileNote, findNotes } from './memory';
+import { loadTurnMemory, fileNote, findNotes, findKnowledge } from './memory';
+import { knowledgeBlock, citationOf, CITE_RULE } from '../knowledgeCore';
 import { terminalEntryOf, capEntries } from '../terminal';
 
 /**
@@ -163,7 +164,7 @@ const BUILTIN_TOOLS: McpTool[] = [
     },
     {
         name: 'memory_recall',
-        description: 'Search the board memory by meaning for facts, decisions and results saved earlier.',
+        description: 'Search the board memory (facts, decisions and results saved earlier) and the board knowledge base (uploaded documents) by meaning.',
         inputSchema: {
             type: 'object',
             properties: { query: { type: 'string', description: 'What to look for.' } },
@@ -394,10 +395,13 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
 
     const system = buildSystemPrompt(agent, channelName, {
         discussion, assignment, externalTools: toolOwner.size > 0
-    }) + (notes.length ? `\n\n${notes.join('\n')}` : '');
+    }) + (notes.length ? `\n\n${notes.join('\n')}` : '') + (memory.knowledge.length ? `\n\n${CITE_RULE}` : '');
 
     const messages: ChatMessage[] = [{ role: 'system', content: system }];
-    const context = contextMessage(memoryBlock(memory.summary, memory.notes), assignment?.inputs);
+    const context = contextMessage(
+        [memoryBlock(memory.summary, memory.notes), knowledgeBlock(memory.knowledge)].filter(Boolean).join('\n\n'),
+        assignment?.inputs
+    );
     if (context) messages.push({ role: 'user', content: context });
     // Pictures on the newest messages go to the model as pictures.
     const pictures = new Map<unknown, string[]>();
@@ -447,8 +451,17 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             await fileNote(store, settings, boardId, { text: fact, author: agent.name, channelId });
             return 'Saved to board memory.';
         }
-        const found = await findNotes(store, settings, boardId, String(args.query || ''), 5);
-        return found.length ? found.map(n => `- ${n.text} (${n.author})`).join('\n') : 'Nothing relevant in board memory.';
+        const query = String(args.query || '');
+        const [found, passages] = await Promise.all([
+            findNotes(store, settings, boardId, query, 5),
+            findKnowledge(store, settings, boardId, query, 3).catch(() => [])
+        ]);
+        const lines = [
+            ...found.map(n => `- ${n.text} (${n.author})`),
+            // Documents are untrusted like any tool output; the caller wraps this whole result.
+            ...passages.map(c => `- ${citationOf(c)} ${c.text}`)
+        ];
+        return lines.length ? lines.join('\n') : 'Nothing relevant in board memory or the knowledge base.';
     };
 
     let waitRequest: TurnResult['wait'];

@@ -388,7 +388,14 @@ export const translations = {
     scheduleCostNote: "Requests go in your name and on your key. Time zone:",
     deleteScheduleConfirm: "Delete the schedule",
     pause: "pause",
-    resume: "resume"
+    resume: "resume",
+    knowledgeBase: "Knowledge base",
+    uploadingDoc: "Uploading",
+    addDocument: "Document (PDF, DOCX, TXT, MD)",
+    noKnowledgeYet: "Upload policies, manuals, contracts — bots find the right passage and cite it: [Title §3].",
+    passagesShort: "passages",
+    charsShort: "chars",
+    removeDocumentConfirm: "Remove from the knowledge base"
   },
   ru: {
     title: 'Potok',
@@ -518,7 +525,14 @@ export const translations = {
     scheduleCostNote: "Запросы идут от вашего имени и на вашем ключе. Часовой пояс:",
     deleteScheduleConfirm: "Удалить расписание",
     pause: "пауза",
-    resume: "включить"
+    resume: "включить",
+    knowledgeBase: "База знаний",
+    uploadingDoc: "Загрузка",
+    addDocument: "Документ (PDF, DOCX, TXT, MD)",
+    noKnowledgeYet: "Загрузите регламенты, инструкции, договоры — боты найдут нужный фрагмент и сошлются на него: [Название §3].",
+    passagesShort: "фрагм.",
+    charsShort: "симв.",
+    removeDocumentConfirm: "Убрать из базы знаний"
   },
   kk: {
     title: 'Potok',
@@ -908,6 +922,13 @@ export const translations = {
     scheduleCostNote: "Сұраулар сіздің атыңыздан және кілтіңізбен жіберіледі. Уақыт белдеуі:",
     deleteScheduleConfirm: "Кестені жою",
     pause: "кідірту",
-    resume: "қосу"
+    resume: "қосу",
+    knowledgeBase: "Білім қоры",
+    uploadingDoc: "Жүктелуде",
+    addDocument: "Құжат (PDF, DOCX, TXT, MD)",
+    noKnowledgeYet: "Ережелерді, нұсқаулықтарды, шарттарды жүктеңіз — боттар қажетті үзіндіні тауып, оған сілтеме жасайды: [Атауы §3].",
+    passagesShort: "үзінді",
+    charsShort: "таңба",
+    removeDocumentConfirm: "Білім қорынан алып тастау"
   }
 };
