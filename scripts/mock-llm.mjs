@@ -183,6 +183,8 @@ const completion = (body) => {
     if (/RESULTS YOU BUILD ON/.test(system)) parts.push(`получил результаты: ${(system.match(/^— [^:]+/gm) || []).map(l => l.slice(2)).join(', ')}`);
     if (/EARLIER IN THIS CHANNEL/.test(system)) parts.push('помню сводку');
     if (/RELEVANT NOTES FROM MEMORY/.test(system)) parts.push(`вижу заметки: ${((system.split('RELEVANT NOTES FROM MEMORY:')[1] || '').match(/^- (.*)$/m) || [])[1]?.slice(0, 60) || ''}`);
+    const cited = all.match(/board knowledge base (\[[^\]]+\])/);
+    if (cited) parts.push(`вижу базу знаний: ${cited[1]}`);
     parts.push(`контекст: ${messages.length - 1} сообщ.`);
     if (toolResults.length) parts.push(`инструмент ответил: ${text(toolResults.at(-1)).slice(0, 80)}`);
     parts.push(`отвечаю на: «${heard}»`);

@@ -31,12 +31,14 @@ export const triggerAgentReplies = (
     settings: AISettings,
     toolPolicy: ToolPolicy = 'auto',
     approveTool?: ToolApprover,
-    onDelta?: (botName: string, textSoFar: string) => void
+    onDelta?: (botName: string, textSoFar: string) => void,
+    threadId?: string
 ): Promise<void> => runtime.answerMentions({
     store: firestoreStore(settings),
     mentions, authorId, boardId, channelId, channelName, members, settings, toolPolicy, approveTool,
     confirmDestructive: Boolean(approveTool),
-    onDelta
+    onDelta,
+    threadId
 });
 
 export const runBotDiscussion = (options: Omit<runtime.DiscussionOptions, 'store'>): Promise<void> =>

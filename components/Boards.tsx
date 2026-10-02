@@ -2,11 +2,11 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useIsWide } from '../hooks/useIsWide';
 import { subscribeToReadState, markRead, isBoardUnread, isChannelUnread, EMPTY_READ_STATE } from '../services/reads';
 import { subscribeToSpend } from '../services/spend';
-import { spendOn, formatTokens, estimateDiscussionRequests } from '../services/usage';
+import { spendOn, formatTokens, estimateDiscussionRequests, formatCost } from '../services/usage';
 import { SpendState } from '../types';
 import { AISettings, Board, BoardChannel, BoardMember, BoardMessage, MessageAttachment } from '../types';
 import { uploadAttachment, deleteAttachments, attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
-import { AttachmentView, ImageLightbox } from './Attachments';
+import { ImageLightbox } from './Attachments';
 import { translations } from '../translations';
 import { auth, getClonableAgentProfiles, searchProfiles } from '../services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -20,6 +20,7 @@ import { messageAuthor } from '../services/mentions';
 import { askForTaskNotifications } from '../hooks/useTaskNotifications';
 import { canReplyOnServer, replyOnServer, subscribeToApprovals, answerApproval, subscribeToDrafts, signatureState, Draft } from '../services/serverReplies';
 import { dailyLimitOf } from '../services/spendLimit';
+import { rememberedDecision, canRemember, remember } from '../services/toolPermissions';
 import {
     triggerAgentReplies, runBotDiscussion, designBot, probeToolServer, toolServersOf,
     MAX_DISCUSSION_BOTS, MAX_DISCUSSION_ROUNDS, MAX_REQUESTS_PER_TURN, ToolPolicy
@@ -32,13 +33,20 @@ import { mentionableName, freeName } from '../services/mentions';
 import { subscribeToBotLibrary, saveBotToLibrary, removeBotFromLibrary, SavedBot } from '../services/botLibrary';
 import MemoryPanel from './MemoryPanel';
 import ComputerPanel from './ComputerPanel';
+import ModelPicker from './ModelPicker';
+import MessageItem from './boards/MessageItem';
+import MembersPanel from './boards/MembersPanel';
+import ToolApprovalDialog from './boards/ToolApprovalDialog';
+import ThreadPanel from './boards/ThreadPanel';
+import SchedulesPanel from './boards/SchedulesPanel';
+import { mentionedPeople, notifyMentioned } from '../services/mentionNotifications';
+import { useLocation } from 'react-router-dom';
+import LiveReplies from './boards/LiveReplies';
 import CodeSaveDialog from './CodeSaveDialog';
-import TerminalBlock from './TerminalBlock';
-import { RichText } from './RichText';
 import ToolAdvisor from './ToolAdvisor';
 import { Hint } from './Learning';
 import { cloudBrowserUrl, connectedMcpUrl, startOAuthConnection, OAUTH_PRESETS, sandboxUrl, cloudRunUrl } from '../services/connectors';
-import { extractCodeFiles, toFile, CodeFile } from '../services/codeSave';
+import { toFile, CodeFile } from '../services/codeSave';
 import { parseTerminalCommand, runnableBlocks, RunRequest } from '../services/terminal';
 import { runInSandbox } from '../services/sandboxRun';
 import {
@@ -49,7 +57,6 @@ import {
     isPipedreamConfigured, listConnectedAccounts, toolServerUrlFor, ConnectedAccount
 } from '../services/pipedream';
 import ToolCatalog from './ToolCatalog';
-import { ForwardButton, ForwardedLabel } from './Forward';
 
 /** Tool server URLs typed one per line (or separated by spaces or commas). */
 const splitUrls = (text: string): string[] =>
@@ -58,9 +65,11 @@ const splitUrls = (text: string): string[] =>
 interface BoardsProps {
     settings: AISettings;
     onViewProfile: (name: string, id?: string) => void;
+    /** Saves settings changed from here, such as a remembered tool answer. */
+    onUpdateSettings?: (settings: AISettings) => void;
 }
 
-const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
+const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettings }) => {
     const t = translations[settings.language] as any;
 
     /**
@@ -97,9 +106,13 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     /** A person's command is running in their sandbox. */
     const [isRunning, setIsRunning] = useState(false);
     // One side panel at a time: side by side they covered each other and the input.
-    const [sidePanel, setSidePanel] = useState<'members' | 'memory' | 'computer' | null>(null);
+    const [sidePanel, setSidePanel] = useState<'members' | 'memory' | 'computer' | 'thread' | 'schedules' | null>(null);
+    // The thread open in the side panel (its root message's id), and its reply box.
+    const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+    const [threadDraft, setThreadDraft] = useState('');
+    const openThread = (id: string) => { setOpenThreadId(id); setSidePanel('thread'); };
     const showMembers = sidePanel === 'members';
-    const togglePanel = (panel: 'members' | 'memory' | 'computer') => setSidePanel(current => current === panel ? null : panel);
+    const togglePanel = (panel: 'members' | 'memory' | 'computer' | 'schedules') => setSidePanel(current => current === panel ? null : panel);
     const [error, setError] = useState<string | null>(null);
     const [reads, setReads] = useState(EMPTY_READ_STATE);
     const [spend, setSpend] = useState<SpendState | null>(null);
@@ -203,14 +216,42 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
     // A queue, not a single slot: steps of a meeting run in parallel, and two
     // bots may ask at the same moment — one request must not replace the other.
     const [toolQueue, setToolQueue] = useState<
-        Array<{ bot: string, tool: string, args: Record<string, any>, foreign: boolean, resolve: (ok: boolean) => void, serverId?: string }>
+        Array<{ bot: string, tool: string, args: Record<string, any>, foreign: boolean, boardId: string, resolve: (ok: boolean) => void, serverId?: string }>
     >([]);
     const pendingTool = toolQueue[0] || null;
+    // Read when a request comes in, which may be long after this render.
+    const settingsNow = useRef(settings);
+    settingsNow.current = settings;
+    const boardIdNow = useRef<string | null>(null);
+    const [rememberAnswer, setRememberAnswer] = useState(false);
+    useEffect(() => setRememberAnswer(false), [pendingTool]);
 
-    const requestToolApproval = (bot: string, tool: string, args: Record<string, any>, reason?: 'foreign') =>
-        new Promise<boolean>(resolve => setToolQueue(queue => [...queue, { bot, tool, args, foreign: reason === 'foreign', resolve }]));
+    const requestToolApproval = (bot: string, tool: string, args: Record<string, any>, reason?: 'foreign') => {
+        const boardId = boardIdNow.current || '';
+        const remembered = rememberedDecision(settingsNow.current.toolPermissions, boardId, bot, tool, reason === 'foreign');
+        if (remembered) return Promise.resolve(remembered === 'allow');
+        return new Promise<boolean>(resolve => setToolQueue(queue => [...queue, { bot, tool, args, foreign: reason === 'foreign', boardId, resolve }]));
+    };
+
+    const deleteBoardMessage = async (msg: BoardMessage) => {
+        if (!activeBoardId || !window.confirm(t.deleteMessageConfirm || 'Удалить сообщение?')) return;
+        // Keys live only on the message; delete the files before it is gone.
+        await deleteAttachments(msg.attachments || []);
+        await deleteMessage(activeBoardId, msg.channelId, msg.id!);
+    };
 
     const answerToolApproval = (allowed: boolean) => {
+        if (pendingTool && rememberAnswer && onUpdateSettings) {
+            const decision = allowed ? 'allow' : 'deny';
+            if (canRemember(decision, pendingTool.foreign)) {
+                const boardName = boards.find(b => b.id === pendingTool.boardId)?.name || '';
+                onUpdateSettings({
+                    ...settingsNow.current,
+                    toolPermissions: remember(settingsNow.current.toolPermissions, pendingTool.boardId, pendingTool.bot, pendingTool.tool, decision,
+                        `${boardName} · ${pendingTool.bot} · ${pendingTool.tool}`)
+                });
+            }
+        }
         pendingTool?.resolve(allowed);
         setToolQueue(queue => queue.slice(1));
     };
@@ -230,8 +271,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 // Requests the server gave up on (timed out) leave the queue.
                 const kept = queue.filter(item => !item.serverId || open.has(item.serverId));
                 const known = new Set(kept.map(item => item.serverId));
-                const added = requests.filter(r => !known.has(r.id)).map(r => ({
-                    bot: r.bot, tool: r.tool, args: r.args, foreign: r.foreign, serverId: r.id,
+                const added = requests.filter(r => !known.has(r.id)).filter(r => {
+                    // Answered at once when the person said "remember" before.
+                    const remembered = rememberedDecision(settingsNow.current.toolPermissions, boardId, r.bot, r.tool, r.foreign);
+                    if (!remembered) return true;
+                    answerApproval(boardId, r.id, remembered === 'allow').catch(e => setError(String(e)));
+                    return false;
+                }).map(r => ({
+                    bot: r.bot, tool: r.tool, args: r.args, foreign: r.foreign, serverId: r.id, boardId,
                     resolve: (ok: boolean) => { answerApproval(boardId, r.id, ok).catch(e => setError(String(e))); }
                 }));
                 return [...kept, ...added];
@@ -294,6 +341,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setSelectedClone(null);
     };
 
+    boardIdNow.current = activeBoardId;
+
     const activeBoard = useMemo(
         () => boards.find(b => b.id === activeBoardId) || null,
         [boards, activeBoardId]
@@ -302,6 +351,47 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         () => channels.find(c => c.id === activeChannelId) || null,
         [channels, activeChannelId]
     );
+
+    /** Replies per thread root, among the loaded messages. */
+    const replyCounts = useMemo(() => {
+        const counts: Record<string, number> = {};
+        for (const m of messages) if (m.threadId) counts[m.threadId] = (counts[m.threadId] || 0) + 1;
+        return counts;
+    }, [messages]);
+
+    const renderMessage = (msg: BoardMessage, below?: React.ReactNode) => activeBoard ? (
+        <MessageItem
+            msg={msg}
+            author={messageAuthor(msg, activeBoard.members)}
+            signature={signatures[msg.id!]}
+            place={`#${activeChannel?.name || ''} · ${activeBoard.name}`}
+            canDelete={msg.authorId === currentUid}
+            isRunning={isRunning}
+            language={settings.language}
+            t={t}
+            onViewProfile={onViewProfile}
+            onSaveCode={setCodeToSave}
+            onRunCode={runMessageCode}
+            onDelete={deleteBoardMessage}
+            onOpenImage={(url, name) => setLightbox({ url, name })}
+        >
+            {below}
+        </MessageItem>
+    ) : null;
+
+    // A link from a mention notice: /boards?board=…&channel=…&thread=…
+    const location = useLocation();
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        const board = params.get('board');
+        if (!board) return;
+        setActiveBoardId(board);
+        const channel = params.get('channel');
+        if (channel) setActiveChannelId(channel);
+        const thread = params.get('thread');
+        if (thread) openThread(thread);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [location.search]);
 
     useEffect(() => {
         const botIds = new Set((activeBoard?.botIds || []) as string[]);
@@ -763,14 +853,20 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         setPending(prev => [...prev, ...chosen]);
     };
 
-    const handleSend = async () => {
-        const content = draft.trim();
-        const files = pending;
+    /** Sends the channel's draft, or with `threadId` the reply box of that thread. */
+    const handleSend = async (threadId?: string) => {
+        const content = (threadId ? threadDraft : draft).trim();
+        const files = threadId ? [] : pending;
 
         if ((!content && files.length === 0) || !activeChannelId || !currentUid || !activeChannel || !activeBoard) return;
 
-        setDraft('');
-        setPending([]);
+        // What was typed goes back into its box if sending fails.
+        const restore = () => {
+            if (threadId) setThreadDraft(content);
+            else { setDraft(content); setPending(files); }
+        };
+        if (threadId) setThreadDraft('');
+        else { setDraft(''); setPending([]); }
         setError(null);
 
         // /sh, /py, /js: run in this user's sandbox and post what it printed.
@@ -779,10 +875,10 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
         if (command) {
             if (!command.input) {
                 setError(t.terminalUsage || 'Напишите команду после /sh, код после /py или /js');
-                setDraft(content);
+                restore();
                 return;
             }
-            await runAndPost([command], content);
+            await runAndPost([command], content, threadId);
             return;
         }
 
@@ -817,8 +913,22 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 authorName: settings.agentName || 'User',
                 authorType: settings.userType === 'agent' ? 'agent' : 'human',
                 content,
-                ...(attachments.length ? { attachments } : {})
+                ...(attachments.length ? { attachments } : {}),
+                ...(threadId ? { threadId } : {})
             });
+
+            // People mentioned by name hear about it, wherever they are in the app.
+            const people = mentionedPeople(mentionedNames, activeBoard.members, currentUid);
+            if (people.length) {
+                notifyMentioned({
+                    people,
+                    from: { id: currentUid, name: settings.agentName || 'User' },
+                    board: { id: activeBoard.id!, name: activeBoard.name },
+                    channel: { id: activeChannelId, name: activeChannel.name },
+                    threadId: threadId || sent?.id,
+                    text: content
+                });
+            }
 
             if (!mentionsBot) return;
 
@@ -836,7 +946,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                         channelId: activeChannelId,
                         channelName: activeChannel.name,
                         mentions: mentionedNames,
-                        settings
+                        settings,
+                        threadId
                     });
                     return;
                 }
@@ -852,7 +963,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                     settings,
                     'auto',
                     requestToolApproval,
-                    (bot, text) => setLiveReply({ bot, text })
+                    (bot, text) => setLiveReply({ bot, text }),
+                    threadId
                 );
             } finally {
                 setLiveReply(null);
@@ -860,8 +972,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             }
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
-            setDraft(content);
-            setPending(files);
+            restore();
         } finally {
             setUploading(false);
         }
@@ -871,7 +982,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
      * Runs code in this user's cloud sandbox and posts the result under their
      * name, so the channel — bots included — sees what ran and what it printed.
      */
-    const runAndPost = async (requests: RunRequest[], content: string) => {
+    const runAndPost = async (requests: RunRequest[], content: string, threadId?: string) => {
         if (!activeChannelId || !currentUid || !activeBoard) return;
 
         setIsRunning(true);
@@ -885,7 +996,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                 authorName: settings.agentName || 'User',
                 authorType: settings.userType === 'agent' ? 'agent' : 'human',
                 content,
-                terminal: entries
+                terminal: entries,
+                ...(threadId ? { threadId } : {})
             });
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e));
@@ -1086,7 +1198,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     className="text-[10px] font-mono text-slate-500 shrink-0 md:px-2"
                                     title={t.spendHint || 'Запросы к модели с вашего ключа за сегодня. Платит тот, кто упомянул бота.'}
                                 >
-                                    {t.today || 'сегодня'}: {spendOn(spend).requests}{dailyLimitOf(settings) > 0 ? ` / ${dailyLimitOf(settings)}` : ''} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}
+                                    {t.today || 'сегодня'}: {spendOn(spend).requests}{dailyLimitOf(settings) > 0 ? ` / ${dailyLimitOf(settings)}` : ''} {t.requestsShort || 'запр.'} · {formatTokens(spendOn(spend).tokens)} {t.tokensShort || 'ток.'}{spendOn(spend).cost ? ` · ${formatCost(spendOn(spend).cost!)}` : ''}
                                 </div>
                             )}
 
@@ -1123,6 +1235,18 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         title={t.computerHint || 'Компьютер доски: файлы, которые остаются между разговорами'}
                                     >
                                         {t.computer || 'Компьютер'}
+                                    </button>
+                                )}
+
+                                {activeChannelId && (
+                                    <button
+                                        onClick={() => togglePanel('schedules')}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-mono uppercase tracking-wider border transition-all ${sidePanel === 'schedules'
+                                            ? 'bg-amber-950/30 border-amber-500/30 text-amber-300'
+                                            : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200'}`}
+                                        title={t.schedulesHint || 'Бот по расписанию: например, каждое утро сводка'}
+                                    >
+                                        {t.schedules || 'Расписание'}
                                     </button>
                                 )}
 
@@ -1172,138 +1296,22 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         {t.noMessages || 'Сообщений пока нет.'}<br />
                                         {t.mentionHint || 'Упомяните агента через @имя, чтобы он ответил.'}
                                     </p>
-                                ) : messages.map(msg => { const author = messageAuthor(msg, activeBoard.members); return (
-                                    <div key={msg.id} className="group flex space-x-3">
-                                        <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono ${msg.authorType === 'agent'
-                                            ? 'bg-indigo-950/60 text-indigo-300 border border-indigo-500/30'
-                                            : 'bg-slate-800 text-slate-300 border border-slate-700'
-                                            }`}>
-                                            {(Array.from(String(author.name).replace(/^\P{L}+/u, ''))[0] || '?').toUpperCase()}
-                                        </div>
-
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-baseline space-x-2">
-                                                <button
-                                                    onClick={() => onViewProfile(author.name, msg.authorId)}
-                                                    className={`text-sm font-bold hover:underline ${msg.authorType === 'agent' ? 'text-indigo-300' : 'text-slate-200'}`}
-                                                >
-                                                    {author.name}
-                                                </button>
-                                                {signatures[msg.id!] === 'signed' && (
-                                                    <span className="text-[10px] text-emerald-400/80" title={t.signedHint || 'Ответ записан и подписан сервером'}>✓</span>
-                                                )}
-                                                {signatures[msg.id!] === 'unsigned' && (
-                                                    <span className="text-[10px] text-amber-300/90" title={t.unsignedHint || 'Сервер не подписывал это сообщение: его мог написать кто угодно от имени бота'}>⚠ {t.unsigned || 'не подтверждено'}</span>
-                                                )}
-                                                {author.via && (
-                                                    <span className="text-[10px] text-slate-500" title={t.postedByHint || 'Кто на самом деле отправил это сообщение'}>
-                                                        {t.via || 'через'} {author.via}
-                                                    </span>
-                                                )}
-                                                {msg.authorType === 'agent' && (
-                                                    <span className="text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-indigo-950/50 text-indigo-400 border border-indigo-500/20">
-                                                        AI
-                                                    </span>
-                                                )}
-                                                <span className="text-[10px] text-slate-600 font-mono">
-                                                    {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                </span>
-                                                {msg.content.includes('```') && (
-                                                    <button
-                                                        onClick={() => setCodeToSave(extractCodeFiles(msg.content))}
-                                                        className="text-[11px] text-slate-500 hover:text-cyan-300 md:opacity-0 md:group-hover:opacity-100"
-                                                        title={t.saveCode || 'Сохранить код'}
-                                                    >
-                                                        💾
-                                                    </button>
-                                                )}
-                                                {runnableBlocks(msg.content).length > 0 && (
-                                                    <button
-                                                        onClick={() => runMessageCode(msg)}
-                                                        disabled={isRunning}
-                                                        className="text-[11px] text-slate-500 hover:text-emerald-300 md:opacity-0 md:group-hover:opacity-100 disabled:opacity-40"
-                                                        title={t.runInSandbox || 'Запустить в облачной песочнице'}
-                                                    >
-                                                        ▶
-                                                    </button>
-                                                )}
-                                                <ForwardButton
-                                                    title={t.forward || 'Переслать'}
-                                                    className="md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
-                                                    payload={() => ({
-                                                        text: msg.content,
-                                                        attachments: msg.attachments,
-                                                        // A copy of a copy still credits the original author.
-                                                        origin: msg.forwardedFrom || {
-                                                            kind: 'board',
-                                                            authorName: msg.authorName,
-                                                            authorId: msg.authorId,
-                                                            place: `#${activeChannel?.name || ''} · ${activeBoard.name}`,
-                                                            timestamp: msg.timestamp
-                                                        }
-                                                    })}
-                                                />
-                                                {msg.authorId === currentUid && (
-                                                    <button
-                                                        onClick={async () => {
-                                                            if (!window.confirm(t.deleteMessageConfirm || 'Удалить сообщение?')) return;
-                                                            // Keys live only on the message; delete
-                                                            // the files before it is gone.
-                                                            await deleteAttachments(msg.attachments || []);
-                                                            await deleteMessage(activeBoard.id!, msg.channelId, msg.id!);
-                                                        }}
-                                                        className="text-slate-700 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100 transition-opacity text-[10px]"
-                                                    >
-                                                        ✕
-                                                    </button>
-                                                )}
-                                            </div>
-                                            {msg.forwardedFrom && (
-                                                <div className="mt-1 -mb-0.5">
-                                                    <ForwardedLabel origin={msg.forwardedFrom} language={settings.language} />
-                                                </div>
-                                            )}
-                                            {/* A /sh, /py or /js message is its terminal: the command
-                                                is already at the prompt there, so only the command
-                                                word is shown here. The text stays stored, for bots
-                                                and for forwarding. */}
-                                            <div className={`text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5 ${msg.forwardedFrom ? 'border-l-2 border-cyan-500/30 pl-2' : ''}`}>
-                                                {msg.terminal?.length && parseTerminalCommand(msg.content)
-                                                    ? msg.content.trim().split(/\s/)[0]
-                                                    : <RichText text={msg.content} />}
-                                            </div>
-
-                                            {msg.attachments?.map(a => (
-                                                <AttachmentView
-                                                    key={a.key}
-                                                    attachment={a}
-                                                    failedLabel={t.downloadFailed || 'не удалось открыть'}
-                                                    saveLabel={t.saveFile || 'скачать'}
-                                                    onOpen={(url, at) => setLightbox({ url, name: at.name })}
-                                                />
-                                            ))}
-                                            {msg.terminal?.length ? <TerminalBlock entries={msg.terminal} /> : null}
-                                            {msg.toolsUsed?.some(tool => !(msg.terminal?.length && tool.startsWith('sandbox_'))) ? (
-                                                <div className="flex flex-wrap gap-1 mt-2">
-                                                    {msg.toolsUsed.filter(tool => !(msg.terminal?.length && tool.startsWith('sandbox_'))).map(tool => (
-                                                        <span
-                                                            key={tool}
-                                                            className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/40 text-emerald-400 border border-emerald-500/20"
-                                                        >
-                                                            ⚒ {tool}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            ) : null}
-                                            {msg.modelName && (
-                                                <div className="text-[9px] font-mono text-slate-700 mt-1">
-                                                    {msg.modelName}
-                                                    {msg.tokensUsed ? ` · ${formatTokens(msg.tokensUsed)} ${t.tokensShort || 'ток.'}` : ''}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                ); })}
+                                ) : messages.filter(msg => !msg.threadId).map(msg => (
+                                    <React.Fragment key={msg.id}>
+                                        {renderMessage(msg, (
+                                            <button
+                                                onClick={() => openThread(msg.id!)}
+                                                className={`mt-1 text-[11px] font-mono ${replyCounts[msg.id!]
+                                                    ? 'text-cyan-400/90 hover:text-cyan-300'
+                                                    : 'text-slate-600 hover:text-cyan-300 md:opacity-0 md:group-hover:opacity-100'}`}
+                                            >
+                                                {replyCounts[msg.id!]
+                                                    ? `💬 ${replyCounts[msg.id!]} ${t.repliesShort || 'отв.'}`
+                                                    : `↳ ${t.replyInThreadShort || 'ответить в ветке'}`}
+                                            </button>
+                                        ))}
+                                    </React.Fragment>
+                                ))}
 
                                 {serverTasks
                                     .filter(task => task.channelId === activeChannelId
@@ -1378,38 +1386,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                         <span>{t.sandboxRunning || 'выполняется в облачной песочнице…'}</span>
                                     </div>
                                 )}
-                                {drafts.filter(d => d.text).map(d => (
-                                    <div key={d.botId} className="flex space-x-3 opacity-90">
-                                        <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
-                                            {(Array.from(String(d.botName))[0] || '?').toUpperCase()}
-                                        </div>
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-baseline space-x-2">
-                                                <span className="text-sm font-bold text-indigo-300">{d.botName}</span>
-                                                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse self-center"></span>
-                                            </div>
-                                            <div className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
-                                                <RichText text={d.text} />
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                                {isAgentThinking && !discussionProgress && liveReply?.text && (
-                                    <div className="flex space-x-3 opacity-90">
-                                        <div className="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-xs font-bold font-mono bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
-                                            {(Array.from(String(liveReply.bot))[0] || '?').toUpperCase()}
-                                        </div>
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-baseline space-x-2">
-                                                <span className="text-sm font-bold text-indigo-300">{liveReply.bot}</span>
-                                                <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse self-center"></span>
-                                            </div>
-                                            <div className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5">
-                                                <RichText text={liveReply.text} />
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
+                                <LiveReplies drafts={drafts} liveReply={isAgentThinking && !discussionProgress ? liveReply : null} />
                                 {isAgentThinking && !discussionProgress && !liveReply?.text && !drafts.some(d => d.text) && (
                                     <div className="flex items-center space-x-2 text-indigo-400 text-xs font-mono pl-11">
                                         <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse"></span>
@@ -1448,6 +1425,34 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 />
                             )}
 
+                            {sidePanel === 'thread' && openThreadId && (
+                                <ThreadPanel
+                                    root={messages.find(m => m.id === openThreadId) || null}
+                                    replies={messages.filter(m => m.threadId === openThreadId)}
+                                    draft={threadDraft}
+                                    busy={isAgentThinking || isRunning}
+                                    t={t}
+                                    renderMessage={m => renderMessage(m)}
+                                    onDraft={setThreadDraft}
+                                    onSend={() => handleSend(openThreadId)}
+                                    onClose={() => { setSidePanel(null); setOpenThreadId(null); }}
+                                />
+                            )}
+
+                            {sidePanel === 'schedules' && activeBoard.id && activeChannel && currentUid && (
+                                <SchedulesPanel
+                                    boardId={activeBoard.id}
+                                    channel={{ id: activeChannel.id!, name: activeChannel.name }}
+                                    bots={activeBoard.members.filter(m => isBot(m) && canReplyOnServer([m])).map(m => m.name)}
+                                    currentUid={currentUid}
+                                    currentName={settings.agentName || 'User'}
+                                    isOwner={activeBoard.ownerId === currentUid}
+                                    settings={settings}
+                                    t={t}
+                                    onClose={() => setSidePanel(null)}
+                                />
+                            )}
+
                             {showComputer && activeBoard.id && (
                                 <ComputerPanel
                                     boardId={activeBoard.id}
@@ -1457,116 +1462,21 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                 />
                             )}
 
-                            {/* Members panel */}
                             {showMembers && (
-                                <aside className="absolute lg:relative inset-y-0 right-0 z-20 w-full max-w-xs md:w-64 shrink-0 border-l border-slate-800 bg-slate-900 lg:bg-slate-900/30 flex flex-col shadow-2xl lg:shadow-none overflow-y-auto">
-                                    <div className="p-4 border-b border-slate-800 font-mono text-[10px] uppercase tracking-widest text-slate-400 flex items-center justify-between">
-                                        {t.members || 'Участники'}
-                                        <button
-                                            onClick={() => setSidePanel(null)}
-                                            className="text-slate-500 hover:text-white"
-                                            title={t.close || 'Закрыть'}
-                                        >
-                                            ✕
-                                        </button>
-                                    </div>
-
-                                    <div className="flex-1 p-2 space-y-1">
-                                        {activeBoard.members.map(member => (
-                                            <div key={member.id} className="group px-3 py-2 rounded-lg hover:bg-slate-800/50 flex items-center justify-between">
-                                                <div className="min-w-0">
-                                                    <button
-                                                        onClick={() => onViewProfile(
-                                                            member.sourceAgentName || member.name,
-                                                            member.sourceAgentId || member.id
-                                                        )}
-                                                        className={`text-sm truncate hover:underline block ${isBot(member) ? 'text-indigo-300' : 'text-slate-300'}`}
-                                                    >
-                                                        {member.name}
-                                                    </button>
-                                                    <span className="text-[9px] font-mono text-slate-600 uppercase block">
-                                                        {isBot(member) ? 'Bot' : 'Human'}
-                                                        {member.role === 'owner' && ` · ${t.owner || 'владелец'}`}
-                                                    </span>
-                                                    {isBot(member) && member.sourceAgentName && (
-                                                        <span className="text-[9px] font-mono text-slate-700 block truncate">
-                                                            ↳ {member.sourceAgentName}
-                                                        </span>
-                                                    )}
-                                                    {toolServersOf(member).length > 0 && (
-                                                        <span
-                                                            className="text-[9px] font-mono text-emerald-500/70 block truncate"
-                                                            title={toolServersOf(member).join('\n')}
-                                                        >
-                                                            ⚒ {toolServersOf(member).map(u => { try { return new URL(u).hostname; } catch { return u; } }).join(', ')}
-                                                        </span>
-                                                    )}
-                                                </div>
-
-                                                {isBot(member) && (
-                                                    <button
-                                                        onClick={() => handleSaveBot(member).catch(e => setError(e instanceof Error ? e.message : String(e)))}
-                                                        className={`${savedBots.some(b => b.name.toLowerCase() === member.name.toLowerCase()) ? 'text-amber-300/80' : 'text-slate-600 md:opacity-0 md:group-hover:opacity-100'} hover:text-amber-200 transition-opacity shrink-0 mr-2 text-xs`}
-                                                        title={t.saveBotHint || 'Сохранить в «Мои боты» — чтобы добавлять его в другие доски'}
-                                                    >
-                                                        {savedBots.some(b => b.name.toLowerCase() === member.name.toLowerCase()) ? '★' : '☆'}
-                                                    </button>
-                                                )}
-                                                {activeBoard.ownerId === currentUid && isBot(member) && (
-                                                    <button
-                                                        onClick={() => openModal({ kind: 'editBot', botId: member.id, botName: member.name })}
-                                                        className="text-slate-600 hover:text-indigo-300 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0 mr-2 text-xs"
-                                                        title={t.editBot || 'Изменить бота'}
-                                                    >
-                                                        ✎
-                                                    </button>
-                                                )}
-                                                {activeBoard.ownerId === currentUid && member.role !== 'owner' && (
-                                                    <button
-                                                        onClick={() => {
-                                                            if (!window.confirm(`${t.removeMemberConfirm || 'Убрать с доски'}: ${member.name}?`)) return;
-                                                            removeMember(activeBoard.id!, member.id).catch(e => setError(String(e)));
-                                                        }}
-                                                        className="text-slate-600 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0"
-                                                    >
-                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                                                            <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                                                        </svg>
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    {activeBoard.ownerId === currentUid && (
-                                        <div className="p-3 border-t border-slate-800 space-y-2">
-                                            <button
-                                                onClick={() => openModal({ kind: 'createBot' })}
-                                                className="w-full py-2 rounded-lg bg-indigo-900/30 text-indigo-300 border border-indigo-500/30 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/50 transition-colors"
-                                            >
-                                                + {t.createBot || 'Создать бота'}
-                                            </button>
-                                            <button
-                                                onClick={() => openModal({ kind: 'library' })}
-                                                className="w-full py-2 rounded-lg bg-amber-900/10 text-amber-200/90 border border-amber-500/20 text-[10px] font-mono uppercase tracking-wider hover:bg-amber-900/30 transition-colors"
-                                            >
-                                                + {t.fromMyBots || 'Из моих ботов'}{savedBots.length ? ` (${savedBots.length})` : ''}
-                                            </button>
-                                            <button
-                                                onClick={() => openModal({ kind: 'cloneAgent' })}
-                                                className="w-full py-2 rounded-lg bg-indigo-900/20 text-indigo-300/80 border border-indigo-500/20 text-[10px] font-mono uppercase tracking-wider hover:bg-indigo-900/40 transition-colors"
-                                            >
-                                                + {t.cloneAgent || 'Бот из персоны'}
-                                            </button>
-                                            <button
-                                                onClick={() => openModal({ kind: 'addHuman' })}
-                                                className="w-full py-2 rounded-lg bg-slate-800/50 text-slate-300 border border-slate-700 text-[10px] font-mono uppercase tracking-wider hover:bg-slate-800 transition-colors"
-                                            >
-                                                + {t.addHuman || 'Добавить человека'}
-                                            </button>
-                                        </div>
-                                    )}
-                                </aside>
+                                <MembersPanel
+                                    activeBoard={activeBoard}
+                                    currentUid={currentUid}
+                                    savedBots={savedBots}
+                                    t={t}
+                                    onClose={() => setSidePanel(null)}
+                                    onViewProfile={onViewProfile}
+                                    onSaveBot={member => handleSaveBot(member).catch(e => setError(e instanceof Error ? e.message : String(e)))}
+                                    onRemove={member => {
+                                        if (!window.confirm(`${t.removeMemberConfirm || 'Убрать с доски'}: ${member.name}?`)) return;
+                                        removeMember(activeBoard.id!, member.id).catch(e => setError(String(e)));
+                                    }}
+                                    openModal={openModal}
+                                />
                             )}
                         </div>
 
@@ -1633,7 +1543,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors resize-none h-[46px] max-h-32 disabled:opacity-40"
                                 />
                                 <button
-                                    onClick={handleSend}
+                                    onClick={() => handleSend()}
                                     disabled={(!draft.trim() && pending.length === 0) || !activeChannelId || uploading || isRunning}
                                     className="h-[46px] px-5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-sm font-bold transition-all active:scale-95 shrink-0"
                                 >
@@ -1678,48 +1588,14 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
             )}
 
             {pendingTool && (
-                <div className="fixed inset-0 z-[170] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
-                    <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl shadow-2xl max-w-md w-full p-6">
-                        <h3 className="text-lg font-bold font-display text-white mb-1">
-                            {t.toolRequest || 'Запрос инструмента'}
-                        </h3>
-                        <p className="text-slate-500 text-xs mb-4">
-                            <span className="text-indigo-300">{pendingTool.bot}</span>{' '}
-                            {t.wantsToCall || 'хочет вызвать инструмент. Это действие в вашем подключённом аккаунте.'}
-                        </p>
-                        {pendingTool.foreign && (
-                            <p className="text-amber-200/90 text-xs leading-relaxed mb-4 px-3 py-2 rounded-lg bg-amber-950/30 border border-amber-500/30">
-                                {t.foreignBotWarning || 'Этого бота настроили не вы: его инструкции и сервисы выбрал другой человек, а действие выполнится от вашего имени, на ваших ключах. Разрешайте, только если понимаете, зачем оно нужно.'}
-                            </p>
-                        )}
-
-                        <div className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 mb-4">
-                            <div className="text-[11px] font-mono text-emerald-400 break-all">
-                                ⚒ {pendingTool.tool}
-                            </div>
-                            {Object.keys(pendingTool.args).length > 0 && (
-                                <pre className="text-[10px] text-slate-500 mt-2 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-                                    {JSON.stringify(pendingTool.args, null, 2)}
-                                </pre>
-                            )}
-                        </div>
-
-                        <div className="flex space-x-3">
-                            <button
-                                onClick={() => answerToolApproval(false)}
-                                className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors"
-                            >
-                                {t.deny || 'Отклонить'}
-                            </button>
-                            <button
-                                onClick={() => answerToolApproval(true)}
-                                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg shadow-emerald-900/20 transition-colors"
-                            >
-                                {t.allow || 'Разрешить'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <ToolApprovalDialog
+                    request={pendingTool}
+                    rememberAnswer={rememberAnswer}
+                    canRemember={Boolean(onUpdateSettings)}
+                    t={t}
+                    onRemember={setRememberAnswer}
+                    onAnswer={answerToolApproval}
+                />
             )}
 
             {showCatalog && (
@@ -2137,13 +2013,16 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile }) => {
                                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs h-24 resize-none mb-4 font-mono"
                                 />
 
-                                <input
-                                    type="text"
-                                    value={botModel}
-                                    onChange={(e) => setBotModel(e.target.value)}
-                                    placeholder={`${t.botModelPlaceholder || 'Модель (необязательно), по умолчанию'}: ${settings.openRouterModel || 'из настроек'}`}
-                                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs font-mono mb-3"
-                                />
+                                <div className="mb-3">
+                                    <ModelPicker
+                                        value={botModel}
+                                        onChange={setBotModel}
+                                        placeholder={`${t.botModelPlaceholder || 'Модель (необязательно), по умолчанию'}: ${settings.openRouterModel || 'из настроек'}`}
+                                        language={settings.language}
+                                        toolsOnly={botToolUrl.trim().length > 0}
+                                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 transition-colors text-xs font-mono"
+                                    />
+                                </div>
                                 <label className="block text-[9px] font-mono uppercase tracking-widest text-slate-500 mb-2">
                                     {t.toolServer || 'MCP-сервер инструментов'} · {t.optional || 'необязательно'} <Hint id="oauth-connectors" always /> <Hint id="mcp" />
                                 </label>

@@ -16,6 +16,7 @@ import type { AgentStore } from '../../services/runtime/store';
 import type { BoardMessage } from '../../types';
 import { EMPTY_SUMMARY, type ChannelSummary, type MemoryNote } from '../../services/memoryCore';
 import { parseMentions } from '../../services/mentions';
+import { MAX_BOARD_CHUNKS, type KnowledgeChunk } from '../../services/knowledgeCore';
 
 export interface FirestoreConfig {
     projectId: string;
@@ -196,6 +197,7 @@ export const restAgentStore = (
 ): AgentStore => {
     const summaryPath = (b: string, c: string) => `boards/${b}/channels/${c}/memory/summary`;
     let notesCache: { boardId: string, at: number, notes: MemoryNote[] } | null = null;
+    let knowledgeCache: { boardId: string, at: number, chunks: KnowledgeChunk[] } | null = null;
 
     return {
         scope: options.scope,
@@ -267,6 +269,18 @@ export const restAgentStore = (
 
         async setNoteEmbedding(boardId, noteId, embedding, model) {
             await rest.update(`boards/${boardId}/notes/${noteId}`, { embedding, embeddingModel: model });
+        },
+
+        async loadKnowledge(boardId) {
+            if (knowledgeCache && knowledgeCache.boardId === boardId && Date.now() - knowledgeCache.at < 30_000) return knowledgeCache.chunks;
+            const rows = await rest.query(`boards/${boardId}`, { from: [{ collectionId: 'kbChunks' }], limit: MAX_BOARD_CHUNKS });
+            const chunks = rows.map(r => ({ id: r.id, ...r.data }) as KnowledgeChunk);
+            knowledgeCache = { boardId, at: Date.now(), chunks };
+            return chunks;
+        },
+
+        async setChunkEmbedding(boardId, chunkId, embedding, model) {
+            await rest.update(`boards/${boardId}/kbChunks/${chunkId}`, { embedding, embeddingModel: model });
         },
 
         toolToken: options.toolToken

@@ -71,6 +71,8 @@ export interface AISettings {
    * model, not only free ones. Optional.
    */
   fallbackModel?: string;
+  /** Remembered answers to tool requests, this person's own; see services/toolPermissions. Browser only. */
+  toolPermissions?: import('./services/toolPermissions').ToolPermissions;
   /** Requests to the model per day, counted across browser and server; 0 means no ceiling. */
   dailyRequestLimit?: number;
   /** Server only, never stored: counts and limits one task's requests. */
@@ -266,11 +268,15 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  /** In US dollars, when the provider says (OpenRouter does). */
+  cost?: number;
 }
 
 export interface DailySpend {
   requests: number;
   tokens: number;
+  /** US dollars; absent on days before cost was recorded. */
+  cost?: number;
 }
 
 /**
@@ -316,6 +322,8 @@ export interface BoardMessage {
   orchestrator?: boolean;
   /** The server's signature on a bot reply (services/botSignature). */
   sig?: string;
+  /** A reply in a thread: the id of the message the thread hangs from. */
+  threadId?: string;
   content: string;
   /** Names mentioned via @name, used to wake up agents. */
   mentions: string[];
@@ -335,6 +343,8 @@ export interface BoardMessage {
    * Shown on the message so the cost sits where it was incurred.
    */
   tokensUsed?: number;
+  /** Bot-only: what the reply cost in US dollars, when the provider said. */
+  costUsd?: number;
   /**
    * True for messages produced by an agent run (client or Cloud Function).
    * Loop guard: a bot reply must never wake another bot. Author type can't

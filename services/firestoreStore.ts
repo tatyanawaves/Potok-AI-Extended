@@ -8,6 +8,11 @@ import { isAuthentic } from './serverReplies';
 import { AISettings } from '../types';
 import { ChannelSummary, EMPTY_SUMMARY, MemoryNote } from './memoryCore';
 import { AgentStore } from './runtime/store';
+import { KnowledgeChunk, MAX_BOARD_CHUNKS } from './knowledgeCore';
+
+/** Knowledge passages per board, kept briefly: every turn reads them. */
+const knowledgeCache = new Map<string, { at: number, chunks: KnowledgeChunk[] }>();
+export const forgetKnowledge = (boardId: string) => knowledgeCache.delete(boardId);
 
 /**
  * The agent runtime's storage in the browser: the Firestore web SDK, signed
@@ -71,6 +76,19 @@ export const firestoreStore = (settings: AISettings): AgentStore => ({
         const notes = snap.docs.map(d => ({ id: d.id, ...d.data() }) as MemoryNote);
         cacheNotes(boardId, notes);
         return notes;
+    },
+
+    async loadKnowledge(boardId) {
+        const cached = knowledgeCache.get(boardId);
+        if (cached && Date.now() - cached.at < NOTES_TTL_MS) return cached.chunks;
+        const snap = await getDocs(query(collection(db, 'boards', boardId, 'kbChunks'), limit(MAX_BOARD_CHUNKS)));
+        const chunks = snap.docs.map(d => ({ id: d.id, ...d.data() }) as KnowledgeChunk);
+        knowledgeCache.set(boardId, { at: Date.now(), chunks });
+        return chunks;
+    },
+
+    async setChunkEmbedding(boardId, chunkId, embedding, model) {
+        await updateDoc(doc(db, 'boards', boardId, 'kbChunks', chunkId), { embedding, embeddingModel: model });
     },
 
     async addNote(boardId, note) {

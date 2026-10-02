@@ -44,12 +44,14 @@ export const recordSpend = async (usage: TokenUsage, requests = 1): Promise<void
             const days = (snapshot.exists() ? (snapshot.data() as SpendState).days : {}) || {};
             const current = days[day] || { requests: 0, tokens: 0 };
 
+            const cost = (current.cost || 0) + (usage.cost || 0);
             transaction.set(ref, {
                 days: {
                     ...days,
                     [day]: {
                         requests: current.requests + requests,
-                        tokens: current.tokens + usage.totalTokens
+                        tokens: current.tokens + usage.totalTokens,
+                        ...(cost ? { cost } : {})
                     }
                 }
             }, { merge: true });

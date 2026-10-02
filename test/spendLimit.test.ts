@@ -34,6 +34,29 @@ describe('the daily ceiling', () => {
         vi.stubGlobal('fetch', vi.fn(async () => Response.json({ choices: [{ message: { content: 'ok' } }], usage: { total_tokens: 42 } })));
         const record = vi.fn(async () => { });
         await complete({ messages: [{ role: 'user', content: 'x' }] }, { openRouterKey: 'k', openRouterModel: 'm', usageHooks: { gate: async () => { }, record } } as any);
-        expect(record).toHaveBeenCalledWith(42);
+        expect(record).toHaveBeenCalledWith(42, undefined);
+    });
+});
+
+describe('cost in dollars', () => {
+    it('reads, adds up and formats what OpenRouter says a request cost', async () => {
+        const { usageFrom, addUsage, formatCost } = await import('../services/usage');
+        const a = usageFrom({ usage: { total_tokens: 10, cost: 0.0012 } });
+        const b = usageFrom({ usage: { total_tokens: 5 } });
+        expect(a.cost).toBe(0.0012);
+        expect(b.cost).toBeUndefined();
+        expect(addUsage(a, a).cost).toBeCloseTo(0.0024);
+        expect(formatCost(0.0024)).toBe('$0.0024');
+        expect(formatCost(1.5)).toBe('$1.50');
+        expect(addToDay({}, 'd', 10, 1, 0.5)).toEqual({ d: { requests: 1, tokens: 10, cost: 0.5 } });
+    });
+
+    it('asks OpenRouter for the cost, and only OpenRouter', async () => {
+        const bodies: any[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (_u: string, init: any) => { bodies.push(JSON.parse(init.body)); return Response.json({ choices: [{ message: { content: 'ok' } }], usage: { total_tokens: 1 } }); }));
+        await complete({ messages: [{ role: 'user', content: 'x' }] }, { openRouterKey: 'k', openRouterModel: 'm', dailyRequestLimit: 0 } as any);
+        await complete({ messages: [{ role: 'user', content: 'x' }] }, { openRouterKey: 'k', openRouterModel: 'm', apiBaseUrl: 'https://api.groq.com/openai/v1', dailyRequestLimit: 0 } as any);
+        expect(bodies[0].usage).toEqual({ include: true });
+        expect(bodies[1].usage).toBeUndefined();
     });
 });

@@ -19,13 +19,18 @@ export const limitMessage = (limit: number): string =>
 
 /** The days map with one more request added to `day`. */
 export const addToDay = (
-    days: Record<string, { requests: number, tokens: number }> | undefined,
+    days: Record<string, { requests: number, tokens: number, cost?: number }> | undefined,
     day: string,
     tokens: number,
-    requests = 1
-): Record<string, { requests: number, tokens: number }> => {
+    requests = 1,
+    cost = 0
+): Record<string, { requests: number, tokens: number, cost?: number }> => {
     const current = days?.[day] || { requests: 0, tokens: 0 };
-    return { ...(days || {}), [day]: { requests: current.requests + requests, tokens: current.tokens + tokens } };
+    const total = (current.cost || 0) + cost;
+    return {
+        ...(days || {}),
+        [day]: { requests: current.requests + requests, tokens: current.tokens + tokens, ...(total ? { cost: total } : {}) }
+    };
 };
 
 /**
@@ -36,5 +41,5 @@ export const addToDay = (
 export interface UsageHooks {
     /** Throws when today's ceiling is reached. */
     gate: () => Promise<void>;
-    record: (tokens: number) => Promise<void>;
+    record: (tokens: number, cost?: number) => Promise<void>;
 }

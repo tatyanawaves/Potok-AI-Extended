@@ -5,5 +5,5 @@
  */
 import worker from './index';
 
-export { AgentTaskWorkflow } from './agentWorkflow';
+export { AgentTaskWorkflow, BotReplyWorkflow } from './agentWorkflow';
 export default worker;

@@ -1,5 +1,6 @@
 import { BoardMessage } from '../../types';
 import { ChannelSummary, MemoryNote } from '../memoryCore';
+import { KnowledgeChunk } from '../knowledgeCore';
 
 /**
  * Everything the agent runtime needs from storage.
@@ -23,6 +24,9 @@ export interface AgentStore {
     loadNotes(boardId: string): Promise<MemoryNote[]>;
     addNote(boardId: string, note: Omit<MemoryNote, 'id' | 'createdAt'>): Promise<void>;
     setNoteEmbedding(boardId: string, noteId: string, embedding: string, model: string): Promise<void>;
+    /** The board's knowledge base passages (services/knowledgeCore); absent: none. */
+    loadKnowledge?(boardId: string): Promise<KnowledgeChunk[]>;
+    setChunkEmbedding?(boardId: string, chunkId: string, embedding: string, model: string): Promise<void>;
     /** Bearer token for a tool server, when it needs one. */
     toolToken(url: string): Promise<string | undefined>;
     /** A board attachment's contents as text, read with the user's own access. */

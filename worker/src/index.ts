@@ -25,7 +25,8 @@
  *   GET  /health
  */
 
-import { handleBotReply } from './botReplies';
+import { handleBotReply, handleBotReplyStatus, type ReplyEnv } from './botReplies';
+import { handleScheduleSave, handleScheduleDelete, runDueSchedules } from './schedules';
 import { botKey } from './botKey';
 import {
     MAX_FILE_BYTES, keyFor, boardKeyFor, putFile,
@@ -60,7 +61,7 @@ interface AttachmentBucket {
     delete(key: string): Promise<void>;
 }
 
-export interface Env extends TaskEnv, OAuthEnv {
+export interface Env extends TaskEnv, ReplyEnv, OAuthEnv {
     /** Cloudflare Browser Rendering, for the cloud browser tool. */
     BROWSER?: unknown;
     FIREBASE_PROJECT_ID: string;
@@ -642,6 +643,12 @@ const handleFileDownload = async (
 };
 
 const worker = {
+    /** The cron trigger (wrangler.toml): scheduled bot requests that are due. */
+    async scheduled(controller: { scheduledTime: number }, env: Env): Promise<void> {
+        const started = await runDueSchedules(env, controller.scheduledTime);
+        if (started) console.log(`[schedules] started ${started}`);
+    },
+
     async fetch(request: Request, env: Env): Promise<Response> {
         const origin = request.headers.get('Origin');
         const cors = corsHeaders(env, origin);
@@ -661,7 +668,9 @@ const worker = {
                 cloudBrowser: Boolean(env.BROWSER),
                 oauthConnectors: Boolean(env.CONNECTOR_TOKENS),
                 serverTasks: Boolean(env.AGENT_TASKS && env.FIREBASE_WEB_API_KEY
-                    && (env.TASK_SEALING_SECRET || env.PIPEDREAM_CLIENT_SECRET))
+                    && (env.TASK_SEALING_SECRET || env.PIPEDREAM_CLIENT_SECRET)),
+                durableReplies: Boolean(env.BOT_REPLIES),
+                schedules: Boolean(env.BOT_REPLIES && env.CONNECTOR_TOKENS)
             }, 200, cors);
         }
 
@@ -746,6 +755,9 @@ const worker = {
                 return await handleMcpRequest(request, `potok-sandbox-${provider}`, sandboxTools(env, uid, provider, board, files), cors);
             }
             if (url.pathname === '/machine') return await handleMachine(request, env, uid, reply, cors);
+            if (url.pathname === '/schedules/save') return await handleScheduleSave(request, env, uid, idToken, reply);
+            if (url.pathname === '/schedules/delete') return await handleScheduleDelete(request, env, uid, reply);
+            if (url.pathname === '/bots/reply/status') return await handleBotReplyStatus(request, env, uid, reply);
             if (url.pathname === '/bots/reply') {
                 return await handleBotReply(request, env, uid, idToken, req => worker.fetch(req, env), (body, status) => json(body, status, cors));
             }

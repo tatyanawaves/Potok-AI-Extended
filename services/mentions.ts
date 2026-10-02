@@ -85,3 +85,14 @@ export const messageAuthor = (
     if (message.orchestrator) return { name: '🧭 Оркестратор', via };
     return { name: nameOf(message.authorId) || message.authorName, via };
 };
+
+/** The people (not bots, not the writer) a message mentions by name. */
+export const mentionedPeople = (mentions: string[], members: BoardMember[], authorId: string): BoardMember[] => {
+    const wanted = new Set(mentions.map(m => m.toLowerCase()));
+    return members.filter(m => !isBot(m) && m.id !== authorId
+        && (wanted.has(m.name.toLowerCase()) || wanted.has(mentionableName(m.name).toLowerCase())));
+};
+
+/** Where a notice leads: the board, channel and thread, as a link the boards page reads. */
+export const mentionLink = (n: { boardId: string, channelId: string, threadId?: string }): string =>
+    `/boards?board=${encodeURIComponent(n.boardId)}&channel=${encodeURIComponent(n.channelId)}${n.threadId ? `&thread=${encodeURIComponent(n.threadId)}` : ''}`;

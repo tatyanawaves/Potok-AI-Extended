@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { translations } from '../translations';
 import { AISettings } from '../types';
 import { Hint } from './Learning';
@@ -6,6 +6,9 @@ import {
     subscribeToSummary, subscribeToNotes, addNote, deleteNote, resetSummary
 } from '../services/agentMemory';
 import { ChannelSummary, EMPTY_SUMMARY, MemoryNote, estimateTokens } from '../services/memoryCore';
+import { KnowledgeDoc, MAX_BOARD_CHUNKS } from '../services/knowledgeCore';
+import { subscribeToKnowledge, addToKnowledge, removeFromKnowledge } from '../services/knowledge';
+import { auth } from '../services/firebase';
 
 /**
  * What the bots remember, made visible: the running summary of this channel
@@ -31,6 +34,22 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, 
 
     useEffect(() => subscribeToSummary(boardId, channelId, setSummary), [boardId, channelId]);
     useEffect(() => subscribeToNotes(boardId, setNotes), [boardId]);
+
+    const [documents, setDocuments] = useState<KnowledgeDoc[]>([]);
+    const [uploading, setUploading] = useState<string | null>(null);
+    const fileInput = useRef<HTMLInputElement>(null);
+    useEffect(() => subscribeToKnowledge(boardId, setDocuments), [boardId]);
+    const usedChunks = documents.reduce((sum, d) => sum + (d.chunks || 0), 0);
+
+    const handleUpload = (file: File | undefined) => file && run(async () => {
+        setUploading('…');
+        try {
+            await addToKnowledge(boardId, file, settings, setUploading);
+        } finally {
+            setUploading(null);
+            if (fileInput.current) fileInput.current.value = '';
+        }
+    });
 
     const run = async (action: () => Promise<void>) => {
         setError(null);
@@ -80,6 +99,56 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, 
                         <p className="text-slate-600 leading-relaxed">
                             {t.noSummaryYet || 'Пока пусто. Когда сообщений станет больше, старые будут сжиматься сюда, и боты перестанут перечитывать их целиком.'}
                         </p>
+                    )}
+                </section>
+
+                <section>
+                    <div className="flex items-center justify-between mb-1.5">
+                        <h4 className="text-[9px] font-mono uppercase tracking-widest text-slate-500">
+                            {t.knowledgeBase || 'База знаний'} · {documents.length}
+                        </h4>
+                        <span className="text-[9px] font-mono text-slate-600">{usedChunks}/{MAX_BOARD_CHUNKS}</span>
+                    </div>
+                    <input
+                        ref={fileInput}
+                        type="file"
+                        accept=".txt,.md,.markdown,.csv,.json,.pdf,.docx,text/*"
+                        className="hidden"
+                        onChange={e => handleUpload(e.target.files?.[0])}
+                    />
+                    <button
+                        onClick={() => fileInput.current?.click()}
+                        disabled={Boolean(uploading)}
+                        className="w-full mb-2 py-1.5 rounded-md border border-dashed border-amber-500/30 text-amber-300 hover:bg-amber-950/20 disabled:opacity-50"
+                    >
+                        {uploading ? `${t.uploadingDoc || 'Загрузка'}: ${uploading}` : `+ ${t.addDocument || 'Документ (PDF, DOCX, TXT, MD)'}`}
+                    </button>
+                    {documents.length === 0 ? (
+                        <p className="text-slate-600 leading-relaxed">
+                            {t.noKnowledgeYet || 'Загрузите регламенты, инструкции, договоры — боты найдут нужный фрагмент и сошлются на него: [Название §3].'}
+                        </p>
+                    ) : (
+                        <ul className="space-y-1.5">
+                            {documents.map(d => (
+                                <li key={d.id} className="group flex gap-2 items-start">
+                                    <span className="flex-1 text-slate-300 leading-snug break-words">
+                                        📄 {d.title}
+                                        <span className="block text-[9px] font-mono text-slate-600">
+                                            {d.chunks} {t.passagesShort || 'фрагм.'} · {(d.chars || 0) < 1000 ? d.chars || 0 : `${Math.round(d.chars / 1000)}K`} {t.charsShort || 'симв.'} · {d.addedByName}
+                                        </span>
+                                    </span>
+                                    {(isOwner || d.addedBy === auth.currentUser?.uid) && (
+                                        <button
+                                            onClick={() => window.confirm(`${t.removeDocumentConfirm || 'Убрать из базы знаний'}: ${d.title}?`) && run(() => removeFromKnowledge(boardId, d.id))}
+                                            className="text-slate-600 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100"
+                                            title={t.delete || 'Удалить'}
+                                        >
+                                            ✕
+                                        </button>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
                     )}
                 </section>
 

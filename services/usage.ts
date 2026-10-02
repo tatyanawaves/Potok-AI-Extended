@@ -25,15 +25,24 @@ export const usageFrom = (data: any): TokenUsage => {
     const prompt = Number(usage.prompt_tokens ?? usage.promptTokenCount ?? 0) || 0;
     const completion = Number(usage.completion_tokens ?? usage.candidatesTokenCount ?? 0) || 0;
     const total = Number(usage.total_tokens ?? usage.totalTokenCount ?? 0) || prompt + completion;
+    const cost = Number(usage.cost ?? 0) || 0;
 
-    return { promptTokens: prompt, completionTokens: completion, totalTokens: total };
+    return { promptTokens: prompt, completionTokens: completion, totalTokens: total, ...(cost ? { cost } : {}) };
 };
 
-export const addUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => ({
-    promptTokens: a.promptTokens + b.promptTokens,
-    completionTokens: a.completionTokens + b.completionTokens,
-    totalTokens: a.totalTokens + b.totalTokens
-});
+export const addUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => {
+    const cost = (a.cost || 0) + (b.cost || 0);
+    return {
+        promptTokens: a.promptTokens + b.promptTokens,
+        completionTokens: a.completionTokens + b.completionTokens,
+        totalTokens: a.totalTokens + b.totalTokens,
+        ...(cost ? { cost } : {})
+    };
+};
+
+/** Dollars as people read them: cents for anything over a cent, more digits below. */
+export const formatCost = (usd: number): string =>
+    usd >= 0.01 ? `$${usd.toFixed(2)}` : usd > 0 ? `$${usd.toFixed(4)}` : '$0';
 
 export const spendOn = (state: SpendState | null, day: string = dayKey()): DailySpend =>
     state?.days?.[day] || { requests: 0, tokens: 0 };

@@ -31,7 +31,7 @@ export const setUsageGate = (gate: UsageGate): void => { usageGate = gate; };
 
 const reportUsage = async (usage: TokenUsage, settings?: AISettings) => {
     try {
-        if (settings?.usageHooks) await settings.usageHooks.record(usage.totalTokens);
+        if (settings?.usageHooks) await settings.usageHooks.record(usage.totalTokens, usage.cost);
         else await usageSink(usage);
     } catch { /* a counter must not break a reply */ }
 };
@@ -168,7 +168,33 @@ export const isFatalProviderError = (error: unknown): boolean =>
 
 // --- Fallback models ---------------------------------------------------------
 
-let freeModels: Promise<Array<{ id: string, tools: boolean }>> | null = null;
+/** A free model as OpenRouter lists it, for the model picker and for fallbacks. */
+export interface FreeModel {
+    id: string;
+    name: string;
+    /** Can call tools; bots with tools need it. */
+    tools: boolean;
+    /** Accepts images. */
+    vision: boolean;
+    contextLength: number;
+}
+
+let freeModels: Promise<FreeModel[]> | null = null;
+
+/** Turns OpenRouter's /models answer into the free models worth offering. */
+export const parseFreeModels = (body: any): FreeModel[] => (body?.data || [])
+    .filter((m: any) => String(m.id).endsWith(':free')
+        && !/safety|guard/i.test(m.id)
+        && (m.context_length || 0) >= 16000)
+    .map((m: any) => ({
+        id: String(m.id),
+        name: String(m.name || m.id).replace(/\s*\(free\)\s*$/i, ''),
+        tools: (m.supported_parameters || []).includes('tools'),
+        vision: (m.architecture?.input_modalities || []).includes('image'),
+        contextLength: Number(m.context_length) || 0
+    }))
+    // Tool-capable first (bots need them), then the larger context.
+    .sort((a: FreeModel, b: FreeModel) => Number(b.tools) - Number(a.tools) || b.contextLength - a.contextLength);
 
 /**
  * OpenRouter's current free models, read once from its public list.
@@ -176,14 +202,10 @@ let freeModels: Promise<Array<{ id: string, tools: boolean }>> | null = null;
  * Free models come and go every few weeks, so a hard-coded list is what made
  * "no such model" errors in the first place.
  */
-export const openRouterFreeModels = (): Promise<Array<{ id: string, tools: boolean }>> => {
+export const openRouterFreeModels = (): Promise<FreeModel[]> => {
     freeModels ??= fetch(`${DEFAULT_BASE_URL}/models`)
         .then(r => r.ok ? r.json() : { data: [] })
-        .then((body: any) => (body?.data || [])
-            .filter((m: any) => String(m.id).endsWith(':free')
-                && !/safety|guard/i.test(m.id)
-                && (m.context_length || 0) >= 16000)
-            .map((m: any) => ({ id: m.id, tools: (m.supported_parameters || []).includes('tools') })))
+        .then(parseFreeModels)
         .catch(() => { freeModels = null; return []; });
     return freeModels;
 };
@@ -349,6 +371,8 @@ export const complete = async (
     };
     if (request.tools?.length) body.tools = request.tools;
     if (request.onDelta) body.stream = true;
+    // OpenRouter adds what the request cost, in dollars, to the usage block.
+    if (openRouter) body.usage = { include: true };
     if (request.maxTokens) body.max_tokens = request.maxTokens;
     if (request.json) body.response_format = { type: 'json_object' };
 

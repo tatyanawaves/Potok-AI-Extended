@@ -72,7 +72,7 @@ interface Secrets {
 
 export const taskPath = (boardId: string, taskId: string) => `boards/${boardId}/tasks/${taskId}`;
 
-const sealingSecret = (env: TaskEnv) => env.TASK_SEALING_SECRET || env.PIPEDREAM_CLIENT_SECRET || '';
+export const sealingSecret = (env: TaskEnv) => env.TASK_SEALING_SECRET || env.PIPEDREAM_CLIENT_SECRET || '';
 
 export const firestoreConfig = (env: TaskEnv): FirestoreConfig => {
     if (!env.FIREBASE_WEB_API_KEY) throw new Error('Server tasks are not configured: FIREBASE_WEB_API_KEY');
@@ -87,7 +87,7 @@ export const firestoreConfig = (env: TaskEnv): FirestoreConfig => {
 /** A token source that is just the caller's current ID token. */
 export const fixedToken = (idToken: string) => ({ get: async () => idToken }) as unknown as TokenSource;
 
-const decodePayload = (jwt: string): any => {
+export const decodePayload = (jwt: string): any => {
     try {
         const part = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
         return JSON.parse(atob(part + '='.repeat((4 - part.length % 4) % 4)));
