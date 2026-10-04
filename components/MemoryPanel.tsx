@@ -105,7 +105,7 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, 
                 <section>
                     <div className="flex items-center justify-between mb-1.5">
                         <h4 className="text-[9px] font-mono uppercase tracking-widest text-slate-500">
-                            {t.knowledgeBase || 'База знаний'} · {documents.length}
+                            {t.knowledgeBase || 'База знаний'} · {documents.length} <Hint id="knowledge" />
                         </h4>
                         <span className="text-[9px] font-mono text-slate-600">{usedChunks}/{MAX_BOARD_CHUNKS}</span>
                     </div>

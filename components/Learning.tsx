@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { GUIDES, Guide, guideById } from '../services/guides';
 
 /**
- * Learning mode: a help centre (🎓 in the header) with a guide per feature,
+ * Learning mode: a help centre (the mortarboard icon in the header) with a guide per feature,
  * and — while "show hints" is on — a "?" next to each feature that opens its
  * guide. The guides themselves are data, in services/guides.
  */
@@ -50,7 +50,7 @@ export const LearningProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             {children}
             {view?.kind === 'center' && (
                 <Modal onClose={() => setView(null)}>
-                    <h3 className="text-lg font-bold font-display text-white">🎓 Обучение</h3>
+                    <h3 className="text-lg font-bold font-display text-white">Обучение</h3>
                     <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
                         <input type="checkbox" checked={hintsOn} onChange={(e) => setHintsOn(e.target.checked)} className="accent-cyan-500" />
                         Показывать подсказки «?» рядом с функциями
