@@ -11,3 +11,19 @@ describe('sandbox paths', () => {
         expect(resolvePath('  ', '/root')).toBe('/root');
     });
 });
+
+describe('which sandbox a person is on', () => {
+    it('is found again right after it was created, though KV still reports it missing', async () => {
+        const { boxStore } = await import('../worker/src/sandbox');
+        // KV as it behaves for a fresh key: the write lands, reads lag behind.
+        const writes: string[] = [];
+        const laggingKv = { get: async () => null, put: async (key: string) => { writes.push(key); }, delete: async () => { } };
+        const store = boxStore(laggingKv);
+        expect(await store.get('box:u1:e2b')).toBeNull();
+        await store.put('box:u1:e2b', '{"id":"sb-1"}', 1500);
+        expect(await store.get('box:u1:e2b')).toBe('{"id":"sb-1"}');
+        expect(writes).toEqual(['box:u1:e2b']);
+        await store.delete('box:u1:e2b');
+        expect(await store.get('box:u1:e2b')).toBeNull();
+    });
+});

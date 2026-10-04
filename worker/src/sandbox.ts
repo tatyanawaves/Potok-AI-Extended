@@ -44,6 +44,34 @@ const keyName = (uid: string, p: KeyKind) => `key:${uid}:${p}`;
 const boxName = (uid: string, p: Provider) => `box:${uid}:${p}`;
 /** How long a sandbox id is reused; the provider's own idle timeout is similar. */
 const REUSE_SECONDS = 25 * 60;
+
+/**
+ * Which sandbox a person is on, remembered in this isolate as well as KV.
+ *
+ * KV is eventually consistent, and a key that was missing is reported
+ * missing for up to a minute after it is written. So the second tool call of
+ * a reply asked KV for the sandbox the first call had just created, got
+ * nothing, and created another, empty one: a file written by one call was
+ * never there for the next. A reply's tool calls run in one isolate (they
+ * reach this worker in-process), so remembering here keeps them on one box.
+ */
+const remembered = new Map<string, { value: string | null, until: number }>();
+
+export const boxStore = (kv: { get(key: string): Promise<string | null>, put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>, delete(key: string): Promise<void> }) => ({
+    get: async (key: string): Promise<string | null> => {
+        const known = remembered.get(key);
+        if (known && known.until > Date.now()) return known.value;
+        return kv.get(key);
+    },
+    put: async (key: string, value: string, ttlSeconds?: number) => {
+        remembered.set(key, { value, until: Date.now() + (ttlSeconds ?? REUSE_SECONDS) * 1000 });
+        await kv.put(key, value, ttlSeconds ? { expirationTtl: ttlSeconds } : undefined);
+    },
+    delete: async (key: string) => {
+        remembered.set(key, { value: null, until: Date.now() + 60_000 });
+        await kv.delete(key);
+    }
+});
 const MAX_OUTPUT = 8000;
 
 const DAYTONA_API = 'https://app.daytona.io/api';
@@ -188,7 +216,7 @@ const GONE = ['destroyed', 'destroying', 'error', 'build_failed'];
  * user deletes the machine.
  */
 const ensureDaytona = async (env: SandboxEnv, uid: string, key: string, board?: string): Promise<DaytonaBox> => {
-    const kv = env.CONNECTOR_TOKENS!;
+    const kv = boxStore(env.CONNECTOR_TOKENS!);
     const name = board ? machineName(uid, board) : boxName(uid, 'daytona');
     const cached = await kv.get(name);
     let box: DaytonaBox | null = cached ? JSON.parse(cached) : null;
@@ -229,7 +257,7 @@ const ensureDaytona = async (env: SandboxEnv, uid: string, key: string, board?: 
     if (!started) throw new Error('Daytona: машина ещё запускается, повторите через минуту');
 
     box.verifiedAt = Date.now();
-    await kv.put(name, JSON.stringify(box), board ? undefined : { expirationTtl: REUSE_SECONDS });
+    await kv.put(name, JSON.stringify(box), board ? undefined : REUSE_SECONDS);
     return box;
 };
 
@@ -356,7 +384,7 @@ export const handleMachine = async (
     const key = await userKey(env, uid, 'daytona');
     if (!key) return json({ key: false }, 200);
 
-    const kv = env.CONNECTOR_TOKENS;
+    const kv = boxStore(env.CONNECTOR_TOKENS);
     const cached = await kv.get(machineName(uid, board));
     const box: DaytonaBox | null = cached ? JSON.parse(cached) : null;
     const path = typeof body.path === 'string' && body.path ? body.path : '~';
@@ -417,7 +445,7 @@ export const handleMachine = async (
  * shell and file work go through Python, which keeps to plain HTTP.
  */
 const e2b = async (env: SandboxEnv, uid: string, key: string): Promise<Backend> => {
-    const kv = env.CONNECTOR_TOKENS!;
+    const kv = boxStore(env.CONNECTOR_TOKENS!);
     const cached = await kv.get(boxName(uid, 'e2b'));
     let box: { id: string, domain: string, token?: string } | null = cached ? JSON.parse(cached) : null;
 
@@ -438,7 +466,7 @@ const e2b = async (env: SandboxEnv, uid: string, key: string): Promise<Backend> 
         const s: any = await r.json();
         box = { id: s.sandboxID, domain: s.domain || 'e2b.app', token: s.envdAccessToken };
     }
-    await kv.put(boxName(uid, 'e2b'), JSON.stringify(box), { expirationTtl: REUSE_SECONDS });
+    await kv.put(boxName(uid, 'e2b'), JSON.stringify(box), REUSE_SECONDS);
 
     const execute = async (code: string, language = 'python'): Promise<string> => {
         const r = await fetch(`https://49999-${box!.id}.${box!.domain}/execute`, {
@@ -481,7 +509,9 @@ const e2b = async (env: SandboxEnv, uid: string, key: string): Promise<Backend> 
         shell: async command => execute(`${await atHome()}import subprocess\nr = subprocess.run(${py(command)}, shell=True, capture_output=True, text=True, timeout=120)\nprint("exit", r.returncode)\nprint(r.stdout + r.stderr)`),
         writeFile: async (path, content) => {
             const full = resolvePath(path, await homeDir());
-            await execute(`import os\nos.makedirs(os.path.dirname(${py(full)}) or "/", exist_ok=True)\nopen(${py(full)}, "w", encoding="utf-8").write(${py(content)})`);
+            const out = await execute(`import os\nos.makedirs(os.path.dirname(${py(full)}) or "/", exist_ok=True)\nopen(${py(full)}, "w", encoding="utf-8").write(${py(content)})\nprint("saved", os.path.getsize(${py(full)}))`);
+            // Said "Saved" only when the file is there.
+            if (!/saved \d+/.test(out)) throw new Error(`Не удалось записать ${full}: ${out.slice(0, 500)}`);
             return `Saved ${full} (${content.length} chars)`;
         },
         readFile: async path => execute(`print(open(${py(resolvePath(path, await homeDir()))}, encoding="utf-8").read())`),
@@ -506,7 +536,7 @@ const backendFor = async (env: SandboxEnv, uid: string, provider: Provider, boar
     const box = await ensureDaytona(env, uid, key, board);
     const name = board ? machineName(uid, board) : boxName(uid, 'daytona');
     return daytonaBackend(key, box, async home => {
-        await env.CONNECTOR_TOKENS!.put(name, JSON.stringify({ ...box, home }), board ? undefined : { expirationTtl: REUSE_SECONDS });
+        await boxStore(env.CONNECTOR_TOKENS!).put(name, JSON.stringify({ ...box, home }), board ? undefined : REUSE_SECONDS);
     });
 };
 
