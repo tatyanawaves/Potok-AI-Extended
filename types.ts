@@ -78,6 +78,11 @@ export interface AISettings {
   /** Server only, never stored: counts and limits one task's requests. */
   usageHooks?: import('./services/spendLimit').UsageHooks;
   /**
+   * On the server: outgoing requests this run may still make (worker/src/budget).
+   * The bot wraps up with a report while enough is left to post it.
+   */
+  budget?: { left(): number };
+  /**
    * Embedding model on the same API, for finding notes by meaning. Empty
    * means keyword search only.
    */

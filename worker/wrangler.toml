@@ -20,6 +20,10 @@ PIPEDREAM_ENVIRONMENT = "development"
 # `npm run dev` serves over HTTPS (basicSsl), so https://localhost:3000 is the
 # origin the browser actually sends — without it attachments fail locally with
 # a bare "Failed to fetch". The http variants cover a plain-HTTP dev server.
+# Outgoing requests one server reply may make (src/budget.ts). 50 is the
+# Workers Free plan's cap; on Workers Paid raise it to 10000.
+SUBREQUEST_LIMIT = "50"
+
 ALLOWED_ORIGINS = "https://localhost:3000,http://localhost:3000,https://localhost:3001,http://localhost:3001,https://neon-extended.web.app,https://neon-extended.firebaseapp.com"
 
 # Attachment storage. Firebase Storage needs the Blaze plan, which this project

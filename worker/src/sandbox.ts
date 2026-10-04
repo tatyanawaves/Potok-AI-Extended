@@ -148,7 +148,21 @@ export const resolvePath = (raw: string, home: string): string => {
 export const BOARD_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const machineName = (uid: string, board: string) => `box:${uid}:daytona:board:${board}`;
 
-interface DaytonaBox { id: string, toolbox: string }
+interface DaytonaBox {
+    id: string;
+    toolbox: string;
+    /** When it was last seen running; within VERIFIED_FOR_MS it is not asked again. */
+    verifiedAt?: number;
+    /** Its home directory, once known (see resolvePath). */
+    home?: string;
+}
+
+/**
+ * A machine seen running this recently is used without asking Daytona again:
+ * it stops itself only after 15 idle minutes. Each question is an outgoing
+ * request, and a server run may make only so many (./budget).
+ */
+const VERIFIED_FOR_MS = 5 * 60_000;
 
 export const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
@@ -178,6 +192,7 @@ const ensureDaytona = async (env: SandboxEnv, uid: string, key: string, board?: 
     const name = board ? machineName(uid, board) : boxName(uid, 'daytona');
     const cached = await kv.get(name);
     let box: DaytonaBox | null = cached ? JSON.parse(cached) : null;
+    if (box?.verifiedAt && Date.now() - box.verifiedAt < VERIFIED_FOR_MS) return box;
 
     if (box) {
         const s = await daytonaState(key, box.id);
@@ -213,12 +228,13 @@ const ensureDaytona = async (env: SandboxEnv, uid: string, key: string, board?: 
     }
     if (!started) throw new Error('Daytona: машина ещё запускается, повторите через минуту');
 
+    box.verifiedAt = Date.now();
     await kv.put(name, JSON.stringify(box), board ? undefined : { expirationTtl: REUSE_SECONDS });
     return box;
 };
 
 /** Drives a running Daytona sandbox through its toolbox API. */
-const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
+const daytonaBackend = (key: string, box: DaytonaBox, rememberHome?: (home: string) => Promise<void>): Backend => {
     const base = `${box.toolbox}/${box.id}`;
     const call = async (path: string, init: RequestInit) => {
         const r = await fetch(`${base}${path}`, { ...init, headers: { ...daytonaAuth(key), ...(init.headers || {}) } });
@@ -241,7 +257,13 @@ const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
     // Where "~" goes for commands, asked of the shell itself: $HOME can be
     // empty in the process API, and guessing /home/daytona then put files in
     // one place while commands and code looked in /root.
-    const homeDir = () => (home ??= execute('cd ~ && pwd').then(r => r.result.trim().split('\n').pop() || '/root'));
+    const homeDir = () => (home ??= box.home
+        ? Promise.resolve(box.home)
+        : execute('cd ~ && pwd').then(r => {
+            const found = r.result.trim().split('\n').pop() || '/root';
+            rememberHome?.(found).catch(() => { });
+            return found;
+        }));
     // The file API takes paths as they are; "~" and relative paths are the shell's, so they are resolved here.
     const expandHome = async (path: string) => resolvePath(path, await homeDir());
 
@@ -268,7 +290,7 @@ const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
         writeFile: async (path, content) => {
             const full = await expandHome(path);
             const dir = full.slice(0, full.lastIndexOf('/')) || '/';
-            await execute(`mkdir -p ${shellQuote(dir)}`);
+            if (dir !== await homeDir()) await execute(`mkdir -p ${shellQuote(dir)}`);
             await upload(full, new Blob([content]));
             return `Saved ${full} (${content.length} chars)`;
         },
@@ -370,7 +392,11 @@ export const handleMachine = async (
             return json({ ok: true }, 200);
         }
         case 'stop': {
-            if (box) await fetch(`${DAYTONA_API}/sandbox/${box.id}/stop`, { method: 'POST', headers: daytonaAuth(key) });
+            if (box) {
+                await fetch(`${DAYTONA_API}/sandbox/${box.id}/stop`, { method: 'POST', headers: daytonaAuth(key) });
+                // Not running any more: the next tool call asks Daytona and starts it.
+                await kv.put(machineName(uid, board), JSON.stringify({ ...box, verifiedAt: 0 }));
+            }
             return json({ ok: true }, 200);
         }
         case 'delete': {
@@ -476,7 +502,12 @@ open(${py(path)}, "wb").write(base64.b64decode(${py(btoa(binary))}))`);
 const backendFor = async (env: SandboxEnv, uid: string, provider: Provider, board?: string): Promise<Backend> => {
     const key = await userKey(env, uid, provider);
     if (!key) throw new Error(`Ключ ${provider === 'e2b' ? 'E2B' : 'Daytona'} не сохранён — добавьте его в Настройках Potok`);
-    return provider === 'daytona' ? daytonaBackend(key, await ensureDaytona(env, uid, key, board)) : e2b(env, uid, key);
+    if (provider !== 'daytona') return e2b(env, uid, key);
+    const box = await ensureDaytona(env, uid, key, board);
+    const name = board ? machineName(uid, board) : boxName(uid, 'daytona');
+    return daytonaBackend(key, box, async home => {
+        await env.CONNECTOR_TOKENS!.put(name, JSON.stringify({ ...box, home }), board ? undefined : { expirationTtl: REUSE_SECONDS });
+    });
 };
 
 /** What the import tool needs: the board's files, and whether the caller may read them. */

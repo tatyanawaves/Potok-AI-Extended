@@ -508,3 +508,24 @@ describe('a task that needs every tool round', () => {
         expect(result.reply).toBe('1) готово 2) готово 3) не успел');
     });
 });
+
+describe('a reply on a tight server budget', () => {
+    it('stops calling tools and reports while enough is left to post', async () => {
+        const url = 'https://worker/tools/sandbox?provider=daytona&budget=1';
+        let left = 20;
+        // The tool call spends most of what is left.
+        fakeMcp({ [`${url}&board=b`]: { tools: [{ name: 'sandbox_shell' }], call: () => { left -= 15; return 'exit 0'; } } });
+        const requests = fakeModel([
+            { tool_calls: [call('sandbox_shell', { command: 'echo 1' }, 'c1')] },
+            { content: '1) готово 2) не успел: кончился лимит запросов сервера' }
+        ]);
+        const budgeted = { ...settings, budget: { left: () => left } };
+
+        const result = await runBotTurn({ store: store(), agent: bot([url]), boardId: 'b', channelId: 'c', channelName: 'g', settings: budgeted, toolPolicy: 'auto' });
+
+        expect(requests[0].tools).toBeDefined();
+        expect(requests.at(-1).tools).toBeUndefined();
+        expect(requests.at(-1).messages.at(-1).content).toContain('No tool calls are left');
+        expect(result.reply).toContain('не успел');
+    });
+});

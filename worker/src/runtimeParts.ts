@@ -54,6 +54,41 @@ export const usageHooksFor = (rest: FirestoreRest, uid: string, settings: { dail
     };
 };
 
+/**
+ * The same tally for one reply, in two requests instead of three per model
+ * call: today's count is read once, kept here, and written once by flush().
+ * A reply's model calls run one after another, so nothing is lost between them.
+ */
+export const batchedUsageHooksFor = (rest: FirestoreRest, uid: string, settings: { dailyRequestLimit?: number }): UsageHooks & { flush(): Promise<void> } => {
+    const spendPath = `users/${uid}/private/spend`;
+    const limit = dailyLimitOf(settings);
+    let loaded: Promise<{ exists: boolean, days: any }> | null = null;
+    const load = () => (loaded ??= rest.get(spendPath)
+        .then(doc => ({ exists: Boolean(doc), days: doc?.data?.days }))
+        .catch(() => ({ exists: false, days: undefined })));
+    let pending = { tokens: 0, requests: 0, cost: 0 };
+    return {
+        gate: async () => {
+            if (limit <= 0) return;
+            const { days } = await load();
+            const used = Number(days?.[dayKey()]?.requests || 0) + pending.requests;
+            if (overLimit(used, limit)) throw new Error(limitMessage(limit));
+        },
+        record: async (tokens, cost) => {
+            pending = { tokens: pending.tokens + tokens, requests: pending.requests + 1, cost: pending.cost + (cost || 0) };
+        },
+        flush: async () => {
+            if (!pending.requests) return;
+            // Read again just before writing: another reply may have counted meanwhile.
+            const doc = await rest.get(spendPath).catch(() => null);
+            const days = addToDay(doc?.data?.days, dayKey(), pending.tokens, pending.requests, pending.cost);
+            pending = { tokens: 0, requests: 0, cost: 0 };
+            if (doc) await rest.update(spendPath, { days });
+            else await rest.create(`users/${uid}/private`, { days }, 'spend');
+        }
+    };
+};
+
 /** How long a person has to answer a tool request before it counts as a no. */
 export const APPROVAL_TIMEOUT_MS = 120_000;
 const APPROVAL_POLL_MS = 1_500;
@@ -89,14 +124,20 @@ export const approvalVia = (rest: FirestoreRest, boardId: string, uid: string, s
     };
 
 /** How often a reply being written is saved for the channel to show. */
-const DRAFT_EVERY_MS = 800;
+const DRAFT_EVERY_MS = 2500;
+/**
+ * Draft saves per reply at most. Each is an outgoing request, and a server
+ * run has a budget of them (./budget); the reply itself matters more.
+ */
+const MAX_DRAFT_WRITES = 8;
 
 /**
  * The reply as the model writes it, kept in a draft document the channel
  * shows until the finished message arrives. Throttled; `done` removes it.
  */
-export const draftWriter = (rest: FirestoreRest, boardId: string, channelId: string, uid: string) => {
+export const draftWriter = (rest: FirestoreRest, boardId: string, channelId: string, uid: string, budget?: { left(): number }) => {
     const pending = new Map<string, { name: string, text: string }>();
+    let writes = 0;
     const written = new Set<string>();
     let timer: ReturnType<typeof setTimeout> | null = null;
     let chain = Promise.resolve();
@@ -107,6 +148,9 @@ export const draftWriter = (rest: FirestoreRest, boardId: string, channelId: str
         pending.clear();
         chain = chain.then(async () => {
             for (const [botId, { name, text }] of batch) {
+                // Out of saves or close to the budget's reserve: the finished reply will show instead.
+                if (writes >= MAX_DRAFT_WRITES || (budget && budget.left() < 15)) continue;
+                writes++;
                 const path = `boards/${boardId}/channels/${channelId}/drafts/${botId}`;
                 const data = { botName: name, text: text.slice(-8000), postedBy: uid, updatedAt: Date.now() };
                 try {

@@ -24,7 +24,8 @@ import { untilAborted } from '../../services/llm';
 import { setMcpFetch } from '../../services/mcp';
 import { FirestoreRest, TokenSource, restAgentStore } from './firestoreRest';
 import { firestoreConfig, fixedToken, decodePayload, sealingSecret, type TaskEnv } from './agentTasks';
-import { fileReaders, usageHooksFor, approvalVia, draftWriter } from './runtimeParts';
+import { fileReaders, batchedUsageHooksFor, approvalVia, draftWriter } from './runtimeParts';
+import { withBudget, limitOf } from './budget';
 import { signerFor, verifierFor } from './botKey';
 import { BOARD_ID } from './sandbox';
 import { seal } from './taskCrypto';
@@ -102,12 +103,21 @@ const paramsFrom = (body: any, uid: string, selfOrigin: string): Omit<ReplyParam
  * Writes the bots' replies to one mention. Shared by the inline path and the
  * Workflow step; `tokens` signs in as the caller.
  */
-export const runBotReply = async (
-    env: TaskEnv,
+export const runBotReply = (
+    env: TaskEnv & { SUBREQUEST_LIMIT?: string },
     params: Omit<ReplyParams, 'sealed'>,
     secrets: ReplySecrets,
     tokens: { get(): Promise<string> },
     selfFetch: (request: Request) => Promise<Response>
+): Promise<ReplyOutcome> => withBudget(limitOf(env), budget => replyWithin(env, params, secrets, tokens, selfFetch, budget));
+
+const replyWithin = async (
+    env: TaskEnv,
+    params: Omit<ReplyParams, 'sealed'>,
+    secrets: ReplySecrets,
+    tokens: { get(): Promise<string> },
+    selfFetch: (request: Request) => Promise<Response>,
+    budget: { left(): number }
 ): Promise<ReplyOutcome> => {
     const { uid, boardId, channelId, selfOrigin } = params;
     const rest = new FirestoreRest(firestoreConfig(env), tokens as TokenSource);
@@ -137,9 +147,12 @@ export const runBotReply = async (
         userType: 'agent',
         following: []
     } as AISettings;
-    settings.usageHooks = usageHooksFor(rest, uid, settings);
+    const usage = batchedUsageHooksFor(rest, uid, settings);
+    settings.usageHooks = usage;
+    // Free-plan Workers get 50 outgoing requests per run: the bot wraps up in time.
+    settings.budget = budget;
 
-    const drafts = draftWriter(rest, boardId, channelId, uid);
+    const drafts = draftWriter(rest, boardId, channelId, uid, budget);
     const idOf = (name: string) => members.find(m => m.name === name)?.id || name;
     // However slow the models are, the person hears back in bounded time.
     const deadline = new AbortController();
@@ -170,6 +183,7 @@ export const runBotReply = async (
     } finally {
         clearTimeout(timer);
         await drafts.done();
+        await usage.flush().catch(error => console.error('[usage] tally not saved', error));
     }
     return { ok: true };
 };
