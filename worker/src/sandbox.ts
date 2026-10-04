@@ -578,7 +578,7 @@ export const sandboxTools = (
         },
         {
             name: 'sandbox_shell',
-            description: `Run a shell command in the sandbox (install packages, run scripts, git clone, build); chain several with &&. ${sameFiles}`,
+            description: 'Run a shell command in the sandbox (install packages, run scripts, git clone, build); chain several with &&. Same files as the other sandbox tools.',
             inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
             run: async a => (await get()).shell(String(a.command || ''))
         },
@@ -590,7 +590,7 @@ export const sandboxTools = (
         },
         {
             name: 'sandbox_read_file',
-            description: `Read a text file from the sandbox. ${sameFiles}`,
+            description: 'Read a text file from the sandbox (same files as the other sandbox tools).',
             inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
             run: async a => (await get()).readFile(String(a.path || ''))
         }

@@ -87,7 +87,25 @@ export interface CompletionRequest {
      * reply can be read while the model is still writing it.
      */
     onDelta?: (textSoFar: string) => void;
+    /**
+     * How much a reasoning model may think before answering. 'low' for
+     * routine steps: thinking tokens are counted and paid like any others,
+     * and running a command it already planned needs little of it.
+     */
+    reasoning?: 'low';
 }
+
+/**
+ * Providers that cache a prompt prefix only when asked (Anthropic, Gemini
+ * through OpenRouter): the system prompt is marked, so later rounds of a
+ * reply pay a fraction for it. Others cache by themselves or not at all.
+ */
+export const markCacheable = (messages: ChatMessage[], model: string): ChatMessage[] => {
+    if (!/^(anthropic|google)\//.test(model)) return messages;
+    return messages.map((m, i) => i === 0 && m.role === 'system' && typeof m.content === 'string'
+        ? { ...m, content: [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }] as any }
+        : m);
+};
 
 export const baseUrlOf = (settings?: AISettings): string =>
     (settings?.apiBaseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/$/, '');
@@ -366,9 +384,11 @@ export const complete = async (
 
     const body: Record<string, any> = {
         model,
-        messages: request.messages,
+        messages: openRouter ? markCacheable(request.messages, model) : request.messages,
         temperature: request.temperature ?? 0.7
     };
+    // Understood by OpenRouter for reasoning models and ignored by the rest.
+    if (openRouter && request.reasoning) body.reasoning = { effort: request.reasoning };
     if (request.tools?.length) body.tools = request.tools;
     if (request.onDelta) body.stream = true;
     // OpenRouter adds what the request cost, in dollars, to the usage block.

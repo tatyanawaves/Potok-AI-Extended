@@ -1,3 +1,4 @@
+import { plainReply } from '../../services/replyText';
 import React from 'react';
 import { BoardMessage } from '../../types';
 import { RichText } from '../RichText';
@@ -125,7 +126,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
                     <div className={`text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed mt-0.5 ${msg.forwardedFrom ? 'border-l-2 border-cyan-500/30 pl-2' : ''}`}>
                         {msg.terminal?.length && parseTerminalCommand(msg.content)
                             ? msg.content.trim().split(/\s/)[0]
-                            : <RichText text={msg.content} />}
+                            : <RichText text={msg.authorType === 'agent' ? plainReply(msg.content) : msg.content} />}
                     </div>
 
                     {msg.attachments?.map(a => (

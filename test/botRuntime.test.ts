@@ -529,3 +529,30 @@ describe('a reply on a tight server budget', () => {
         expect(result.reply).toContain('не успел');
     });
 });
+
+describe('the tokens a long reply spends', () => {
+    it('resends only the last round in full, and asks for little reasoning after the first', async () => {
+        const url = 'https://worker/tools/sandbox?provider=e2b&tokens=1';
+        fakeMcp({ [`${url}&board=b`]: { tools: [{ name: 'sandbox_shell' }], call: (_n, args) => `${args.command}:` + 'x'.repeat(3000) } });
+        const requests = fakeModel([
+            { tool_calls: [call('sandbox_shell', { command: 'one' }, 'c1')] },
+            { tool_calls: [call('sandbox_shell', { command: 'two' }, 'c2')] },
+            { content: 'готово' }
+        ]);
+
+        await runBotTurn({ store: store(), agent: bot([url]), boardId: 'b', channelId: 'c', channelName: 'g', settings, toolPolicy: 'auto' });
+
+        const results = (r: any) => r.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content.length);
+        const [first, , third] = requests;
+        expect(first.reasoning).toBeUndefined();
+        const [older, newer] = results(third);
+        expect(older).toBeLessThan(1000);
+        expect(newer).toBeGreaterThan(3000);
+    });
+
+    it('posts a JSON-shaped reply as text', async () => {
+        fakeModel([{ content: '{"summary":"Всё сделано.","facts":["сумма 15000"]}' }]);
+        const result = await runBotTurn({ store: store(), agent: bot([]), boardId: 'b', channelId: 'c', channelName: 'g', settings });
+        expect(result.reply).toBe('Всё сделано.\n\n- сумма 15000');
+    });
+});
