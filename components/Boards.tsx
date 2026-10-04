@@ -1237,6 +1237,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                         {t.computer || 'Компьютер'}
                                     </button>
                                 )}
+                                {activeChannelId && <Hint id="computer" />}
 
                                 {activeChannelId && (
                                     <button
@@ -1249,6 +1250,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                         {t.schedules || 'Расписание'}
                                     </button>
                                 )}
+                                {activeChannelId && <Hint id="schedules" />}
 
                                 {activeChannelId && (
                                     <button

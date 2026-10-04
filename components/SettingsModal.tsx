@@ -338,7 +338,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      {t.dailyLimitLabel || 'Лимит запросов к модели в день'}
+                      {t.dailyLimitLabel || 'Лимит запросов к модели в день'} <Hint id="spend" />
                     </label>
                     <input
                       type="number"
@@ -588,7 +588,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
           <div className="space-y-2">
             <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-              {t.toolPermissionsLabel || 'Запомненные ответы на запросы инструментов'}
+              {t.toolPermissionsLabel || 'Запомненные ответы на запросы инструментов'} <Hint id="tool-policy" />
             </label>
             {Object.keys(toolPermissions).length === 0 ? (
               <p className="text-[10px] text-slate-500">{t.toolPermissionsEmpty || 'Пока ничего. Отметьте «Запомнить» в запросе инструмента, чтобы бот больше не спрашивал.'}</p>
