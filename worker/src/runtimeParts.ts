@@ -117,12 +117,18 @@ export const draftWriter = (rest: FirestoreRest, boardId: string, channelId: str
         });
     };
 
+    // Once the reply is posted, a late delta must not bring the draft back:
+    // it would sit under the reply for good.
+    let closed = false;
+
     return {
         write: (botId: string, name: string, text: string) => {
+            if (closed) return;
             pending.set(botId, { name, text });
             timer ??= setTimeout(flush, DRAFT_EVERY_MS);
         },
         done: async () => {
+            closed = true;
             if (timer) { clearTimeout(timer); timer = null; }
             pending.clear();
             await chain;

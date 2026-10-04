@@ -219,7 +219,10 @@ const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
         await call(`/files/upload-v2?path=${encodeURIComponent(path)}`, { method: 'POST', body: form });
     };
     let home: Promise<string> | null = null;
-    const homeDir = () => (home ??= execute('echo $HOME').then(r => r.result.trim() || '/home/daytona'));
+    // Where "~" goes for commands, asked of the shell itself: $HOME can be
+    // empty in the process API, and guessing /home/daytona then put files in
+    // one place while commands and code looked in /root.
+    const homeDir = () => (home ??= execute('cd ~ && pwd').then(r => r.result.trim().split('\n').pop() || '/root'));
     // The file API takes paths as they are; "~" is the shell's, so it is expanded here.
     const expandHome = async (path: string) => /^~(\/|$)/.test(path) ? `${await homeDir()}${path.slice(1)}` : path;
 
