@@ -1,4 +1,4 @@
-import { collection, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
+import { collection, deleteDoc, doc, onSnapshot, query, updateDoc, where } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { AISettings, BoardMember, BoardMessage } from '../types';
 import { dailyLimitOf } from './spendLimit';
@@ -118,10 +118,29 @@ export const answerApproval = (boardId: string, id: string, allowed: boolean) =>
 
 export interface Draft { botId: string, botName: string, text: string }
 
+/**
+ * A draft not touched for this long belongs to a reply that is over (one
+ * that crashed, or whose cleanup lost a race): it is hidden, and removed.
+ * Longer than a tool call or a tool request can keep a live reply quiet.
+ */
+export const STALE_DRAFT_MS = 6 * 60_000;
+
 export const subscribeToDrafts = (boardId: string, channelId: string, callback: (drafts: Draft[]) => void) =>
     onSnapshot(
         collection(db, 'boards', boardId, 'channels', channelId, 'drafts'),
-        snap => callback(snap.docs.map(d => ({ botId: d.id, botName: String(d.data().botName || ''), text: String(d.data().text || '') }))),
+        snap => {
+            const now = Date.now();
+            const live: Draft[] = [];
+            for (const d of snap.docs) {
+                const data = d.data();
+                if (now - Number(data.updatedAt || 0) > STALE_DRAFT_MS) {
+                    deleteDoc(d.ref).catch(() => { });
+                    continue;
+                }
+                live.push({ botId: d.id, botName: String(data.botName || ''), text: String(data.text || '') });
+            }
+            callback(live);
+        },
         () => callback([])
     );
 
