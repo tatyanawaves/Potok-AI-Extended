@@ -220,6 +220,8 @@ const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
     };
     let home: Promise<string> | null = null;
     const homeDir = () => (home ??= execute('echo $HOME').then(r => r.result.trim() || '/home/daytona'));
+    // The file API takes paths as they are; "~" is the shell's, so it is expanded here.
+    const expandHome = async (path: string) => /^~(\/|$)/.test(path) ? `${await homeDir()}${path.slice(1)}` : path;
 
     return {
         runCode: async (language, code) => {
@@ -234,10 +236,10 @@ const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
             return `exit ${out.exitCode}\n${clip(out.result)}`;
         },
         writeFile: async (path, content) => {
-            await upload(path, new Blob([content]));
+            await upload(await expandHome(path), new Blob([content]));
             return `Saved ${path} (${content.length} chars)`;
         },
-        readFile: async path => clip(await (await call(`/files/download?path=${encodeURIComponent(path)}`, { method: 'GET' })).text()),
+        readFile: async path => clip(await (await call(`/files/download?path=${encodeURIComponent(await expandHome(path))}`, { method: 'GET' })).text()),
         writeBytes: async (name, bytes) => {
             const path = `${await homeDir()}/attachments/${name}`;
             await upload(path, new Blob([bytes]));
@@ -405,10 +407,12 @@ const e2b = async (env: SandboxEnv, uid: string, key: string): Promise<Backend> 
         runCode: (language, code) => execute(code, language === 'javascript' || language === 'typescript' ? 'js' : 'python'),
         shell: command => execute(`import subprocess\nr = subprocess.run(${py(command)}, shell=True, capture_output=True, text=True, timeout=120)\nprint("exit", r.returncode)\nprint(r.stdout + r.stderr)`),
         writeFile: async (path, content) => {
-            await execute(`import os\nos.makedirs(os.path.dirname(${py(path)}) or ".", exist_ok=True)\nopen(${py(path)}, "w", encoding="utf-8").write(${py(content)})`);
+            // Python does not expand "~" by itself, as the shell does; without
+            // this, ~/x.csv written here was a different file from ~/x.csv in a command.
+            await execute(`import os\np = os.path.expanduser(${py(path)})\nos.makedirs(os.path.dirname(p) or ".", exist_ok=True)\nopen(p, "w", encoding="utf-8").write(${py(content)})`);
             return `Saved ${path} (${content.length} chars)`;
         },
-        readFile: path => execute(`print(open(${py(path)}, encoding="utf-8").read())`),
+        readFile: path => execute(`import os\nprint(open(os.path.expanduser(${py(path)}), encoding="utf-8").read())`),
         writeBytes: async (name, bytes) => {
             let binary = '';
             const view = new Uint8Array(bytes);
