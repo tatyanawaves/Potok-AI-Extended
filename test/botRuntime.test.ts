@@ -489,3 +489,22 @@ describe('messages in a bot\'s name', () => {
         expect(msgs.find((m: any) => m.content === 'Real earlier reply').role).toBe('assistant');
     });
 });
+
+describe('a task that needs every tool round', () => {
+    it('asks for a report of every step when the rounds run out, instead of stopping mid-task', async () => {
+        const url = 'https://worker/tools/sandbox?provider=daytona';
+        fakeMcp({ [url]: { tools: [{ name: 'sandbox_shell' }], call: () => 'exit 0' } });
+        const { MAX_TOOL_ROUNDS } = await import('../services/runtime/turn');
+        const requests = fakeModel([
+            ...Array.from({ length: MAX_TOOL_ROUNDS }, (_, i) => ({ tool_calls: [call('sandbox_shell', { command: `echo ${i}` }, `c${i}`)] })),
+            { content: '1) готово 2) готово 3) не успел' }
+        ]);
+
+        const result = await runBotTurn({ store: store(), agent: bot([url]), boardId: 'b', channelId: 'c', channelName: 'g', settings });
+
+        const last = requests[requests.length - 1];
+        expect(last.tools).toBeUndefined();
+        expect(last.messages.at(-1)).toMatchObject({ role: 'user', content: expect.stringContaining('No tool calls are left') });
+        expect(result.reply).toBe('1) готово 2) готово 3) не успел');
+    });
+});

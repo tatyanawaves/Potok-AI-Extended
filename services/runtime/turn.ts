@@ -36,7 +36,7 @@ const TRUNCATION_NOTE = '\n\n…(ответ обрезан — попросит�
 const MAX_TOOL_RESULT_LENGTH = 6000;
 
 /** Rounds of tool calls allowed before the bot must answer with prose. */
-export const MAX_TOOL_ROUNDS = 6;
+export const MAX_TOOL_ROUNDS = 10;
 /** Most model requests one turn can make: one per tool round plus the answer. */
 export const MAX_REQUESTS_PER_TURN = MAX_TOOL_ROUNDS + 1;
 
@@ -244,7 +244,8 @@ Answer in the language the other participants use.`];
     // they were broken. Trying is cheap, and a real failure comes back anyway.
     parts.push(options.externalTools
         ? `You have working tools. Call them to get real data instead of answering from memory; if someone says your tools fail, check by calling one. Never invent identifiers, numbers or names a tool could give you.
-You can also save lasting facts with memory_remember and look them up with memory_recall.`
+You can also save lasting facts with memory_remember and look them up with memory_recall.
+A request with several steps must be finished, all of them: you have ${MAX_TOOL_ROUNDS} rounds of tool calls per reply, so combine steps — one script can write, read, compute and list files at once, and several independent calls can go in one round. If a step fails, fix the cause and go on rather than stopping. End with a short report of every step: done (with its result) or not done (and why).`
         : 'You can save lasting facts with memory_remember and look them up with memory_recall.');
 
     parts.push(DATA_POLICY);
@@ -478,8 +479,12 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             };
         }
 
-        // Final round without tools, so the model has to answer in prose.
+        // Final round without tools, so the model has to answer in prose —
+        // told so, or some models print another tool call instead of a report.
         const offer = round < MAX_TOOL_ROUNDS ? tools : undefined;
+        if (!offer && round > 0) {
+            messages.push({ role: 'user', content: 'No tool calls are left for this reply. Do not call tools. Write the final answer now: for each step of the request, what was done and its result, and what was not done and why.' });
+        }
         let completion: Completion;
         try {
             completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta }, settings);

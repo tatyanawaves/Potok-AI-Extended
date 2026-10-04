@@ -117,6 +117,8 @@ export const userKey = async (env: SandboxEnv, uid: string, provider: Provider):
 // --- Providers ------------------------------------------------------------------------
 
 interface Backend {
+    /** The one home directory that commands, code and the file tools all use. */
+    home(): Promise<string>;
     runCode(language: string, code: string): Promise<string>;
     shell(command: string): Promise<string>;
     writeFile(path: string, content: string): Promise<string>;
@@ -124,6 +126,23 @@ interface Backend {
     /** Puts a binary file into ~/attachments; returns its absolute path. */
     writeBytes(name: string, bytes: ArrayBuffer): Promise<string>;
 }
+
+/**
+ * A path as a bot wrote it — "~/a.csv", "a.csv", "/tmp/a.csv" — as an
+ * absolute path, with "~" and relative paths under `home`. Every file tool
+ * goes through this, and commands and code start in `home`, so a file is in
+ * the same place whichever tool wrote or reads it.
+ */
+export const resolvePath = (raw: string, home: string): string => {
+    const path = raw.trim();
+    const base = home.replace(/\/+$/, '') || '/';
+    let full: string;
+    if (!path || path === '~') full = base;
+    else if (path.startsWith('~/')) full = `${base}/${path.slice(2)}`;
+    else if (path.startsWith('/')) full = path;
+    else full = `${base}/${path.replace(/^\.\//, '')}`;
+    return full.replace(/\/{2,}/g, '/');
+};
 
 /** A board id as Firestore makes them; anything else is refused before it reaches a key. */
 export const BOARD_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -223,13 +242,14 @@ const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
     // empty in the process API, and guessing /home/daytona then put files in
     // one place while commands and code looked in /root.
     const homeDir = () => (home ??= execute('cd ~ && pwd').then(r => r.result.trim().split('\n').pop() || '/root'));
-    // The file API takes paths as they are; "~" is the shell's, so it is expanded here.
-    const expandHome = async (path: string) => /^~(\/|$)/.test(path) ? `${await homeDir()}${path.slice(1)}` : path;
+    // The file API takes paths as they are; "~" and relative paths are the shell's, so they are resolved here.
+    const expandHome = async (path: string) => resolvePath(path, await homeDir());
 
     return {
+        home: homeDir,
         runCode: async (language, code) => {
-            // Code runs as root, commands as the sandbox user: give the code
-            // the user's home, or "~" in Python and in the shell are two places.
+            // Code may run as another user than commands: give it the same
+            // home and start it there, or "~" means two places.
             const home = JSON.stringify(await homeDir());
             const prelude = language === 'python'
                 ? `import os as _o; _o.environ['HOME'] = ${home}\ntry: _o.chdir(${home})\nexcept OSError: pass\n`
@@ -241,12 +261,16 @@ const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
             return `exit ${out.exitCode ?? 0}\n${clip(String(out.result || ''))}`;
         },
         shell: async command => {
-            const out = await execute(command);
+            const home = shellQuote(await homeDir());
+            const out = await execute(`cd ${home} && export HOME=${home} && ${command}`);
             return `exit ${out.exitCode}\n${clip(out.result)}`;
         },
         writeFile: async (path, content) => {
-            await upload(await expandHome(path), new Blob([content]));
-            return `Saved ${path} (${content.length} chars)`;
+            const full = await expandHome(path);
+            const dir = full.slice(0, full.lastIndexOf('/')) || '/';
+            await execute(`mkdir -p ${shellQuote(dir)}`);
+            await upload(full, new Blob([content]));
+            return `Saved ${full} (${content.length} chars)`;
         },
         readFile: async path => clip(await (await call(`/files/download?path=${encodeURIComponent(await expandHome(path))}`, { method: 'GET' })).text()),
         writeBytes: async (name, bytes) => {
@@ -411,24 +435,38 @@ const e2b = async (env: SandboxEnv, uid: string, key: string): Promise<Backend> 
         return clip(parts.join('') || '(no output)');
     };
     const py = (s: string) => JSON.stringify(s);
+    // Code, commands and files all run in the kernel; it starts each in the
+    // same home, so "~", relative paths and the working directory agree.
+    let home: Promise<string> | null = null;
+    const homeDir = () => (home ??= execute('import os\nprint(os.path.realpath(os.path.expanduser("~")))')
+        .then(out => out.trim().split('\n').pop() || '/home/user'));
+    const atHome = async () => {
+        const h = py(await homeDir());
+        return `import os as _o\n_o.environ["HOME"] = ${h}\n_o.chdir(${h})\n`;
+    };
 
     return {
-        runCode: (language, code) => execute(code, language === 'javascript' || language === 'typescript' ? 'js' : 'python'),
-        shell: command => execute(`import subprocess\nr = subprocess.run(${py(command)}, shell=True, capture_output=True, text=True, timeout=120)\nprint("exit", r.returncode)\nprint(r.stdout + r.stderr)`),
-        writeFile: async (path, content) => {
-            // Python does not expand "~" by itself, as the shell does; without
-            // this, ~/x.csv written here was a different file from ~/x.csv in a command.
-            await execute(`import os\np = os.path.expanduser(${py(path)})\nos.makedirs(os.path.dirname(p) or ".", exist_ok=True)\nopen(p, "w", encoding="utf-8").write(${py(content)})`);
-            return `Saved ${path} (${content.length} chars)`;
+        home: homeDir,
+        runCode: async (language, code) => {
+            const js = language === 'javascript' || language === 'typescript';
+            const h = py(await homeDir());
+            return execute(js ? `process.env.HOME = ${h}; try { process.chdir(${h}); } catch {}\n${code}` : `${await atHome()}${code}`, js ? 'js' : 'python');
         },
-        readFile: path => execute(`import os\nprint(open(os.path.expanduser(${py(path)}), encoding="utf-8").read())`),
+        shell: async command => execute(`${await atHome()}import subprocess\nr = subprocess.run(${py(command)}, shell=True, capture_output=True, text=True, timeout=120)\nprint("exit", r.returncode)\nprint(r.stdout + r.stderr)`),
+        writeFile: async (path, content) => {
+            const full = resolvePath(path, await homeDir());
+            await execute(`import os\nos.makedirs(os.path.dirname(${py(full)}) or "/", exist_ok=True)\nopen(${py(full)}, "w", encoding="utf-8").write(${py(content)})`);
+            return `Saved ${full} (${content.length} chars)`;
+        },
+        readFile: async path => execute(`print(open(${py(resolvePath(path, await homeDir()))}, encoding="utf-8").read())`),
         writeBytes: async (name, bytes) => {
             let binary = '';
             const view = new Uint8Array(bytes);
             for (let i = 0; i < view.length; i += 0x8000) binary += String.fromCharCode(...view.subarray(i, i + 0x8000));
-            const path = `/home/user/attachments/${name}`;
+            const dir = `${await homeDir()}/attachments`;
+            const path = `${dir}/${name}`;
             await execute(`import os, base64
-os.makedirs("/home/user/attachments", exist_ok=True)
+os.makedirs(${py(dir)}, exist_ok=True)
 open(${py(path)}, "wb").write(base64.b64decode(${py(btoa(binary))}))`);
             return path;
         }
@@ -461,11 +499,12 @@ export const sandboxTools = (
     const lifetime = persistent
         ? "This is the board's own computer: files and installed packages stay between conversations, days apart."
         : 'State and files persist between calls for about 25 minutes.';
+    const sameFiles = 'All sandbox tools share one home directory: "~", relative paths and the working directory of code and commands all point there, so a file written by one tool is found by the others at the same path.';
 
     const tools: ServerTool[] = [
         {
             name: 'sandbox_run_code',
-            description: `Run Python or JavaScript in a private cloud sandbox and get the output. ${lifetime}`,
+            description: `Run Python or JavaScript in a private cloud sandbox and get the output. One script can do several steps at once (write, read, compute, list files). ${lifetime} ${sameFiles}`,
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -478,19 +517,19 @@ export const sandboxTools = (
         },
         {
             name: 'sandbox_shell',
-            description: 'Run a shell command in the sandbox (install packages, run scripts, git clone, build).',
+            description: `Run a shell command in the sandbox (install packages, run scripts, git clone, build); chain several with &&. ${sameFiles}`,
             inputSchema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
             run: async a => (await get()).shell(String(a.command || ''))
         },
         {
             name: 'sandbox_write_file',
-            description: 'Create or overwrite a text file in the sandbox.',
+            description: `Create or overwrite a text file in the sandbox; missing folders are created. Returns the absolute path. ${sameFiles}`,
             inputSchema: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
             run: async a => (await get()).writeFile(String(a.path || ''), String(a.content ?? ''))
         },
         {
             name: 'sandbox_read_file',
-            description: 'Read a text file from the sandbox.',
+            description: `Read a text file from the sandbox. ${sameFiles}`,
             inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
             run: async a => (await get()).readFile(String(a.path || ''))
         }
