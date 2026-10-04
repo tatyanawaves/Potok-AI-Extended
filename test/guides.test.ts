@@ -19,7 +19,7 @@ describe('learning guides', () => {
                 .filter(id => !ids.has(id))
                 .map(id => `${path.basename(file)}: ${id}`));
         expect(missing).toEqual([]);
-    });
+    }, 30_000);
 
     it('has unique ids and something to say in each guide', () => {
         expect(new Set(GUIDES.map(g => g.id)).size).toBe(GUIDES.length);

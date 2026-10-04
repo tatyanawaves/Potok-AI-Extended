@@ -39,6 +39,12 @@ const MAX_TOOL_RESULT_LENGTH = 6000;
 export const MAX_TOOL_ROUNDS = 10;
 /** Most model requests one turn can make: one per tool round plus the answer. */
 export const MAX_REQUESTS_PER_TURN = MAX_TOOL_ROUNDS + 1;
+/**
+ * Outgoing requests kept back on the server for the end of a reply: the
+ * final model call, posting the reply, its unread stamps, the usage tally and
+ * clearing the draft. Below this, no more tool rounds.
+ */
+export const BUDGET_RESERVE = 10;
 
 /**
  * How much freedom a bot has with external tools: withheld, each call
@@ -481,7 +487,8 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
 
         // Final round without tools, so the model has to answer in prose —
         // told so, or some models print another tool call instead of a report.
-        const offer = round < MAX_TOOL_ROUNDS ? tools : undefined;
+        const outOfBudget = Boolean(settings.budget && settings.budget.left() < BUDGET_RESERVE);
+        const offer = round < MAX_TOOL_ROUNDS && !outOfBudget ? tools : undefined;
         if (!offer && round > 0) {
             messages.push({ role: 'user', content: 'No tool calls are left for this reply. Do not call tools. Write the final answer now: for each step of the request, what was done and its result, and what was not done and why.' });
         }
