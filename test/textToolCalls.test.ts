@@ -34,3 +34,11 @@ describe('tool calls written as text', () => {
         expect(JSON.parse(calls[0].args)).toEqual({ timeout: 30, code: 'x = [1, 2]' });
     });
 });
+
+describe('markup left in a final reply', () => {
+    it('is found whatever tool it names', () => {
+        const { calls, rest } = textToolCalls('Почти готово.\n<tool_call>{"name": "anything", "arguments": {}}</tool_call>', { has: () => true });
+        expect(calls).toHaveLength(1);
+        expect(rest).toBe('Почти готово.');
+    });
+});

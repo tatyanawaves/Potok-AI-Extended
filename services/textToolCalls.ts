@@ -47,7 +47,7 @@ const parseBlock = (body: string): { name: string, args: Record<string, unknown>
  * The calls written as text in `content` for tools in `offered`, and the
  * content without them. No calls: content unchanged.
  */
-export const textToolCalls = (content: string | null, offered: Set<string>): { calls: ToolCall[], rest: string | null } => {
+export const textToolCalls = (content: string | null, offered: { has(name: string): boolean }): { calls: ToolCall[], rest: string | null } => {
     if (!content || !content.includes('<tool_call>')) return { calls: [], rest: content };
     const calls: ToolCall[] = [];
     const rest = content.replace(BLOCK, (whole, body: string) => {
