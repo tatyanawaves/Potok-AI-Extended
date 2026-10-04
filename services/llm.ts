@@ -194,6 +194,8 @@ export interface FreeModel {
     tools: boolean;
     /** Accepts images. */
     vision: boolean;
+    /** Can be asked for a JSON object (response_format). */
+    json: boolean;
     contextLength: number;
 }
 
@@ -209,6 +211,7 @@ export const parseFreeModels = (body: any): FreeModel[] => (body?.data || [])
         name: String(m.name || m.id).replace(/\s*\(free\)\s*$/i, ''),
         tools: (m.supported_parameters || []).includes('tools'),
         vision: (m.architecture?.input_modalities || []).includes('image'),
+        json: (m.supported_parameters || []).some((p: string) => p === 'response_format' || p === 'structured_outputs'),
         contextLength: Number(m.context_length) || 0
     }))
     // Tool-capable first (bots need them), then the larger context.

@@ -71,6 +71,8 @@ export interface AISettings {
    * model, not only free ones. Optional.
    */
   fallbackModel?: string;
+  /** The fallback and service models were filled in once (services/modelDefaults); not again. */
+  modelDefaultsSet?: boolean;
   /** Remembered answers to tool requests, this person's own; see services/toolPermissions. Browser only. */
   toolPermissions?: import('./services/toolPermissions').ToolPermissions;
   /** Requests to the model per day, counted across browser and server; 0 means no ceiling. */

@@ -5,6 +5,7 @@ import { signInWithSocial, completeSocialSignIn, loginWithEmail, registerWithEma
 import { Hint } from './Learning';
 import { secureStorage } from '../services/encryption';
 import { DEFAULT_MODEL } from '../services/llm';
+import { withHelperDefaults } from '../services/modelDefaults';
 
 interface AuthScreenProps {
   onAuthorize: (settings: AISettings) => void;
@@ -141,7 +142,8 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
         if (settings.openRouterKey) {
           secureStorage.setItem('openRouterKey', settings.openRouterKey);
         }
-        onAuthorize(newSettings);
+        // A new account starts with a fallback and a service model (services/modelDefaults).
+        onAuthorize(await withHelperDefaults(newSettings).catch(() => newSettings));
       }
     } catch (err: any) {
       console.error("Auth Error:", err.code, err.message);
