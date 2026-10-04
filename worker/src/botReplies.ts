@@ -32,7 +32,7 @@ import { seal } from './taskCrypto';
 type Json = (body: unknown, status: number) => Response;
 
 /** The longest one mention may take on the server, all bots and tool rounds included. */
-export const REPLY_DEADLINE_MS = 4 * 60_000;
+export const REPLY_DEADLINE_MS = 8 * 60_000;
 
 /** The Workflow binding, typed structurally so tests need no Cloudflare globals. */
 export interface ReplyWorkflowBinding {

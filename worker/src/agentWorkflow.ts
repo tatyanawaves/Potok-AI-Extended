@@ -109,7 +109,7 @@ export class AgentTaskWorkflow extends WorkflowEntrypoint<Env, TaskParams> {
 export class BotReplyWorkflow extends WorkflowEntrypoint<Env, ReplyParams> {
     async run(event: Readonly<WorkflowEvent<ReplyParams>>, step: WorkflowStep): Promise<unknown> {
         const params = event.payload;
-        return step.do('reply', { retries: { limit: 0, delay: 0 }, timeout: '10 minutes' }, async () => {
+        return step.do('reply', { retries: { limit: 0, delay: 0 }, timeout: '12 minutes' }, async () => {
             const secrets = await open<ReplySecrets>(params.sealed, sealingSecret(this.env));
             const tokens = new TokenSource(firestoreConfig(this.env), secrets.refreshToken || '');
             return plain(await runBotReply(this.env, params, secrets, tokens, request => worker.fetch(request, this.env)));
