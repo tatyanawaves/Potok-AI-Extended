@@ -11,6 +11,7 @@ import { loadTurnMemory, fileNote, findNotes, findKnowledge } from './memory';
 import { knowledgeBlock, citationOf, CITE_RULE } from '../knowledgeCore';
 import { terminalEntryOf, capEntries } from '../terminal';
 import { textToolCalls } from '../textToolCalls';
+import { plainReply } from '../replyText';
 
 /** Every tool name: for markup left in a final reply, whatever tool it names. */
 const ANY_TOOL = { has: () => true };
@@ -34,6 +35,12 @@ const MAX_REPLY_LENGTH = 8000;
 const TRUNCATION_NOTE = '\n\n…(ответ обрезан — попросите бота продолжить)';
 /** Tool output is untrusted and can be huge; cap what reaches the model. */
 const MAX_TOOL_RESULT_LENGTH = 6000;
+/**
+ * A tool result older than the last round, as it is sent again with every
+ * later request. The model has read it in full already and acted on it;
+ * resent whole, results made each round cost more than the one before.
+ */
+export const SHORTENED_RESULT_CHARS = 700;
 
 /** Rounds of tool calls allowed before the bot must answer with prose. */
 export const MAX_TOOL_ROUNDS = 10;
@@ -303,7 +310,7 @@ export const contextMessage = (memory: string, inputs?: Assignment['inputs']): s
 
 /** The bot's text, or a visible note that there was none. */
 export const replyOrNotice = (content: string | null | undefined): string => {
-    const text = (content || '').trim();
+    const text = plainReply(content).trim();
     if (!text) return '⚠️ Модель вернула пустой ответ. Попробуйте ещё раз или выберите другую модель в настройках.';
     return text.length <= MAX_REPLY_LENGTH
         ? text
@@ -436,7 +443,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             : `${msg.authorName}: ${msg.content}`;
         const urls = pictures.get(msg);
         messages.push(msg.authorId === agent.id && !forged.has(msg)
-            ? { role: 'assistant', content: msg.content }
+            ? { role: 'assistant', content: plainReply(msg.content) }
             : { role: 'user', content: urls?.length ? withPictures(text, urls) : text });
     }
     // Some providers refuse a conversation that ends on the assistant.
@@ -476,6 +483,14 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     };
 
     let waitRequest: TurnResult['wait'];
+    // Tool results by message, to shorten them once a newer round has come.
+    const toolResults = new Map<ChatMessage, { source: string, text: string }>();
+    const toolMessage = (callId: string, name: string, text: string): ChatMessage => {
+        const message: ChatMessage = { role: 'tool', tool_call_id: callId, content: untrusted(`tool ${name}`, text) };
+        toolResults.set(message, { source: `tool ${name}`, text });
+        return message;
+    };
+    let lastRound: ChatMessage[] = [];
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         if (waitRequest) {
@@ -483,6 +498,12 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
                 reply: `⏳ Жду ${waitRequest.seconds} с: ${waitRequest.note}`,
                 modelName: model, toolsUsed, terminal, usage, wait: waitRequest
             };
+        }
+
+        for (const [message, { source, text }] of toolResults) {
+            if (lastRound.includes(message) || text.length <= SHORTENED_RESULT_CHARS) continue;
+            message.content = untrusted(source, `${text.slice(0, SHORTENED_RESULT_CHARS)}\n… (earlier result shortened; call the tool again if you need it whole)`);
+            toolResults.delete(message);
         }
 
         // Final round without tools, so the model has to answer in prose —
@@ -494,7 +515,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
         }
         let completion: Completion;
         try {
-            completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta }, settings);
+            completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta, ...(round > 0 ? { reasoning: 'low' as const } : {}) }, settings);
         } catch (error) {
             // A model without vision: the same request, the pictures replaced by a note.
             if (!pictures.size || !refusedImages(error)) throw error;
@@ -536,7 +557,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             }
 
             const key = `${call.name}:${JSON.stringify(args)}`;
-            if (resultCache.has(key)) return { role: 'tool', tool_call_id: call.id, content: untrusted(`tool ${call.name}`, resultCache.get(key)!) };
+            if (resultCache.has(key)) return toolMessage(call.id, call.name, resultCache.get(key)!);
 
             let result: string;
             let failed = false;
@@ -584,7 +605,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             // Sandbox work is shown on the reply as a terminal, failures too.
             const entry = terminalEntryOf(call.name, args, result, failed);
             if (entry) terminal.push(entry);
-            return { role: 'tool', tool_call_id: call.id, content: untrusted(`tool ${call.name}`, result) };
+            return toolMessage(call.id, call.name, result);
         };
 
         // Independent calls of one round run together — unless each needs a
@@ -595,6 +616,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             : await Promise.all(completion.toolCalls.map(execute));
 
         messages.push(...results);
+        lastRound = results;
     }
 
     return { reply: replyOrNotice(null), modelName: model, toolsUsed, terminal, usage };
