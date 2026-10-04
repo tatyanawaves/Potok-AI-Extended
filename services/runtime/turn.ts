@@ -10,6 +10,7 @@ import { AgentStore } from './store';
 import { loadTurnMemory, fileNote, findNotes, findKnowledge } from './memory';
 import { knowledgeBlock, citationOf, CITE_RULE } from '../knowledgeCore';
 import { terminalEntryOf, capEntries } from '../terminal';
+import { textToolCalls } from '../textToolCalls';
 
 /**
  * One turn of one bot, and the two ways turns are started — an @mention and a
@@ -487,6 +488,12 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta }, settings);
         }
         usage = addUsage(usage, completion.usage);
+
+        // A call printed as text rather than made: made here instead of shown.
+        if (completion.toolCalls.length === 0 && offer) {
+            const { calls, rest } = textToolCalls(completion.content, new Set(offer.map(tool => tool.function.name)));
+            if (calls.length) completion = { ...completion, content: rest, toolCalls: calls };
+        }
 
         if (completion.toolCalls.length === 0 || !offer) {
             return { reply: replyOrNotice(completion.content), modelName: completion.model, toolsUsed, terminal, usage };
