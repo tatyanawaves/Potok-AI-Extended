@@ -184,6 +184,6 @@ describe('parseFreeModels', () => {
             { id: 'e/tiny:free', name: 'Tiny', context_length: 4000 }
         ] });
         expect(list.map(m => m.id)).toEqual(['b/agent:free', 'a/chat:free']);
-        expect(list[0]).toEqual({ id: 'b/agent:free', name: 'B Agent', tools: true, vision: true, contextLength: 128000 });
+        expect(list[0]).toEqual({ id: 'b/agent:free', name: 'B Agent', tools: true, vision: true, json: false, contextLength: 128000 });
     });
 });

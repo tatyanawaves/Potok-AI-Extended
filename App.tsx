@@ -20,6 +20,7 @@ import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSel
 import { Thought, SavedSession, AISettings, CognitiveState } from './types';
 import { translations } from './translations';
 import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink, setUsageGate } from './services/llm';
+import { withHelperDefaults } from './services/modelDefaults';
 import { DEFAULT_DAILY_REQUESTS, dailyLimitOf } from './services/spendLimit';
 import { recordSpend, spendGate } from './services/spend';
 
@@ -266,6 +267,18 @@ const App: React.FC = () => {
       }).catch(err => console.error('Failed to sync profile:', err));
     }
   };
+
+  // Accounts from before the fallback and service models had defaults get
+  // them once, here; new ones get them at sign-in (services/modelDefaults).
+  useEffect(() => {
+    if (!isAuthorized || settings.modelDefaultsSet) return;
+    let cancelled = false;
+    withHelperDefaults(settingsRef.current)
+      .then(next => { if (!cancelled && next.modelDefaultsSet) handleSaveSettings({ ...settingsRef.current, fallbackModel: next.fallbackModel, memoryModel: next.memoryModel, modelDefaultsSet: true }); })
+      .catch(() => { });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthorized, settings.modelDefaultsSet]);
 
   // Back from "Sign in with OpenRouter": the page arrives with ?code=…, which
   // becomes this user's key, then Settings open so they see it took.
