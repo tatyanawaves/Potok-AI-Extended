@@ -12,6 +12,9 @@ import { knowledgeBlock, citationOf, CITE_RULE } from '../knowledgeCore';
 import { terminalEntryOf, capEntries } from '../terminal';
 import { textToolCalls } from '../textToolCalls';
 
+/** Every tool name: for markup left in a final reply, whatever tool it names. */
+const ANY_TOOL = { has: () => true };
+
 /**
  * One turn of one bot, and the two ways turns are started — an @mention and a
  * round-robin discussion. The orchestrated mode (./orchestrate) uses the same
@@ -33,7 +36,7 @@ const TRUNCATION_NOTE = '\n\n…(ответ обрезан — попросит�
 const MAX_TOOL_RESULT_LENGTH = 6000;
 
 /** Rounds of tool calls allowed before the bot must answer with prose. */
-export const MAX_TOOL_ROUNDS = 4;
+export const MAX_TOOL_ROUNDS = 6;
 /** Most model requests one turn can make: one per tool round plus the answer. */
 export const MAX_REQUESTS_PER_TURN = MAX_TOOL_ROUNDS + 1;
 
@@ -496,7 +499,12 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
         }
 
         if (completion.toolCalls.length === 0 || !offer) {
-            return { reply: replyOrNotice(completion.content), modelName: completion.model, toolsUsed, terminal, usage };
+            // Out of tool rounds, a model may still print a call: not a reply to show.
+            const { calls, rest } = textToolCalls(completion.content, ANY_TOOL);
+            const reply = calls.length
+                ? `${rest ? `${rest}\n\n` : ''}⚠️ ${agent.name} исчерпал лимит шагов с инструментами (${MAX_TOOL_ROUNDS}) и не закончил. Напишите «продолжай» — он продолжит с того места.`
+                : completion.content;
+            return { reply: replyOrNotice(reply), modelName: completion.model, toolsUsed, terminal, usage };
         }
 
         messages.push({

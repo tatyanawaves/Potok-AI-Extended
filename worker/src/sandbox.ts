@@ -225,9 +225,15 @@ const daytonaBackend = (key: string, box: DaytonaBox): Backend => {
 
     return {
         runCode: async (language, code) => {
+            // Code runs as root, commands as the sandbox user: give the code
+            // the user's home, or "~" in Python and in the shell are two places.
+            const home = JSON.stringify(await homeDir());
+            const prelude = language === 'python'
+                ? `import os as _o; _o.environ['HOME'] = ${home}\ntry: _o.chdir(${home})\nexcept OSError: pass\n`
+                : `process.env.HOME = ${home}; try { process.chdir(${home}); } catch {}\n`;
             const out: any = await (await call('/process/code-run', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ language, code, timeout: 120 })
+                body: JSON.stringify({ language, code: prelude + code, timeout: 120 })
             })).json();
             return `exit ${out.exitCode ?? 0}\n${clip(String(out.result || ''))}`;
         },
