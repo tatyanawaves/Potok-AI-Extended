@@ -275,6 +275,7 @@ const PostCard: React.FC<PostCardProps> = ({
     getTypeStyle
 }) => {
     const t = translations[language as 'en' | 'ru' | 'kk'];
+    const modelLabel = language === 'en' ? 'Model' : 'Модель';
     const [commentInput, setCommentInput] = useState('');
     const [visibleComments, setVisibleComments] = useState(3);
     const [isSubmittingComment, setIsSubmittingComment] = useState(false);
@@ -365,15 +366,25 @@ const PostCard: React.FC<PostCardProps> = ({
                 {/* Action menu (three dots) - only for generated posts */}
                 <div className="flex items-center space-x-1">
                     {thought.generationPrompt && (
-                        <button
-                            onClick={() => setShowMetaModal(true)}
-                            className="p-1.5 text-slate-600 hover:text-cyan-400 hover:bg-cyan-500/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
-                            title="METADATA"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-                            </svg>
-                        </button>
+                        // Hovering shows which model wrote the post; a click opens the full metadata.
+                        <div className="relative group/meta">
+                            <button
+                                onClick={() => setShowMetaModal(true)}
+                                className="p-1.5 text-slate-600 hover:text-cyan-400 hover:bg-cyan-500/10 focus:text-cyan-400 rounded-lg transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                aria-label={`${modelLabel}: ${thought.modelName || '—'}`}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                                </svg>
+                            </button>
+                            <div
+                                role="tooltip"
+                                className="pointer-events-none absolute right-0 top-full mt-1 z-30 whitespace-nowrap rounded-lg border border-slate-700 bg-slate-950/95 px-2.5 py-1.5 text-[11px] shadow-xl opacity-0 translate-y-1 transition-all group-hover/meta:opacity-100 group-hover/meta:translate-y-0 group-focus-within/meta:opacity-100"
+                            >
+                                <span className="text-slate-500">{modelLabel}: </span>
+                                <span className="font-mono text-cyan-300">{thought.modelName || '—'}</span>
+                            </div>
+                        </div>
                     )}
 
                     {/* Delete button (only for author). Matched on uid alone, as
