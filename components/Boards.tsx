@@ -2035,7 +2035,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                 {isPipedreamConfigured() && (
                                     <div className="flex flex-wrap items-center gap-1 mb-2">
                                         {[
-                                            { name: '🌐 Облачный браузер', url: cloudBrowserUrl(), oauth: null as string | null },
+                                            { name: `🌐 ${t.cloudBrowser || 'Облачный браузер'}`, url: cloudBrowserUrl(), oauth: null as string | null },
                                             { name: '🧪 E2B', url: sandboxUrl('e2b'), oauth: null as string | null },
                                             { name: '🧪 Daytona', url: sandboxUrl('daytona'), oauth: null as string | null },
                                             { name: '☁ Cloud Run', url: cloudRunUrl(), oauth: null as string | null },

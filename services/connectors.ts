@@ -136,11 +136,12 @@ export const OAUTH_PRESETS = [
  * MCP servers, the user's connected Pipedream accounts, and Pipedream apps
  * that match the task's words.
  */
-export const collectCandidates = async (task: string): Promise<ToolCandidate[]> => {
+export const collectCandidates = async (task: string, language?: string): Promise<ToolCandidate[]> => {
+    const en = language === 'en';
     const list: ToolCandidate[] = [];
     if (workerUrl) {
         list.push({
-            id: 'cloud-browser', kind: 'cloud', name: 'Облачный браузер',
+            id: 'cloud-browser', kind: 'cloud', name: en ? 'Cloud browser' : 'Облачный браузер',
             description: 'Open pages with JavaScript, extract elements, search the web (Cloudflare Browser Rendering).',
             url: cloudBrowserUrl(), needsConnection: false
         });
@@ -152,7 +153,7 @@ export const collectCandidates = async (task: string): Promise<ToolCandidate[]> 
         });
         for (const provider of ['e2b', 'daytona'] as SandboxProvider[]) {
             list.push({
-                id: `sandbox:${provider}`, kind: 'sandbox', name: `Песочница ${SANDBOX_NAMES[provider]}`,
+                id: `sandbox:${provider}`, kind: 'sandbox', name: en ? `${SANDBOX_NAMES[provider]} sandbox` : `Песочница ${SANDBOX_NAMES[provider]}`,
                 description: 'Run Python/JavaScript and shell commands, install packages, read and write files in a private cloud sandbox.',
                 url: sandboxUrl(provider), needsConnection: !keys[provider], target: provider
             });

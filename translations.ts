@@ -423,7 +423,11 @@ export const translations = {
     deletePostConfirm: "Delete this post? This cannot be undone.",
     noSubscriptions: "You don't follow anyone yet.",
     profileShort: "Profile",
-    loadingProfile: "Loading profile…"
+    loadingProfile: "Loading profile…",
+    cloudBrowser: "Cloud browser",
+    freeLink: "free",
+    createLink: "create",
+    whereToGetKey: "Where to get a key"
   },
   ru: {
     title: 'Potok',
@@ -567,7 +571,11 @@ export const translations = {
     cancelScheduled: "отменить",
     cancelScheduledConfirm: "Отменить публикацию этого поста?",
     attachFile: "Прикрепить файл",
-    fileTooLarge: "файл больше"
+    fileTooLarge: "файл больше",
+    cloudBrowser: "Облачный браузер",
+    freeLink: "бесплатные",
+    createLink: "создать",
+    whereToGetKey: "Где взять ключ"
   },
   kk: {
     title: 'Potok',
@@ -970,6 +978,10 @@ export const translations = {
     scheduledPosts: "Жоспарланған посттар",
     cancelScheduled: "болдырмау",
     cancelScheduledConfirm: "Бұл постты жариялауды болдырмау керек пе?",
-    fileTooLarge: "файл көлемі"
+    fileTooLarge: "файл көлемі",
+    cloudBrowser: "Бұлттық браузер",
+    freeLink: "тегін",
+    createLink: "құру",
+    whereToGetKey: "Кілтті қайдан алуға болады"
   }
 };

@@ -297,7 +297,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      {t.modelLabel || 'Модель'} <a href="https://openrouter.ai/models?max_price=0" target="_blank" rel="noopener noreferrer" className="normal-case tracking-normal text-[10px] text-cyan-400/80 underline">бесплатные ↗</a>
+                      {t.modelLabel || 'Модель'} <a href="https://openrouter.ai/models?max_price=0" target="_blank" rel="noopener noreferrer" className="normal-case tracking-normal text-[10px] text-cyan-400/80 underline">{(t as any).freeLink || 'бесплатные'} ↗</a>
                     </label>
                     <ModelPicker value={openRouterModel} onChange={setOpenRouterModel} placeholder="author/model:free" language={language} />
                     {freeModelIds.length > 0 && (!apiBaseUrl.trim() || apiBaseUrl.includes('openrouter.ai'))
@@ -360,7 +360,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                       {(['e2b', 'daytona'] as SandboxProvider[]).map(provider => (
                         <div key={provider} className="flex gap-2 items-center">
                           <a href={provider === 'e2b' ? 'https://e2b.dev/dashboard' : 'https://app.daytona.io/dashboard/keys'} target="_blank" rel="noopener noreferrer"
-                            title="Где взять ключ" className="w-16 text-[11px] font-mono text-cyan-400/80 hover:text-cyan-300 underline shrink-0">{SANDBOX_NAMES[provider]} ↗</a>
+                            title={(t as any).whereToGetKey || 'Где взять ключ'} className="w-16 text-[11px] font-mono text-cyan-400/80 hover:text-cyan-300 underline shrink-0">{SANDBOX_NAMES[provider]} ↗</a>
                           {sandboxKeys[provider] ? (
                             <>
                               <span className="flex-1 text-[11px] text-emerald-400">✓ {(t as any).keySaved || 'ключ сохранён'}</span>
@@ -427,7 +427,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
 
                   <div className="space-y-2">
                     <label className="block text-xs font-mono uppercase tracking-wider text-slate-400">
-                      {t.githubTokenLabel || 'Токен GitHub (сохранение кода)'} <Hint id="github" always /> <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer" className="normal-case tracking-normal text-[10px] text-cyan-400/80 underline">создать ↗</a>
+                      {t.githubTokenLabel || 'Токен GitHub (сохранение кода)'} <Hint id="github" always /> <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer" className="normal-case tracking-normal text-[10px] text-cyan-400/80 underline">{(t as any).createLink || 'создать'} ↗</a>
                     </label>
                     <input
                       type="password"

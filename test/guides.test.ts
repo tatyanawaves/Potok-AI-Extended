@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { GUIDES } from '../services/guides';
+import { GUIDES, guidesFor } from '../services/guides';
+import { GUIDES_EN } from '../services/guidesEn';
 
 const root = path.resolve(__dirname, '..');
 const sources = [
@@ -27,5 +28,15 @@ describe('learning guides', () => {
             expect(guide.summary.length, guide.id).toBeGreaterThan(10);
             expect(guide.steps.length, guide.id).toBeGreaterThan(0);
         }
+    });
+
+    it('has every guide in English, with the same links and no Russian', () => {
+        expect(Object.keys(GUIDES_EN).sort()).toEqual(GUIDES.map(g => g.id).sort());
+        for (const guide of guidesFor('en')) {
+            const ru = GUIDES.find(g => g.id === guide.id)!;
+            expect((guide.links || []).map(l => l.url), guide.id).toEqual((ru.links || []).map(l => l.url));
+            expect(JSON.stringify(guide), guide.id).not.toMatch(/[А-Яа-яЁё]/);
+        }
+        expect(guidesFor('ru')).toBe(GUIDES);
     });
 });
