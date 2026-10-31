@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { AISettings } from '../types';
 import { translations } from '../translations';
 import { auth, searchProfiles } from '../services/firebase';
+import { contactHint } from '../services/contacts';
 import { FollowedProfile } from '../services/social';
 import { Hint } from './Learning';
 import {
@@ -173,15 +174,16 @@ const ForwardDialog: React.FC<ForwardDialogProps> = ({ payload, settings, follow
 
     const contacts = useMemo(() => {
         const seen = new Set<string>();
-        const list: Array<{ uid: string, name: string }> = [];
+        const list: Array<{ uid: string, name: string, role?: string }> = [];
+        const roleOf = new Map<string, string>(people.map(p => [String(p.uid), String(p.agentRole || '').trim()]));
         destinations?.conversations.forEach(c => {
-            if (c.otherId && !seen.has(c.otherId)) { seen.add(c.otherId); list.push({ uid: c.otherId, name: c.name }); }
+            if (c.otherId && !seen.has(c.otherId)) { seen.add(c.otherId); list.push({ uid: c.otherId, name: c.name, role: roleOf.get(c.otherId) }); }
         });
         followedProfiles.forEach(p => {
-            if (!seen.has(p.uid) && p.uid !== uid) { seen.add(p.uid); list.push({ uid: p.uid, name: p.name }); }
+            if (!seen.has(p.uid) && p.uid !== uid) { seen.add(p.uid); list.push({ uid: p.uid, name: p.name, role: roleOf.get(p.uid) }); }
         });
         people.forEach(p => {
-            if (!seen.has(p.uid)) { seen.add(p.uid); list.push({ uid: p.uid, name: p.agentName }); }
+            if (!seen.has(p.uid)) { seen.add(p.uid); list.push({ uid: p.uid, name: p.agentName, role: roleOf.get(p.uid) }); }
         });
         return list.filter(c => matches(c.name));
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -319,7 +321,7 @@ const ForwardDialog: React.FC<ForwardDialogProps> = ({ payload, settings, follow
                                 {contacts.map(c => renderRow(
                                     personTarget(c.uid, c.name),
                                     c.name,
-                                    conversationWith.has(c.uid) ? undefined : (t.newThread || 'новый диалог')
+                                    contactHint(c, contacts, conversationWith.has(c.uid) ? undefined : (t.newThread || 'новый диалог'))
                                 ))}
                             </div>
                         </section>
