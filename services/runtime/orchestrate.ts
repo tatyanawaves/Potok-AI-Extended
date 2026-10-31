@@ -225,7 +225,7 @@ export const finishRun = async (ctx: TaskContext, state: RunState): Promise<Fina
 
     // The outcome is worth knowing later, in this channel or another one.
     await fileNote(ctx.store, ctx.settings, ctx.boardId, {
-        text: `Задача «${ctx.task.slice(0, 120)}»: ${report.answer.slice(0, 300)} (выполнено на ${report.progress}%)`,
+        text: labels.note(ctx.task.slice(0, 120), report.answer.slice(0, 300), report.progress),
         author: 'orchestrator',
         channelId: ctx.channelId
     }).catch(() => { });

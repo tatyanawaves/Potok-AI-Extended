@@ -265,8 +265,10 @@ Respond ONLY in JSON: {"answer": "...", "progress": 0, "criteria": [{"text": "..
 
 /** The orchestrator's own words in its messages: English for 'en', Russian otherwise. */
 const LABELS = {
-    ru: { name: 'Оркестратор', result: 'Итог', noResult: 'Итог не получен.', progress: 'Степень выполнения', plan: 'План', criteria: 'Критерии', after: 'после', now: 'сразу', stopped: '(остановлено до завершения)', wait: (s: number) => `Жду ${s} с` },
-    en: { name: 'Orchestrator', result: 'Result', noResult: 'No result.', progress: 'How complete', plan: 'Plan', criteria: 'Criteria', after: 'after', now: 'now', stopped: '(stopped before the end)', wait: (s: number) => `Waiting ${s} s` }
+    ru: { name: 'Оркестратор', result: 'Итог', noResult: 'Итог не получен.', progress: 'Степень выполнения', plan: 'План', criteria: 'Критерии', after: 'после', now: 'сразу', stopped: '(остановлено до завершения)', wait: (s: number) => `Жду ${s} с`,
+        note: (task: string, answer: string, progress: number) => `Задача «${task}»: ${answer} (выполнено на ${progress}%)` },
+    en: { name: 'Orchestrator', result: 'Result', noResult: 'No result.', progress: 'How complete', plan: 'Plan', criteria: 'Criteria', after: 'after', now: 'now', stopped: '(stopped before the end)', wait: (s: number) => `Waiting ${s} s`,
+        note: (task: string, answer: string, progress: number) => `Task “${task}”: ${answer} (${progress}% done)` }
 };
 export const orchestratorLabels = (language?: string) => language === 'en' ? LABELS.en : LABELS.ru;
 
