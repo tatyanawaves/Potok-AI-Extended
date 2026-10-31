@@ -263,7 +263,14 @@ Write "answer": the deliverable itself (not a description of the process), compl
 Score "progress" 0-100 honestly: how fully the goal is achieved. For each criterion, say whether it is met.
 Respond ONLY in JSON: {"answer": "...", "progress": 0, "criteria": [{"text": "...", "met": true}]}`;
 
-export const parseFinal = (raw: string | null, plan: Plan, fallback: Evaluation | null, log: StepLog[]): FinalReport => {
+/** The orchestrator's own words in its messages: English for 'en', Russian otherwise. */
+const LABELS = {
+    ru: { name: 'Оркестратор', result: 'Итог', noResult: 'Итог не получен.', progress: 'Степень выполнения', plan: 'План', criteria: 'Критерии', after: 'после', now: 'сразу', stopped: '(остановлено до завершения)', wait: (s: number) => `Жду ${s} с` },
+    en: { name: 'Orchestrator', result: 'Result', noResult: 'No result.', progress: 'How complete', plan: 'Plan', criteria: 'Criteria', after: 'after', now: 'now', stopped: '(stopped before the end)', wait: (s: number) => `Waiting ${s} s` }
+};
+export const orchestratorLabels = (language?: string) => language === 'en' ? LABELS.en : LABELS.ru;
+
+export const parseFinal = (raw: string | null, plan: Plan, fallback: Evaluation | null, log: StepLog[], language?: string): FinalReport => {
     const data = parseObject(raw);
     const lastGood = [...log].reverse().find(s => s.ok)?.result || '';
 
@@ -273,7 +280,7 @@ export const parseFinal = (raw: string | null, plan: Plan, fallback: Evaluation 
     });
 
     return {
-        answer: String(data?.answer || '').trim() || lastGood || 'Итог не получен.',
+        answer: String(data?.answer || '').trim() || lastGood || orchestratorLabels(language).noResult,
         progress: data && data.progress !== undefined ? clampPercent(data.progress) : (fallback?.progress ?? 0),
         criteria
     };
@@ -293,16 +300,19 @@ export interface OrchestrationProgress {
     progress: number;
 }
 
-export const renderReport = (report: FinalReport): string => [
-    `✅ Итог`,
+export const renderReport = (report: FinalReport, language?: string): string => [
+    `✅ ${orchestratorLabels(language).result}`,
     report.answer,
     '',
-    `Степень выполнения: ${report.progress}%`,
+    `${orchestratorLabels(language).progress}: ${report.progress}%`,
     ...report.criteria.map(c => `${c.met ? '✓' : '✗'} ${c.text}`)
 ].join('\n');
 
-export const renderPlan = (plan: Plan): string => [
-    `🧭 План: ${plan.goal}`,
-    `Критерии: ${plan.criteria.join('; ')}`,
-    ...plan.steps.map(s => `${s.id}. ${s.bot} — ${s.instruction}${s.after.length ? ` (после ${s.after.join(', ')})` : ' (сразу)'}`)
-].join('\n');
+export const renderPlan = (plan: Plan, language?: string): string => {
+    const l = orchestratorLabels(language);
+    return [
+        `🧭 ${l.plan}: ${plan.goal}`,
+        `${l.criteria}: ${plan.criteria.join('; ')}`,
+        ...plan.steps.map(s => `${s.id}. ${s.bot} — ${s.instruction}${s.after.length ? ` (${l.after} ${s.after.join(', ')})` : ` (${l.now})`}`)
+    ].join('\n');
+};

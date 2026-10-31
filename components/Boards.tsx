@@ -364,7 +364,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
     const renderMessage = (msg: BoardMessage, below?: React.ReactNode) => activeBoard ? (
         <MessageItem
             msg={msg}
-            author={messageAuthor(msg, activeBoard.members)}
+            author={messageAuthor(msg, activeBoard.members, settings.language)}
             signature={signatures[msg.id!]}
             place={`#${activeChannel?.name || ''} · ${activeBoard.name}`}
             canDelete={msg.authorId === currentUid}

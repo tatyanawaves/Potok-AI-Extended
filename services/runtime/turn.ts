@@ -11,6 +11,7 @@ import { loadTurnMemory, fileNote, findNotes, findKnowledge } from './memory';
 import { knowledgeBlock, citationOf, CITE_RULE } from '../knowledgeCore';
 import { terminalEntryOf, capEntries } from '../terminal';
 import { textToolCalls } from '../textToolCalls';
+import { orchestratorLabels } from '../orchestratorCore';
 import { plainReply } from '../replyText';
 
 /** Every tool name: for markup left in a final reply, whatever tool it names. */
@@ -503,7 +504,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
         if (waitRequest) {
             return {
-                reply: `⏳ Жду ${waitRequest.seconds} с: ${waitRequest.note}`,
+                reply: `⏳ ${orchestratorLabels(settings.language).wait(waitRequest.seconds)}: ${waitRequest.note}`,
                 modelName: model, toolsUsed, terminal, usage, wait: waitRequest
             };
         }

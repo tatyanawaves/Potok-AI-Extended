@@ -1,4 +1,5 @@
 import { Board, BoardMember } from '../types';
+import { orchestratorLabels } from './orchestratorCore';
 
 /**
  * Pure helpers shared by the board code.
@@ -75,14 +76,15 @@ export const freeName = (name: string, taken: string[]): string => {
  */
 export const messageAuthor = (
     message: { authorId: string, authorName: string, postedBy?: string, orchestrator?: boolean },
-    members: BoardMember[]
+    members: BoardMember[],
+    language?: string
 ): { name: string, via?: string } => {
     if (!message.postedBy) return { name: message.authorName };
     const nameOf = (id: string) => members.find(m => m.id === id)?.name;
     const via = message.postedBy !== message.authorId || message.orchestrator
         ? nameOf(message.postedBy) || '?'
         : undefined;
-    if (message.orchestrator) return { name: '🧭 Оркестратор', via };
+    if (message.orchestrator) return { name: `🧭 ${orchestratorLabels(language).name}`, via };
     return { name: nameOf(message.authorId) || message.authorName, via };
 };
 
