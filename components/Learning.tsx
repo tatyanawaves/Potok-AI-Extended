@@ -24,6 +24,18 @@ const LearningContext = createContext<LearningApi>({
     hintsOn: false, setHintsOn: () => { }, openGuide: () => { }, openCenter: () => { }
 });
 
+/** The centre's own labels, in the language picked in Settings. */
+const UI = {
+    ru: { title: 'Обучение', showHints: 'Показывать подсказки «?» рядом с функциями', close: 'Закрыть', all: 'Все разделы', links: 'Где взять / подключить', hintTitle: 'Как это работает и где взять ключ' },
+    en: { title: 'Learn', showHints: 'Show "?" hints next to features', close: 'Close', all: 'All topics', links: 'Where to get / connect', hintTitle: 'How it works and where to get a key' },
+    kk: { title: 'Оқыту', showHints: 'Функциялардың жанында «?» кеңестерін көрсету', close: 'Жабу', all: 'Барлық бөлімдер', links: 'Қайдан алуға / қосуға болады', hintTitle: 'Бұл қалай жұмыс істейді және кілтті қайдан алуға болады' }
+};
+const ui = () => {
+    let language = 'ru';
+    try { language = JSON.parse(localStorage.getItem('ai_settings') || '{}').language || 'ru'; } catch { /* default */ }
+    return (UI as Record<string, typeof UI.ru>)[language] || UI.ru;
+};
+
 export const useLearning = () => useContext(LearningContext);
 
 export const LearningProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -50,10 +62,10 @@ export const LearningProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             {children}
             {view?.kind === 'center' && (
                 <Modal onClose={() => setView(null)}>
-                    <h3 className="text-lg font-bold font-display text-white">Обучение</h3>
+                    <h3 className="text-lg font-bold font-display text-white">{ui().title}</h3>
                     <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
                         <input type="checkbox" checked={hintsOn} onChange={(e) => setHintsOn(e.target.checked)} className="accent-cyan-500" />
-                        Показывать подсказки «?» рядом с функциями
+                        {ui().showHints}
                     </label>
                     <div className="grid grid-cols-1 gap-1.5">
                         {GUIDES.map(g => (
@@ -82,7 +94,7 @@ const Modal: React.FC<{ onClose: () => void, children: React.ReactNode }> = ({ o
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
             <div role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}
                 className="relative bg-slate-900 border border-cyan-500/30 rounded-2xl shadow-2xl max-w-md w-full p-5 max-h-[88vh] overflow-y-auto space-y-3">
-                <button onClick={onClose} className="absolute top-4 right-4 text-slate-500 hover:text-white" aria-label="Закрыть">✕</button>
+                <button onClick={onClose} className="absolute top-4 right-4 text-slate-500 hover:text-white" aria-label={ui().close}>✕</button>
                 {children}
             </div>
         </div>
@@ -91,7 +103,7 @@ const Modal: React.FC<{ onClose: () => void, children: React.ReactNode }> = ({ o
 
 const GuideView: React.FC<{ guide: Guide, onBack: () => void, onClose: () => void }> = ({ guide, onBack, onClose }) => (
     <Modal onClose={onClose}>
-        <button onClick={onBack} className="text-[10px] font-mono uppercase tracking-wider text-cyan-400 hover:text-cyan-300">← Все разделы</button>
+        <button onClick={onBack} className="text-[10px] font-mono uppercase tracking-wider text-cyan-400 hover:text-cyan-300">← {ui().all}</button>
         <h3 className="text-lg font-bold font-display text-white pr-6">{guide.title}</h3>
         <p className="text-xs text-slate-400 leading-relaxed">{guide.summary}</p>
         <ol className="space-y-2">
@@ -104,7 +116,7 @@ const GuideView: React.FC<{ guide: Guide, onBack: () => void, onClose: () => voi
         </ol>
         {guide.links?.length ? (
             <div className="space-y-1">
-                <div className="text-[9px] font-mono uppercase tracking-widest text-slate-500">Где взять / подключить</div>
+                <div className="text-[9px] font-mono uppercase tracking-widest text-slate-500">{ui().links}</div>
                 {guide.links.map(link => (
                     <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer"
                         className="block text-[12px] text-cyan-300 hover:text-cyan-200 underline decoration-cyan-500/40 break-words">
@@ -129,8 +141,8 @@ export const Hint: React.FC<{ id: string, always?: boolean, className?: string }
     if (!hintsOn && !always) return null;
     return (
         <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); openGuide(id); }}
-            title="Как это работает и где взять ключ"
-            aria-label={`Обучение: ${guideById(id)?.title || id}`}
+            title={ui().hintTitle}
+            aria-label={`${ui().title}: ${guideById(id)?.title || id}`}
             className={`inline-flex items-center justify-center w-4 h-4 rounded-full border border-cyan-500/50 text-cyan-300 text-[9px] font-bold leading-none hover:bg-cyan-900/40 align-middle shrink-0 ${className}`}>
             ?
         </button>

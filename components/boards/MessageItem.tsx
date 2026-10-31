@@ -32,10 +32,15 @@ interface MessageItemProps {
 }
 
 /** Where a reply's tokens went, for the hover on its count. */
-const tokenBreakdown = (msg: BoardMessage): string | undefined => {
+const tokenBreakdown = (msg: BoardMessage, language?: string): string | undefined => {
     const d = msg.tokenDetail;
     if (!d) return undefined;
     const n = (x: number) => formatTokens(x);
+    if (language === 'en') return [
+        d.requests ? `Model requests: ${d.requests}` : '',
+        `Sent to the model: ${n(d.prompt)}${d.cached ? ` (${n(d.cached)} from cache)` : ''}`,
+        `Model output: ${n(d.completion)}${d.reasoning ? ` (${n(d.reasoning)} of it thinking)` : ''}`
+    ].filter(Boolean).join('\n');
     return [
         d.requests ? `Запросов к модели: ${d.requests}` : '',
         `Отправлено модели: ${n(d.prompt)}${d.cached ? ` (из кэша ${n(d.cached)})` : ''}`,
@@ -150,7 +155,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
                             onOpen={(url, at) => onOpenImage(url, at.name)}
                         />
                     ))}
-                    {msg.terminal?.length ? <TerminalBlock entries={msg.terminal} /> : null}
+                    {msg.terminal?.length ? <TerminalBlock entries={msg.terminal} language={language} /> : null}
                     {msg.toolsUsed?.some(tool => !(msg.terminal?.length && tool.startsWith('sandbox_'))) ? (
                         <div className="flex flex-wrap gap-1 mt-2">
                             {msg.toolsUsed.filter(tool => !(msg.terminal?.length && tool.startsWith('sandbox_'))).map(tool => (
@@ -167,7 +172,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
                         <div className="text-[9px] font-mono text-slate-700 mt-1">
                             {msg.modelName}
                             {msg.tokensUsed ? (
-                                <span title={tokenBreakdown(msg)} className={msg.tokenDetail ? 'cursor-help underline decoration-dotted decoration-slate-700' : ''}>
+                                <span title={tokenBreakdown(msg, language)} className={msg.tokenDetail ? 'cursor-help underline decoration-dotted decoration-slate-700' : ''}>
                                     {` · ${formatTokens(msg.tokensUsed)} ${t.tokensShort || 'ток.'}`}
                                 </span>
                             ) : ''}
