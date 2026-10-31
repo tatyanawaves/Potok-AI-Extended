@@ -35,6 +35,10 @@ export const parseRichText = (text: string): Segment[] => {
     return out;
 };
 
+/** The same text with its markup taken out, on one line: for previews such as a conversation list. */
+export const plainText = (text: string): string =>
+    parseRichText(text).map(s => s.text).join(' ').replace(/\s+/g, ' ').trim();
+
 export const RichText: React.FC<{ text: string }> = ({ text }) => (
     <>
         {parseRichText(text).map((s, i) => {

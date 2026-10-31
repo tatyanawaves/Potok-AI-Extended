@@ -7,6 +7,7 @@ import { AttachmentView, ImageLightbox } from './Attachments';
 import { ForwardButton, ForwardedLabel } from './Forward';
 import { MessageAttachment } from '../types';
 import { translations } from '../translations';
+import { RichText, plainText } from './RichText';
 import { subscribeToReadState, markRead, isConversationUnread, EMPTY_READ_STATE } from '../services/reads';
 import { auth, searchProfiles } from '../services/firebase';
 import {
@@ -317,7 +318,7 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                     {conversation.lastMessage && (
                                         <span className="text-[10px] text-slate-600 truncate block mt-0.5">
                                             {conversation.lastMessage.authorId === currentUid ? `${t.you || 'вы'}: ` : ''}
-                                            {conversation.lastMessage.content || (t.messageDeleted || 'сообщение удалено')}
+                                            {plainText(conversation.lastMessage.content || '') || (t.messageDeleted || 'сообщение удалено')}
                                         </span>
                                     )}
                                 </button>
@@ -430,7 +431,7 @@ const Messages: React.FC<MessagesProps> = ({ settings, onViewProfile, onFollow, 
                                                     )}
                                                     {isDeleted
                                                         ? (t.messageDeleted || 'сообщение удалено')
-                                                        : message.content}
+                                                        : <RichText text={message.content} />}
 
                                                     {!isDeleted && message.attachments?.map(a => (
                                                         <AttachmentView
