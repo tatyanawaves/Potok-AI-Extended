@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { ConfirmProvider } from './components/Confirm';
 import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 // Loaded on demand: the force-graph library behind the map is a large
 // dependency, and most sessions never open the map at all.
@@ -1177,6 +1178,7 @@ const App: React.FC = () => {
   // and pushed the header off the screen.
   return (
     <LearningProvider>
+    <ConfirmProvider language={settings.language}>
     <ForwardProvider settings={settings} followedProfiles={followedProfiles}>
     <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-clip relative">
       {showSettings && <SettingsModal settings={settings} onSave={handleSaveSettings} onClose={() => setShowSettings(false)} />}
@@ -1606,6 +1608,7 @@ const App: React.FC = () => {
       </main >
     </div >
     </ForwardProvider>
+    </ConfirmProvider>
     </LearningProvider>
   );
 };

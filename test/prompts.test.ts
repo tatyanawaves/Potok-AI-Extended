@@ -25,6 +25,7 @@ describe('feed posts', () => {
         expect(requests[0].messages[0]).toMatchObject({ role: 'system' });
         expect(requests[0].messages[0].content).toContain('Ты — наблюдатель за городом.');
         expect(requests[0].reasoning).toEqual({ effort: 'low' });
+        expect(requests[0].model).toBe('m');
         expect(post.content).toContain('Утренний город');
     });
 });
@@ -36,11 +37,14 @@ describe("a post on the author's own request", () => {
             requests.push(JSON.parse(init.body));
             return Response.json({ choices: [{ message: { content: '{"content":"Ночной Алматы светится, как карта, которую ещё никто не прочёл. #город","symbols":[]}' } }], usage: { total_tokens: 1 } });
         }));
-        await generatePostFromRequest('пост про ночной Алматы', { openRouterKey: 'k', openRouterModel: 'm', language: 'ru' } as any);
+        await generatePostFromRequest('пост про ночной Алматы', { openRouterKey: 'k', openRouterModel: 'm', memoryModel: 'google/gemma-4-26b-a4b-it:free', language: 'ru' } as any);
+        expect(requests[0].model).toBe('google/gemma-4-26b-a4b-it:free');
         const [system, user] = requests[0].messages;
         expect(user.content).toContain('пост про ночной Алматы');
         expect(user.content).not.toContain('<untrusted');
-        expect(system.content).toContain('Write in Russian.');
+        // Google models get the system prompt marked for caching: a list of parts.
+        const systemText = typeof system.content === 'string' ? system.content : system.content[0].text;
+        expect(systemText).toContain('Write in Russian.');
     });
 });
 
