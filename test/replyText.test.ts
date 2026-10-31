@@ -28,3 +28,12 @@ describe('prompt caching', () => {
         expect(markCacheable(messages, 'nvidia/nemotron:free')).toBe(messages);
     });
 });
+
+describe('where a reply\'s tokens went', () => {
+    it('keeps the thinking and cached parts and counts requests', async () => {
+        const { usageFrom, addUsage, tokenDetailOf, EMPTY_USAGE } = await import('../services/usage');
+        const one = usageFrom({ usage: { prompt_tokens: 2000, completion_tokens: 3000, total_tokens: 5000, completion_tokens_details: { reasoning_tokens: 2500 }, prompt_tokens_details: { cached_tokens: 1200 } } });
+        const sum = addUsage(addUsage(EMPTY_USAGE, one), one);
+        expect(tokenDetailOf(sum)).toEqual({ prompt: 4000, completion: 6000, reasoning: 5000, cached: 2400, requests: 2 });
+    });
+});

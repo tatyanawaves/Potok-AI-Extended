@@ -6,12 +6,12 @@ import {
 describe('usageFrom', () => {
     it('reads the OpenAI-compatible shape', () => {
         expect(usageFrom({ usage: { prompt_tokens: 120, completion_tokens: 30, total_tokens: 150 } }))
-            .toEqual({ promptTokens: 120, completionTokens: 30, totalTokens: 150 });
+            .toEqual({ promptTokens: 120, completionTokens: 30, totalTokens: 150, requests: 1 });
     });
 
     it('reads the Gemini shape', () => {
         expect(usageFrom({ usage: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 } }))
-            .toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
+            .toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15, requests: 1 });
     });
 
     it('derives the total when only the parts are given', () => {
@@ -21,8 +21,8 @@ describe('usageFrom', () => {
     it('returns zeroes rather than NaN when the provider says nothing', () => {
         // Free models often omit usage entirely. An undercount is a worse
         // counter; a NaN is a broken screen.
-        expect(usageFrom({})).toEqual(EMPTY_USAGE);
-        expect(usageFrom(null)).toEqual(EMPTY_USAGE);
+        expect(usageFrom({})).toEqual({ ...EMPTY_USAGE, requests: 1 });
+        expect(usageFrom(null)).toEqual({ ...EMPTY_USAGE, requests: 1 });
         expect(usageFrom({ usage: { prompt_tokens: 'many' } }).promptTokens).toBe(0);
     });
 });

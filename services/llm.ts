@@ -92,7 +92,7 @@ export interface CompletionRequest {
      * routine steps: thinking tokens are counted and paid like any others,
      * and running a command it already planned needs little of it.
      */
-    reasoning?: 'low';
+    reasoning?: 'low' | 'minimal';
 }
 
 /**
