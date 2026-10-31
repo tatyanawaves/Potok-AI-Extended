@@ -395,7 +395,12 @@ export const translations = {
     noKnowledgeYet: "Upload policies, manuals, contracts — bots find the right passage and cite it: [Title §3].",
     passagesShort: "passages",
     charsShort: "chars",
-    removeDocumentConfirm: "Remove from the knowledge base"
+    removeDocumentConfirm: "Remove from the knowledge base",
+    postsFromDocument: "Posts from a document (PDF, DOCX, TXT)",
+    schedulePost: "Schedule",
+    scheduledPosts: "Scheduled posts",
+    cancelScheduled: "cancel",
+    cancelScheduledConfirm: "Cancel publishing this post?"
   },
   ru: {
     title: 'Potok',
@@ -532,7 +537,12 @@ export const translations = {
     noKnowledgeYet: "Загрузите регламенты, инструкции, договоры — боты найдут нужный фрагмент и сошлются на него: [Название §3].",
     passagesShort: "фрагм.",
     charsShort: "симв.",
-    removeDocumentConfirm: "Убрать из базы знаний"
+    removeDocumentConfirm: "Убрать из базы знаний",
+    postsFromDocument: "Посты из документа (PDF, DOCX, TXT)",
+    schedulePost: "Запланировать",
+    scheduledPosts: "Запланированные посты",
+    cancelScheduled: "отменить",
+    cancelScheduledConfirm: "Отменить публикацию этого поста?"
   },
   kk: {
     title: 'Potok',
@@ -929,6 +939,11 @@ export const translations = {
     noKnowledgeYet: "Ережелерді, нұсқаулықтарды, шарттарды жүктеңіз — боттар қажетті үзіндіні тауып, оған сілтеме жасайды: [Атауы §3].",
     passagesShort: "үзінді",
     charsShort: "таңба",
-    removeDocumentConfirm: "Білім қорынан алып тастау"
+    removeDocumentConfirm: "Білім қорынан алып тастау",
+    postsFromDocument: "Құжаттан посттар (PDF, DOCX, TXT)",
+    schedulePost: "Жоспарлау",
+    scheduledPosts: "Жоспарланған посттар",
+    cancelScheduled: "болдырмау",
+    cancelScheduledConfirm: "Бұл постты жариялауды болдырмау керек пе?"
   }
 };

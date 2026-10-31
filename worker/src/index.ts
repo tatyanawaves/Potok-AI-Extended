@@ -27,6 +27,7 @@
 
 import { handleBotReply, handleBotReplyStatus, type ReplyEnv } from './botReplies';
 import { handleScheduleSave, handleScheduleDelete, runDueSchedules } from './schedules';
+import { handleSchedulePost, handleUnschedulePost, runDueScheduledPosts } from './scheduledPosts';
 import { botKey } from './botKey';
 import {
     MAX_FILE_BYTES, keyFor, boardKeyFor, putFile,
@@ -645,6 +646,8 @@ const handleFileDownload = async (
 const worker = {
     /** The cron trigger (wrangler.toml): scheduled bot requests that are due. */
     async scheduled(controller: { scheduledTime: number }, env: Env): Promise<void> {
+        const published = await runDueScheduledPosts(env, controller.scheduledTime).catch(error => { console.error('[scheduledPosts]', error); return 0; });
+        if (published) console.log(`[scheduledPosts] published ${published}`);
         const started = await runDueSchedules(env, controller.scheduledTime);
         if (started) console.log(`[schedules] started ${started}`);
     },
@@ -757,6 +760,8 @@ const worker = {
             if (url.pathname === '/machine') return await handleMachine(request, env, uid, reply, cors);
             if (url.pathname === '/schedules/save') return await handleScheduleSave(request, env, uid, idToken, reply);
             if (url.pathname === '/schedules/delete') return await handleScheduleDelete(request, env, uid, reply);
+            if (url.pathname === '/posts/schedule') return await handleSchedulePost(request, env, uid, idToken, reply);
+            if (url.pathname === '/posts/unschedule') return await handleUnschedulePost(request, env, uid, reply);
             if (url.pathname === '/bots/reply/status') return await handleBotReplyStatus(request, env, uid, reply);
             if (url.pathname === '/bots/reply') {
                 return await handleBotReply(request, env, uid, idToken, req => worker.fetch(req, env), (body, status) => json(body, status, cors));

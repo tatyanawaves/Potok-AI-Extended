@@ -22,6 +22,7 @@ import { Thought, SavedSession, AISettings, CognitiveState } from './types';
 import { translations } from './translations';
 import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink, setUsageGate } from './services/llm';
 import { withHelperDefaults } from './services/modelDefaults';
+import { schedulePost } from './services/scheduledPosts';
 import { DEFAULT_DAILY_REQUESTS, dailyLimitOf } from './services/spendLimit';
 import { recordSpend, spendGate } from './services/spend';
 
@@ -108,6 +109,8 @@ const App: React.FC = () => {
   const sessionStartRef = useRef(Date.now());
   const isCycleRunningRef = useRef(isCycleRunning);
   const streamPostsRef = useRef(0);
+  // The same count as state, shown on the stream button ("3/10").
+  const [streamCount, setStreamCount] = useState(0);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -632,7 +635,7 @@ const App: React.FC = () => {
     setPostToDelete(null);
   };
 
-  const handleHumanPost = async (content: string) => {
+  const handleHumanPost = async (content: string, publishAt?: number) => {
     try {
       console.log("[Post] Creating manual post:", content.substring(0, 30) + "...");
       
@@ -653,6 +656,11 @@ const App: React.FC = () => {
         type: 'human_post',
       };
 
+      // Later: queued for the server to publish; the symbols count when it goes out.
+      if (publishAt) {
+        await schedulePost(enrichedThought, publishAt);
+        return;
+      }
       await createPost(enrichedThought);
       console.log("[Post] Manual post created successfully");
 
@@ -1064,6 +1072,7 @@ const App: React.FC = () => {
 
       // A batch, not forever: each post is public and costs a request.
       streamPostsRef.current += 1;
+      setStreamCount(streamPostsRef.current);
       if (streamPostsRef.current >= MAX_STREAM_POSTS) {
         setIsThinking(false);
         isThinkingRef.current = false;
@@ -1098,6 +1107,7 @@ const App: React.FC = () => {
     setIsThinking(true);
     isThinkingRef.current = true;
     streamPostsRef.current = 0;
+    setStreamCount(0);
 
     console.log('[startThoughtGenerationStream] Starting thought loop');
 
@@ -1111,7 +1121,7 @@ const App: React.FC = () => {
     }, 0);
   };
 
-  const handleGeneratePost = async (customPrompt?: string) => {
+  const handleGeneratePost = async (customPrompt?: string, publishAt?: number) => {
     // Manual single generation
     console.log('[handleGeneratePost] Manual post generation requested', customPrompt ? 'with prompt' : '');
     try {
@@ -1132,6 +1142,11 @@ const App: React.FC = () => {
         authorId: auth.currentUser?.uid,
       };
 
+      if (publishAt) {
+        // Generated now, so the person can see what will go out; published later.
+        await schedulePost(enrichedThought, publishAt);
+        return;
+      }
       console.log('[handleGeneratePost] Saving to Firestore...');
       await createPost(enrichedThought);
       console.log('[handleGeneratePost] Post saved successfully!');
@@ -1449,6 +1464,7 @@ const App: React.FC = () => {
               onLogout={handleLogout}
               onSettings={() => setShowSettings(true)}
               isActive={isThinking && !isCycleRunning}
+              streamCount={streamCount}
               onStart={startThoughtGenerationStream}
               onStop={stopThoughtGenerationStream}
               onGeneratePost={handleGeneratePost}

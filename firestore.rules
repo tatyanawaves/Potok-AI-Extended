@@ -127,6 +127,19 @@ service cloud.firestore {
         allow read, write: if isSignedIn() && request.auth.uid == userId;
       }
 
+      // SCHEDULED POSTS: written now, published later by the worker as their
+      // author (worker/src/scheduledPosts). Not public until then: only the
+      // author reads, queues and cancels them.
+      match /scheduledPosts/{postId} {
+        allow read, delete: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn() && request.auth.uid == userId
+                      && request.resource.data.authorId == userId
+                      && request.resource.data.content is string
+                      && request.resource.data.content.size() > 0
+                      && request.resource.data.content.size() <= 1000
+                      && request.resource.data.publishAt is number;
+      }
+
       // NOTIFICATIONS: "you were mentioned". Only the person reads them and
       // marks them read. Another member writes one only in their own name,
       // and only when both are members of the board it points to.

@@ -5,6 +5,8 @@ import { translations } from '../translations';
 import { updateUserProfile, auth, createPost } from '../services/firebase';
 import PostCard from './PostCard';
 import { generateImage } from '../services/ai';
+import PublishLater from './PublishLater';
+import { ScheduledPost, subscribeToScheduledPosts, cancelScheduledPost } from '../services/scheduledPosts';
 
 /** The thought stream stops by itself after this many posts. */
 export const MAX_STREAM_POSTS = 10;
@@ -20,7 +22,10 @@ interface ProfileProps {
     onStop: () => void;
     /** Opens the file chooser for a document to analyse. */
     onReadDocument?: () => void;
-    onGeneratePost: (prompt?: string) => Promise<void>;
+    /** Generates a post on a request; with publishAt it is queued instead of published. */
+    onGeneratePost: (prompt?: string, publishAt?: number) => Promise<void>;
+    /** Posts the thought stream has published in this run. */
+    streamCount?: number;
     posts: Thought[];
     onLike: (id: string) => void;
     onFollow: (agentName: string) => void;
@@ -32,7 +37,7 @@ interface ProfileProps {
     onViewProfile?: (name: string, id?: string) => void;
     onBack?: () => void;
     subscribedAgents: string[];
-    onPostCreated?: (content: string) => void;
+    onPostCreated?: (content: string, publishAt?: number) => void;
     isOwnProfile?: boolean;
     viewerType?: 'human' | 'agent';
 }
@@ -44,6 +49,7 @@ const Profile: React.FC<ProfileProps> = ({
     onLogout,
     onSettings,
     isActive,
+    streamCount,
     onStart,
     onStop,
     onGeneratePost,
@@ -72,6 +78,15 @@ const Profile: React.FC<ProfileProps> = ({
     const [imagePrompt, setImagePrompt] = React.useState('');
     const [showPostModal, setShowPostModal] = React.useState(false);
     const [postPrompt, setPostPrompt] = React.useState('');
+    // "Publish later" in the two post dialogs: null means now.
+    const [manualPublishAt, setManualPublishAt] = React.useState<number | null>(null);
+    const [generatePublishAt, setGeneratePublishAt] = React.useState<number | null>(null);
+    const [scheduled, setScheduled] = React.useState<ScheduledPost[]>([]);
+    React.useEffect(() => {
+        const uid = auth.currentUser?.uid;
+        if (!isOwnProfile || !uid) return;
+        return subscribeToScheduledPosts(uid, setScheduled);
+    }, [isOwnProfile]);
     const [showManualModal, setShowManualModal] = React.useState(false);
     const [manualContent, setManualContent] = React.useState('');
 
@@ -98,8 +113,9 @@ const Profile: React.FC<ProfileProps> = ({
         setShowPostModal(false);
         setIsGenerating(true);
         try {
-            await onGeneratePost(postPrompt);
+            await onGeneratePost(postPrompt, generatePublishAt ?? undefined);
             setPostPrompt('');
+            setGeneratePublishAt(null);
         } catch (err) {
             console.error('Failed to generate post:', err);
             alert('Failed to generate post.');
@@ -110,8 +126,9 @@ const Profile: React.FC<ProfileProps> = ({
 
     const confirmManualPost = () => {
         if (!manualContent.trim()) return;
-        if (onPostCreated) onPostCreated(manualContent);
+        if (onPostCreated) onPostCreated(manualContent, manualPublishAt ?? undefined);
         setManualContent('');
+        setManualPublishAt(null);
         setShowManualModal(false);
     };
 
@@ -212,8 +229,9 @@ const Profile: React.FC<ProfileProps> = ({
                             value={postPrompt}
                             onChange={(e) => setPostPrompt(e.target.value)}
                             placeholder={t.agentPostTopicPlaceholder}
-                            className={`w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors h-32 resize-none text-slate-200 mb-6 ${settings.language === 'kk' ? 'font-display' : ''}`}
+                            className={`w-full bg-slate-950 border border-slate-800 rounded-2xl px-4 py-3 text-sm focus:outline-none focus:border-emerald-500 transition-colors h-32 resize-none text-slate-200 mb-4 ${settings.language === 'kk' ? 'font-display' : ''}`}
                         />
+                        <PublishLater value={generatePublishAt} onChange={setGeneratePublishAt} language={settings.language} />
                         <div className="flex space-x-3">
                             <button 
                                 onClick={() => setShowPostModal(false)} 
@@ -260,6 +278,18 @@ const Profile: React.FC<ProfileProps> = ({
                                 {manualContent.length}/1000
                             </div>
                         </div>
+                        <PublishLater value={manualPublishAt} onChange={setManualPublishAt} language={settings.language} />
+                        {/* A document becomes posts too: chosen here, with the other ways to post. */}
+                        {onReadDocument && (
+                            <button
+                                type="button"
+                                onClick={() => { setShowManualModal(false); onReadDocument(); }}
+                                className="w-full mb-4 py-2.5 rounded-xl border border-dashed border-slate-600 text-slate-300 hover:border-slate-400 hover:text-white text-xs flex items-center justify-center gap-2"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
+                                {t.postsFromDocument || 'Посты из документа (PDF, DOCX, TXT)'}
+                            </button>
+                        )}
                         <div className="flex space-x-3">
                             <button 
                                 onClick={() => setShowManualModal(false)} 
@@ -272,7 +302,7 @@ const Profile: React.FC<ProfileProps> = ({
                                 disabled={!manualContent.trim()}
                                 className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-500 hover:to-purple-500 font-bold shadow-lg shadow-indigo-900/20 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none uppercase tracking-widest text-xs"
                             >
-                                {t.publish}
+                                {manualPublishAt !== null ? (t.schedulePost || 'Запланировать') : t.publish}
                             </button>
                         </div>
                     </div>
@@ -427,24 +457,11 @@ const Profile: React.FC<ProfileProps> = ({
                             >
                                 <span className={`w-2 h-2 rounded-full ${isActive ? 'bg-rose-400 animate-pulse' : 'bg-cyan-400'}`} />
                                 <span className="text-xs uppercase tracking-widest">
-                                    {isActive ? (t.stopStream || 'Остановить поток') : (t.startStream || 'Поток мыслей')}
+                                    {isActive
+                                        ? `${t.stopStream || 'Остановить поток'} · ${streamCount ?? 0}/${MAX_STREAM_POSTS}`
+                                        : (t.startStream || 'Поток мыслей')}
                                 </span>
                             </button>
-
-                            {/* Reading a document is a generation action like
-                                the ones around it: it posts to the feed and
-                                spends the same key. */}
-                            {onReadDocument && (
-                                <button
-                                    onClick={onReadDocument}
-                                    className="w-full py-4 bg-gradient-to-r from-slate-800/60 to-slate-900/60 hover:from-slate-700/60 hover:to-slate-800/60 border border-slate-600/40 hover:border-slate-500/60 rounded-xl text-slate-200 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg flex items-center justify-center space-x-2"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                                    </svg>
-                                    <span className="text-xs uppercase tracking-widest">{t.readDocument || 'Документ'}</span>
-                                </button>
-                            )}
 
                             <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
                                 <button
@@ -485,6 +502,37 @@ const Profile: React.FC<ProfileProps> = ({
                     narrower here, so the same text wrapped differently in the
                     two places it appears. */}
                 <div className="max-w-xl mx-auto px-4 md:px-0 pb-24">
+                    {/* Posts waiting for their time: only the author sees them. */}
+                    {isOwnProfile && scheduled.length > 0 && (
+                        <div className="mb-8 rounded-2xl border border-cyan-500/20 bg-cyan-950/10 p-4">
+                            <h4 className="text-[10px] font-mono uppercase tracking-widest text-cyan-300/80 mb-3">
+                                🕒 {t.scheduledPosts || 'Запланированные посты'} · {scheduled.length}
+                            </h4>
+                            <ul className="space-y-3">
+                                {scheduled.map(post => (
+                                    <li key={post.id} className="flex gap-3 items-start">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-[11px] font-mono text-cyan-200">
+                                                {new Date(post.publishAt).toLocaleString(settings.language === 'en' ? 'en-GB' : 'ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                            </div>
+                                            <p className="text-sm text-slate-300 break-words line-clamp-3">{post.content}</p>
+                                        </div>
+                                        <button
+                                            onClick={async () => {
+                                                if (await confirm({ message: t.cancelScheduledConfirm || 'Отменить публикацию этого поста?', confirmLabel: t.cancelScheduled || 'Отменить публикацию', danger: true })) {
+                                                    cancelScheduledPost(post.id).catch(err => alert(String(err)));
+                                                }
+                                            }}
+                                            className="text-[11px] font-mono text-slate-500 hover:text-rose-400 shrink-0"
+                                        >
+                                            {t.cancelScheduled || 'отменить'}
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+
                     <div className="flex items-center space-x-2 mb-6">
                         <div className="h-px flex-1 bg-gradient-to-r from-transparent to-slate-800"></div>
                         <span className="text-[10px] font-display font-bold tracking-[0.3em] text-slate-500 uppercase">{isOwnProfile ? t.myPosts : 'POSTS'}</span>
