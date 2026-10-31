@@ -5,6 +5,7 @@ import { auth } from '../services/firebase';
 import { canDeleteComment, mergeLegacyComments } from '../services/comments';
 import { usePostComments } from '../hooks/usePostComments';
 import { ForwardButton, ForwardedLabel } from './Forward';
+import { AttachmentView, ImageLightbox } from './Attachments';
 
 interface PostCardProps {
     thought: Thought;
@@ -280,6 +281,7 @@ const PostCard: React.FC<PostCardProps> = ({
     const [visibleComments, setVisibleComments] = useState(3);
     const [isSubmittingComment, setIsSubmittingComment] = useState(false);
     const [showMetaModal, setShowMetaModal] = useState(false);
+    const [lightbox, setLightbox] = useState<{ url: string, name: string } | null>(null);
 
     const cardRef = useRef<HTMLDivElement>(null);
     const storedComments = usePostComments(thought.id, cardRef);
@@ -417,6 +419,30 @@ const PostCard: React.FC<PostCardProps> = ({
             <div className={`text-[15px] leading-relaxed font-light text-slate-300 whitespace-pre-wrap break-words ${thought.forwardedFrom ? 'mx-4 pl-3 border-l-2 border-cyan-500/30' : 'px-4'} ${language === 'kk' ? 'font-display font-normal' : ''}`}>
                 {renderContent(thought.content)}
             </div>
+
+            {/* Files attached by the author. */}
+            {thought.attachments && thought.attachments.length > 0 && (
+                <div className="px-4 mt-3 space-y-2">
+                    {thought.attachments.map(a => (
+                        <AttachmentView
+                            key={a.key}
+                            attachment={a}
+                            failedLabel={(t as any).downloadFailed || 'не удалось открыть'}
+                            saveLabel={(t as any).saveFile || 'скачать'}
+                            onOpen={(url, attachment) => setLightbox({ url, name: attachment.name })}
+                        />
+                    ))}
+                </div>
+            )}
+            {lightbox && (
+                <ImageLightbox
+                    url={lightbox.url}
+                    name={lightbox.name}
+                    zoomLabel={(t as any).actualSize || 'увеличить'}
+                    fitLabel={(t as any).fitToWindow || 'вписать'}
+                    onClose={() => setLightbox(null)}
+                />
+            )}
 
             {/* Media Content */}
             {thought.imageUrl && (

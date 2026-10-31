@@ -6,6 +6,7 @@ import { updateUserProfile, auth, createPost } from '../services/firebase';
 import PostCard from './PostCard';
 import { generateImage } from '../services/ai';
 import PublishLater from './PublishLater';
+import { attachmentsAvailable, formatSize, MAX_FILE_BYTES } from '../services/attachments';
 import { ScheduledPost, subscribeToScheduledPosts, cancelScheduledPost } from '../services/scheduledPosts';
 
 /** The thought stream stops by itself after this many posts. */
@@ -37,7 +38,8 @@ interface ProfileProps {
     onViewProfile?: (name: string, id?: string) => void;
     onBack?: () => void;
     subscribedAgents: string[];
-    onPostCreated?: (content: string, publishAt?: number) => void;
+    /** A post written by hand, with files attached; with publishAt it is queued. */
+    onPostCreated?: (content: string, publishAt?: number, files?: File[]) => void;
     isOwnProfile?: boolean;
     viewerType?: 'human' | 'agent';
 }
@@ -82,6 +84,9 @@ const Profile: React.FC<ProfileProps> = ({
     const [manualPublishAt, setManualPublishAt] = React.useState<number | null>(null);
     const [generatePublishAt, setGeneratePublishAt] = React.useState<number | null>(null);
     const [scheduled, setScheduled] = React.useState<ScheduledPost[]>([]);
+    // Files attached to a hand-written post, uploaded when it is published.
+    const [postFiles, setPostFiles] = React.useState<File[]>([]);
+    const postFileInput = React.useRef<HTMLInputElement>(null);
     React.useEffect(() => {
         const uid = auth.currentUser?.uid;
         if (!isOwnProfile || !uid) return;
@@ -126,9 +131,10 @@ const Profile: React.FC<ProfileProps> = ({
 
     const confirmManualPost = () => {
         if (!manualContent.trim()) return;
-        if (onPostCreated) onPostCreated(manualContent, manualPublishAt ?? undefined);
+        if (onPostCreated) onPostCreated(manualContent, manualPublishAt ?? undefined, postFiles);
         setManualContent('');
         setManualPublishAt(null);
+        setPostFiles([]);
         setShowManualModal(false);
     };
 
@@ -279,16 +285,42 @@ const Profile: React.FC<ProfileProps> = ({
                             </div>
                         </div>
                         <PublishLater value={manualPublishAt} onChange={setManualPublishAt} language={settings.language} />
-                        {/* A document becomes posts too: chosen here, with the other ways to post. */}
-                        {onReadDocument && (
-                            <button
-                                type="button"
-                                onClick={() => { setShowManualModal(false); onReadDocument(); }}
-                                className="w-full mb-4 py-2.5 rounded-xl border border-dashed border-slate-600 text-slate-300 hover:border-slate-400 hover:text-white text-xs flex items-center justify-center gap-2"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
-                                {t.postsFromDocument || 'Посты из документа (PDF, DOCX, TXT)'}
-                            </button>
+                        {/* A plain attachment to this post: no model is asked anything. */}
+                        {attachmentsAvailable() && (
+                            <div className="mb-4">
+                                <input
+                                    ref={postFileInput}
+                                    type="file"
+                                    multiple
+                                    className="hidden"
+                                    onChange={e => {
+                                        const chosen: File[] = Array.from(e.target.files || []);
+                                        const tooBig = chosen.find(f => f.size > MAX_FILE_BYTES);
+                                        if (tooBig) alert(`${tooBig.name}: ${t.fileTooLarge || 'файл больше'} ${Math.round(MAX_FILE_BYTES / 1024 / 1024)} МБ`);
+                                        setPostFiles(prev => [...prev, ...chosen.filter(f => f.size <= MAX_FILE_BYTES)].slice(0, 5));
+                                        e.target.value = '';
+                                    }}
+                                />
+                                {postFiles.length > 0 && (
+                                    <ul className="mb-2 space-y-1">
+                                        {postFiles.map((f, i) => (
+                                            <li key={`${f.name}-${i}`} className="flex items-center gap-2 text-xs text-slate-300">
+                                                <span className="truncate flex-1">📄 {f.name}</span>
+                                                <span className="text-slate-600 font-mono">{formatSize(f.size)}</span>
+                                                <button type="button" onClick={() => setPostFiles(prev => prev.filter((_, j) => j !== i))} className="text-slate-500 hover:text-rose-400">✕</button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                                <button
+                                    type="button"
+                                    onClick={() => postFileInput.current?.click()}
+                                    disabled={postFiles.length >= 5}
+                                    className="w-full py-2.5 rounded-xl border border-dashed border-slate-600 text-slate-300 hover:border-slate-400 hover:text-white text-xs flex items-center justify-center gap-2 disabled:opacity-40"
+                                >
+                                    📎 {t.attachFile || 'Прикрепить файл'}
+                                </button>
+                            </div>
                         )}
                         <div className="flex space-x-3">
                             <button 
@@ -462,6 +494,21 @@ const Profile: React.FC<ProfileProps> = ({
                                         : (t.startStream || 'Поток мыслей')}
                                 </span>
                             </button>
+
+                            {/* Reading a document is a generation action like
+                                the ones around it: it posts to the feed and
+                                spends the same key. */}
+                            {onReadDocument && (
+                                <button
+                                    onClick={onReadDocument}
+                                    className="w-full py-4 bg-gradient-to-r from-slate-800/60 to-slate-900/60 hover:from-slate-700/60 hover:to-slate-800/60 border border-slate-600/40 hover:border-slate-500/60 rounded-xl text-slate-200 font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg flex items-center justify-center space-x-2"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                    </svg>
+                                    <span className="text-xs uppercase tracking-widest">{t.readDocument || 'Документ'}</span>
+                                </button>
+                            )}
 
                             <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
                                 <button

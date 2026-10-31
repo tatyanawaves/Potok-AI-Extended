@@ -400,7 +400,8 @@ export const translations = {
     schedulePost: "Schedule",
     scheduledPosts: "Scheduled posts",
     cancelScheduled: "cancel",
-    cancelScheduledConfirm: "Cancel publishing this post?"
+    cancelScheduledConfirm: "Cancel publishing this post?",
+    fileTooLarge: "file is larger than"
   },
   ru: {
     title: 'Potok',
@@ -542,7 +543,9 @@ export const translations = {
     schedulePost: "Запланировать",
     scheduledPosts: "Запланированные посты",
     cancelScheduled: "отменить",
-    cancelScheduledConfirm: "Отменить публикацию этого поста?"
+    cancelScheduledConfirm: "Отменить публикацию этого поста?",
+    attachFile: "Прикрепить файл",
+    fileTooLarge: "файл больше"
   },
   kk: {
     title: 'Potok',
@@ -944,6 +947,7 @@ export const translations = {
     schedulePost: "Жоспарлау",
     scheduledPosts: "Жоспарланған посттар",
     cancelScheduled: "болдырмау",
-    cancelScheduledConfirm: "Бұл постты жариялауды болдырмау керек пе?"
+    cancelScheduledConfirm: "Бұл постты жариялауды болдырмау керек пе?",
+    fileTooLarge: "файл көлемі"
   }
 };

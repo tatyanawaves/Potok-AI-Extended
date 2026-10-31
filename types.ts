@@ -145,6 +145,8 @@ export interface Thought {
   id?: string;
   content: string;
   imageUrl?: string;
+  /** Files attached to a post written by hand (feed/<uid>/… in R2; services/attachments). */
+  attachments?: MessageAttachment[];
   videoUrl?: string;
   timestamp: number;
   type: 'seed' | 'evolution' | 'divergence' | 'conclusion' | 'desire' | 'feeling' | 'reflex' | 'goal' | 'human_post' | 'media_post';
