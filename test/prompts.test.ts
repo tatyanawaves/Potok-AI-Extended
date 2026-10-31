@@ -39,12 +39,13 @@ describe("a post on the author's own request", () => {
         }));
         await generatePostFromRequest('пост про ночной Алматы', { openRouterKey: 'k', openRouterModel: 'm', memoryModel: 'google/gemma-4-26b-a4b-it:free', language: 'ru' } as any);
         expect(requests[0].model).toBe('google/gemma-4-26b-a4b-it:free');
-        const [system, user] = requests[0].messages;
-        expect(user.content).toContain('пост про ночной Алматы');
-        expect(user.content).not.toContain('<untrusted');
-        // Google models get the system prompt marked for caching: a list of parts.
-        const systemText = typeof system.content === 'string' ? system.content : system.content[0].text;
-        expect(systemText).toContain('Write in Russian.');
+        // Gemma takes no system role: the rules ride at the top of the request.
+        const [only] = requests[0].messages;
+        expect(requests[0].messages).toHaveLength(1);
+        expect(only.role).toBe('user');
+        expect(only.content).toContain('Write in Russian.');
+        expect(only.content).toContain('пост про ночной Алматы');
+        expect(only.content).not.toContain('<untrusted');
     });
 });
 

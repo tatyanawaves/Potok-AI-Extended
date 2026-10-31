@@ -280,3 +280,21 @@ describe('knowledge base', () => {
         await assertSucceeds(deleteDoc(doc(as('bob'), 'boards/b1/kbChunks/d1-2')));
     });
 });
+
+describe('scheduled posts', () => {
+    const as = (uid: string) => env.authenticatedContext(uid).firestore();
+    const post = (authorId: string, extra: Record<string, unknown> = {}) => ({ content: 'Пост на завтра', authorId, authorName: 'Bob', publishAt: Date.now() + 3600_000, createdAt: 1, ...extra });
+
+    it('stay private to their author until published', async () => {
+        const { assertFails, assertSucceeds } = await import('@firebase/rules-unit-testing');
+        const { getDoc, deleteDoc } = await import('firebase/firestore');
+        await assertSucceeds(setDoc(doc(as('bob'), 'users/bob/scheduledPosts/p1'), post('bob')));
+        await assertFails(setDoc(doc(as('alice'), 'users/bob/scheduledPosts/p2'), post('alice')));
+        await assertFails(setDoc(doc(as('bob'), 'users/bob/scheduledPosts/p3'), post('alice')));
+        await assertFails(setDoc(doc(as('bob'), 'users/bob/scheduledPosts/p4'), post('bob', { content: 'x'.repeat(1001) })));
+        await assertFails(getDoc(doc(as('alice'), 'users/bob/scheduledPosts/p1')));
+        await assertSucceeds(getDoc(doc(as('bob'), 'users/bob/scheduledPosts/p1')));
+        await assertFails(deleteDoc(doc(as('alice'), 'users/bob/scheduledPosts/p1')));
+        await assertSucceeds(deleteDoc(doc(as('bob'), 'users/bob/scheduledPosts/p1')));
+    });
+});

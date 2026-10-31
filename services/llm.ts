@@ -96,12 +96,30 @@ export interface CompletionRequest {
 }
 
 /**
+ * Gemma at Google AI Studio takes no system role ("Developer instruction is
+ * not enabled"), so a request with one fails and the chain moved on to
+ * another model: posts asked of Gemma were written by Nemotron. For Gemma
+ * the system text goes at the start of the first user message instead.
+ */
+export const foldSystemForGemma = (messages: ChatMessage[], model: string): ChatMessage[] => {
+    if (!/gemma/i.test(model) || messages[0]?.role !== 'system' || typeof messages[0].content !== 'string') return messages;
+    const [system, ...rest] = messages;
+    const firstUser = rest.findIndex(m => m.role === 'user' && typeof m.content === 'string');
+    if (firstUser === -1) return [{ role: 'user', content: system.content }, ...rest];
+    return rest.map((m, i) => i === firstUser ? { ...m, content: `${system.content}\n\n${m.content}` } : m);
+};
+
+/** Messages as this model at this provider takes them. */
+export const shapeFor = (messages: ChatMessage[], model: string, openRouter: boolean): ChatMessage[] =>
+    openRouter ? markCacheable(foldSystemForGemma(messages, model), model) : foldSystemForGemma(messages, model);
+
+/**
  * Providers that cache a prompt prefix only when asked (Anthropic, Gemini
  * through OpenRouter): the system prompt is marked, so later rounds of a
  * reply pay a fraction for it. Others cache by themselves or not at all.
  */
 export const markCacheable = (messages: ChatMessage[], model: string): ChatMessage[] => {
-    if (!/^(anthropic|google)\//.test(model)) return messages;
+    if (!/^(anthropic\/|google\/gemini)/.test(model)) return messages;
     return messages.map((m, i) => i === 0 && m.role === 'system' && typeof m.content === 'string'
         ? { ...m, content: [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }] as any }
         : m);
@@ -387,7 +405,7 @@ export const complete = async (
 
     const body: Record<string, any> = {
         model,
-        messages: openRouter ? markCacheable(request.messages, model) : request.messages,
+        messages: shapeFor(request.messages, model, openRouter),
         temperature: request.temperature ?? 0.7
     };
     // Understood by OpenRouter for reasoning models and ignored by the rest.
@@ -455,6 +473,7 @@ export const complete = async (
 
     for (let i = 0; i < candidates.length && i < MAX_MODELS; i++) {
         body.model = candidates[i];
+        body.messages = shapeFor(request.messages, candidates[i], openRouter);
 
         for (let retry = 0; ; retry++) {
             let response: Response;
@@ -538,6 +557,9 @@ export const complete = async (
         const switchable = toFallback || isModelMissing(lastError) || isToolsUnsupported(lastError)
             || (isTransient(lastError) && current.endsWith(':free'));
         if (!switchable) break;
+        // Said where it can be seen: a switch was invisible, and a model that
+        // always failed (Gemma, above) looked like a slow answer from another.
+        console.warn(`[LLM] ${current} failed (${lastError.status}: ${String(lastError.detail).slice(0, 200)}); trying the next model`);
 
         if (fallback && !candidates.includes(fallback)) candidates.splice(i + 1, 0, fallback);
         if (!fallbacksAdded) {

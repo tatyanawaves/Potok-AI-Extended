@@ -37,3 +37,22 @@ describe('where a reply\'s tokens went', () => {
         expect(tokenDetailOf(sum)).toEqual({ prompt: 4000, completion: 6000, reasoning: 5000, cached: 2400, requests: 2 });
     });
 });
+
+describe('messages shaped for the model', () => {
+    it('folds the system prompt into the first request for Gemma, and leaves other models alone', async () => {
+        const { foldSystemForGemma, shapeFor } = await import('../services/llm');
+        const messages = [
+            { role: 'system' as const, content: 'rules' },
+            { role: 'assistant' as const, content: 'earlier' },
+            { role: 'user' as const, content: 'task' }
+        ];
+        expect(foldSystemForGemma(messages, 'google/gemma-4-26b-a4b-it:free')).toEqual([
+            { role: 'assistant', content: 'earlier' },
+            { role: 'user', content: 'rules\n\ntask' }
+        ]);
+        expect(foldSystemForGemma(messages, 'nvidia/nemotron:free')).toBe(messages);
+        // Gemma is not cached as Gemini is; Gemini keeps its system message, marked.
+        expect(shapeFor(messages, 'google/gemma-4-31b-it:free', true)[0].role).toBe('assistant');
+        expect((shapeFor(messages, 'google/gemini-2.5-flash', true)[0].content as any)[0].cache_control).toBeDefined();
+    });
+});
