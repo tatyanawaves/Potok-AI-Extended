@@ -101,7 +101,8 @@ export const startServerTask = async (options: StartTaskOptions): Promise<string
             memoryModel: settings.memoryModel || undefined,
             embeddingModel: settings.embeddingModel || undefined,
             fallbackModel: settings.fallbackModel || undefined,
-            dailyRequestLimit: dailyLimitOf(settings)
+            dailyRequestLimit: dailyLimitOf(settings),
+            language: settings.language
         },
         apiKey: settings.openRouterKey,
         refreshToken: user.refreshToken,
