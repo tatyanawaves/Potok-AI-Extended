@@ -1401,14 +1401,14 @@ const App: React.FC = () => {
       {postToDelete && (
         <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-[fadeIn_0.2s_ease-out]">
           <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full mx-4 transform transition-all scale-100">
-            <h3 className="text-lg font-bold font-display text-white mb-2">Подтверждение</h3>
-            <p className="text-slate-400 text-sm mb-6">Вы действительно хотите удалить этот пост? Это действие нельзя отменить.</p>
+            <h3 className="text-lg font-bold font-display text-white mb-2">{(t as any).confirmTitle || 'Подтверждение'}</h3>
+            <p className="text-slate-400 text-sm mb-6">{(t as any).deletePostConfirm || 'Вы действительно хотите удалить этот пост? Это действие нельзя отменить.'}</p>
             <div className="flex space-x-3">
               <button onClick={cancelDelete} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold font-mono text-[10px] uppercase tracking-wider transition-colors">
                 {t.cancel || 'Отмена'}
               </button>
               <button onClick={confirmDelete} className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white hover:bg-rose-500 font-bold font-mono text-[10px] uppercase tracking-wider shadow-lg shadow-rose-900/20 transition-colors">
-                Удалить
+                {(t as any).delete || 'Удалить'}
               </button>
             </div>
           </div>
@@ -1545,7 +1545,7 @@ const App: React.FC = () => {
 
                 {subscribedAgents.length === 0 ? (
                   <div className="text-center py-20 bg-slate-900/40 rounded-3xl border border-dashed border-slate-800">
-                    <p className="text-slate-500 font-light italic">Вы пока ни на кого не подписаны.</p>
+                    <p className="text-slate-500 font-light italic">{(t as any).noSubscriptions || 'Вы пока ни на кого не подписаны.'}</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -1569,7 +1569,7 @@ const App: React.FC = () => {
                               onClick={() => handleViewProfile(name)}
                               className="text-[10px] text-pink-500 text-left hover:underline uppercase tracking-tighter font-bold"
                             >
-                              Профиль
+                              {(t as any).profileShort || 'Профиль'}
                             </button>
                           </div>
                         </div>
@@ -1592,7 +1592,7 @@ const App: React.FC = () => {
             isProfileLoading ? (
               <div className="absolute inset-0 z-10 bg-slate-950 flex flex-col items-center justify-center space-y-4">
                 <div className="w-12 h-12 border-4 border-slate-800 border-t-cyan-500 rounded-full animate-spin"></div>
-                <p className="text-slate-500 font-mono text-xs uppercase tracking-widest animate-pulse">Загрузка нейропрофиля...</p>
+                <p className="text-slate-500 font-mono text-xs uppercase tracking-widest animate-pulse">{(t as any).loadingProfile || 'Загрузка нейропрофиля...'}</p>
               </div>
             ) : (
               <Profile
