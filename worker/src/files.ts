@@ -72,6 +72,21 @@ export const keyFor = (conversationId: string, name: string): string =>
 export const boardKeyFor = (boardId: string, name: string): string =>
     `board/${boardId}/${crypto.randomUUID()}-${safeName(name)}`;
 
+/**
+ * A file attached to a feed post: `feed/<uid>/…`. The feed is open to every
+ * signed-in person, so are its files; the uid in the key is the author, the
+ * only one who may delete it.
+ */
+export const feedKeyFor = (uid: string, name: string): string =>
+    `feed/${uid}/${crypto.randomUUID()}-${safeName(name)}`;
+
+/** The author of a feed attachment, or null if the key is not one. */
+export const feedOwnerOfKey = (key: string): string | null => {
+    const parts = key.split('/');
+    if (parts.length < 3 || parts[0] !== 'feed') return null;
+    return parts[1] || null;
+};
+
 /** The conversation a key belongs to, or null if the key is not one of ours. */
 export const conversationOfKey = (key: string): string | null => {
     const parts = key.split('/');

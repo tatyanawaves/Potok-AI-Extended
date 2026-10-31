@@ -49,7 +49,7 @@ const authHeader = async (): Promise<string> => {
  * using the caller's own token.
  */
 export const uploadAttachment = async (
-    target: { conversationId: string } | { boardId: string },
+    target: { conversationId: string } | { boardId: string } | { feed: true },
     file: File
 ): Promise<Attachment> => {
     if (!PIPEDREAM_WORKER_URL) throw new Error('Attachment storage is not configured');
@@ -61,8 +61,10 @@ export const uploadAttachment = async (
     const url = new URL(`${PIPEDREAM_WORKER_URL}/files/upload`);
     if ('conversationId' in target) {
         url.searchParams.set('conversationId', target.conversationId);
-    } else {
+    } else if ('boardId' in target) {
         url.searchParams.set('boardId', target.boardId);
+    } else {
+        url.searchParams.set('feed', '1');
     }
     url.searchParams.set('name', file.name);
 

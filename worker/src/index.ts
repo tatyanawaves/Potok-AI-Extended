@@ -30,7 +30,7 @@ import { handleScheduleSave, handleScheduleDelete, runDueSchedules } from './sch
 import { handleSchedulePost, handleUnschedulePost, runDueScheduledPosts } from './scheduledPosts';
 import { botKey } from './botKey';
 import {
-    MAX_FILE_BYTES, keyFor, boardKeyFor, putFile,
+    MAX_FILE_BYTES, keyFor, boardKeyFor, feedKeyFor, feedOwnerOfKey, putFile,
     mayAccessConversation, conversationOfKey, boardOfKey, isBoardMember
 } from './files';
 import { handleTaskStart, handleTaskCancel, type TaskEnv } from './agentTasks';
@@ -523,6 +523,9 @@ const resolveUploadKey = async (
             : null;
     }
 
+    // A file for one's own feed post: always under one's own uid.
+    if (url.searchParams.get('feed') === '1') return feedKeyFor(uid, name);
+
     return null;
 };
 
@@ -575,6 +578,9 @@ const mayAccessKey = async (
     const boardId = boardOfKey(key);
     if (boardId) return isBoardMember(env.FIREBASE_PROJECT_ID, boardId, idToken, env.FIRESTORE_EMULATOR_HOST);
 
+    // The feed is public to signed-in people, and so are its files.
+    if (feedOwnerOfKey(key)) return true;
+
     return false;
 };
 
@@ -595,7 +601,9 @@ const handleFileDelete = async (
 
     if (!body.key) return json({ error: 'key is required' }, 400, cors);
 
-    if (!(await mayAccessKey(env, uid, idToken, body.key))) {
+    // Anyone may read a feed file, but only its author removes it.
+    const feedOwner = feedOwnerOfKey(body.key);
+    if (feedOwner ? feedOwner !== uid : !(await mayAccessKey(env, uid, idToken, body.key))) {
         return json({ error: 'That file is not yours' }, 403, cors);
     }
 

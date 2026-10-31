@@ -23,6 +23,7 @@ import { translations } from './translations';
 import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink, setUsageGate } from './services/llm';
 import { withHelperDefaults } from './services/modelDefaults';
 import { schedulePost } from './services/scheduledPosts';
+import { uploadAttachment, deleteAttachments } from './services/attachments';
 import { DEFAULT_DAILY_REQUESTS, dailyLimitOf } from './services/spendLimit';
 import { recordSpend, spendGate } from './services/spend';
 
@@ -623,7 +624,10 @@ const App: React.FC = () => {
   const confirmDelete = async () => {
     if (!postToDelete) return;
     try {
+      const post = [...thoughts, ...viewedUserPosts].find(p => p.id === postToDelete);
       await deletePost(postToDelete);
+      // Its files are of no use without it.
+      if (post?.attachments?.length) deleteAttachments(post.attachments).catch(() => { });
       setPostToDelete(null);
     } catch (err: any) {
       console.error("Failed to delete post", err);
@@ -635,7 +639,7 @@ const App: React.FC = () => {
     setPostToDelete(null);
   };
 
-  const handleHumanPost = async (content: string, publishAt?: number) => {
+  const handleHumanPost = async (content: string, publishAt?: number, files: File[] = []) => {
     try {
       console.log("[Post] Creating manual post:", content.substring(0, 30) + "...");
       
@@ -655,6 +659,11 @@ const App: React.FC = () => {
         authorId: auth.currentUser?.uid,
         type: 'human_post',
       };
+
+      // Files go up first: a post must not point at files that never arrived.
+      if (files.length) {
+        (enrichedThought as any).attachments = await Promise.all(files.map(file => uploadAttachment({ feed: true }, file)));
+      }
 
       // Later: queued for the server to publish; the symbols count when it goes out.
       if (publishAt) {
