@@ -1,5 +1,5 @@
 import { AISettings, BoardMember, TerminalEntry, TokenUsage } from '../../types';
-import { addUsage, EMPTY_USAGE } from '../usage';
+import { addUsage, EMPTY_USAGE, tokenDetailOf } from '../usage';
 import { connect, callTool, toOpenAITools, McpConnection, McpTool } from '../mcp';
 import { complete, ChatMessage, isFatalProviderError, modelOf, extractJson, Completion } from '../llm';
 import { memoryBlock, selectTools, clip } from '../memoryCore';
@@ -41,6 +41,14 @@ const MAX_TOOL_RESULT_LENGTH = 6000;
  * resent whole, results made each round cost more than the one before.
  */
 export const SHORTENED_RESULT_CHARS = 700;
+
+/**
+ * How much a reasoning model may think in each round. Its hidden thinking is
+ * billed as output and was most of a reply's tokens (about 4K per request on
+ * Nemotron): some for the plan, in the first round; as little as the model
+ * allows for the steps after it. Models without reasoning ignore this.
+ */
+export const reasoningFor = (round: number): 'low' | 'minimal' => round === 0 ? 'low' : 'minimal';
 
 /** Rounds of tool calls allowed before the bot must answer with prose. */
 export const MAX_TOOL_ROUNDS = 10;
@@ -500,6 +508,14 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             };
         }
 
+        // The model's own earlier calls go the same way: a script it wrote
+        // three rounds ago is resent with every request otherwise.
+        for (const message of messages) {
+            if (message.role !== 'assistant' || !message.tool_calls || lastRound.includes(message)) continue;
+            message.tool_calls = message.tool_calls.map(call => call.function.arguments.length <= SHORTENED_RESULT_CHARS
+                ? call
+                : { ...call, function: { ...call.function, arguments: JSON.stringify({ shortened: true, start: call.function.arguments.slice(0, SHORTENED_RESULT_CHARS) }) } });
+        }
         for (const [message, { source, text }] of toolResults) {
             if (lastRound.includes(message) || text.length <= SHORTENED_RESULT_CHARS) continue;
             message.content = untrusted(source, `${text.slice(0, SHORTENED_RESULT_CHARS)}\n… (earlier result shortened; call the tool again if you need it whole)`);
@@ -515,7 +531,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
         }
         let completion: Completion;
         try {
-            completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta, ...(round > 0 ? { reasoning: 'low' as const } : {}) }, settings);
+            completion = await complete({ messages, tools: offer, model, temperature, signal, onDelta, reasoning: reasoningFor(round) }, settings);
         } catch (error) {
             // A model without vision: the same request, the pictures replaced by a note.
             if (!pictures.size || !refusedImages(error)) throw error;
@@ -616,7 +632,7 @@ export const runBotTurn = async (options: TurnOptions): Promise<TurnResult> => {
             : await Promise.all(completion.toolCalls.map(execute));
 
         messages.push(...results);
-        lastRound = results;
+        lastRound = [...results, messages[messages.length - results.length - 1]];
     }
 
     return { reply: replyOrNotice(null), modelName: model, toolsUsed, terminal, usage };
@@ -646,6 +662,7 @@ export const runAndPostTurn = async (options: TurnOptions): Promise<TurnSummary>
             toolsUsed: result.toolsUsed.length ? result.toolsUsed : undefined,
             terminal: result.terminal.length ? capEntries(result.terminal) : undefined,
             tokensUsed: result.usage.totalTokens || undefined,
+            tokenDetail: tokenDetailOf(result.usage),
             costUsd: result.usage.cost || undefined
         });
         return { bot: agent.name, ok: true, result };

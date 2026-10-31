@@ -31,6 +31,18 @@ interface MessageItemProps {
     children?: React.ReactNode;
 }
 
+/** Where a reply's tokens went, for the hover on its count. */
+const tokenBreakdown = (msg: BoardMessage): string | undefined => {
+    const d = msg.tokenDetail;
+    if (!d) return undefined;
+    const n = (x: number) => formatTokens(x);
+    return [
+        d.requests ? `Запросов к модели: ${d.requests}` : '',
+        `Отправлено модели: ${n(d.prompt)}${d.cached ? ` (из кэша ${n(d.cached)})` : ''}`,
+        `Ответ модели: ${n(d.completion)}${d.reasoning ? ` (из них размышления ${n(d.reasoning)})` : ''}`
+    ].filter(Boolean).join('\n');
+};
+
 const MessageItem: React.FC<MessageItemProps> = ({
     msg, author, signature, place, canDelete, isRunning, language, t,
     onViewProfile, onSaveCode, onRunCode, onDelete, onOpenImage, children
@@ -154,7 +166,11 @@ const MessageItem: React.FC<MessageItemProps> = ({
                     {msg.modelName && (
                         <div className="text-[9px] font-mono text-slate-700 mt-1">
                             {msg.modelName}
-                            {msg.tokensUsed ? ` · ${formatTokens(msg.tokensUsed)} ${t.tokensShort || 'ток.'}` : ''}
+                            {msg.tokensUsed ? (
+                                <span title={tokenBreakdown(msg)} className={msg.tokenDetail ? 'cursor-help underline decoration-dotted decoration-slate-700' : ''}>
+                                    {` · ${formatTokens(msg.tokensUsed)} ${t.tokensShort || 'ток.'}`}
+                                </span>
+                            ) : ''}
                             {msg.costUsd ? ` · ${formatCost(msg.costUsd)}` : ''}
                         </div>
                     )}

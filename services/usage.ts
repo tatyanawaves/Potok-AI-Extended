@@ -26,19 +26,41 @@ export const usageFrom = (data: any): TokenUsage => {
     const completion = Number(usage.completion_tokens ?? usage.candidatesTokenCount ?? 0) || 0;
     const total = Number(usage.total_tokens ?? usage.totalTokenCount ?? 0) || prompt + completion;
     const cost = Number(usage.cost ?? 0) || 0;
+    const reasoning = Number(usage.completion_tokens_details?.reasoning_tokens ?? usage.thoughtsTokenCount ?? 0) || 0;
+    const cached = Number(usage.prompt_tokens_details?.cached_tokens ?? usage.cachedContentTokenCount ?? 0) || 0;
 
-    return { promptTokens: prompt, completionTokens: completion, totalTokens: total, ...(cost ? { cost } : {}) };
+    return {
+        promptTokens: prompt, completionTokens: completion, totalTokens: total, requests: 1,
+        ...(cost ? { cost } : {}),
+        ...(reasoning ? { reasoningTokens: reasoning } : {}),
+        ...(cached ? { cachedTokens: cached } : {})
+    };
 };
 
 export const addUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => {
     const cost = (a.cost || 0) + (b.cost || 0);
+    const reasoning = (a.reasoningTokens || 0) + (b.reasoningTokens || 0);
+    const cached = (a.cachedTokens || 0) + (b.cachedTokens || 0);
+    const requests = (a.requests || 0) + (b.requests || 0);
     return {
         promptTokens: a.promptTokens + b.promptTokens,
         completionTokens: a.completionTokens + b.completionTokens,
         totalTokens: a.totalTokens + b.totalTokens,
-        ...(cost ? { cost } : {})
+        ...(cost ? { cost } : {}),
+        ...(reasoning ? { reasoningTokens: reasoning } : {}),
+        ...(cached ? { cachedTokens: cached } : {}),
+        ...(requests ? { requests } : {})
     };
 };
+
+/** The breakdown kept on a reply, for the hover on its token count. */
+export const tokenDetailOf = (usage: TokenUsage) => usage.totalTokens ? {
+    prompt: usage.promptTokens,
+    completion: usage.completionTokens,
+    ...(usage.reasoningTokens ? { reasoning: usage.reasoningTokens } : {}),
+    ...(usage.cachedTokens ? { cached: usage.cachedTokens } : {}),
+    ...(usage.requests ? { requests: usage.requests } : {})
+} : undefined;
 
 /** Dollars as people read them: cents for anything over a cent, more digits below. */
 export const formatCost = (usd: number): string =>

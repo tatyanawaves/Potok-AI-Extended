@@ -544,7 +544,7 @@ describe('the tokens a long reply spends', () => {
 
         const results = (r: any) => r.messages.filter((m: any) => m.role === 'tool').map((m: any) => m.content.length);
         const [first, , third] = requests;
-        expect(first.reasoning).toBeUndefined();
+        expect(first.reasoning).toEqual({ effort: 'low' });
         const [older, newer] = results(third);
         expect(older).toBeLessThan(1000);
         expect(newer).toBeGreaterThan(3000);
@@ -554,5 +554,27 @@ describe('the tokens a long reply spends', () => {
         fakeModel([{ content: '{"summary":"Всё сделано.","facts":["сумма 15000"]}' }]);
         const result = await runBotTurn({ store: store(), agent: bot([]), boardId: 'b', channelId: 'c', channelName: 'g', settings });
         expect(result.reply).toBe('Всё сделано.\n\n- сумма 15000');
+    });
+});
+
+describe('what a reply sends again each round', () => {
+    it('asks for a plan at low effort and routine steps at minimal, and shortens old calls', async () => {
+        const url = 'https://worker/tools/sandbox?provider=e2b&diet=1';
+        fakeMcp({ [`${url}&board=b`]: { tools: [{ name: 'sandbox_run_code' }], call: () => 'ok' } });
+        const longCode = 'print(1)\n'.repeat(200);
+        const requests = fakeModel([
+            { tool_calls: [call('sandbox_run_code', { code: longCode }, 'c1')] },
+            { tool_calls: [call('sandbox_run_code', { code: 'print(2)' }, 'c2')] },
+            { content: 'готово' }
+        ]);
+        const { reasoningFor } = await import('../services/runtime/turn');
+        expect([reasoningFor(0), reasoningFor(1), reasoningFor(5)]).toEqual(['low', 'minimal', 'minimal']);
+
+        await runBotTurn({ store: store(), agent: bot([url]), boardId: 'b', channelId: 'c', channelName: 'g', settings, toolPolicy: 'auto' });
+
+        const firstCall = (r: any) => r.messages.find((m: any) => m.tool_calls)?.tool_calls[0].function.arguments;
+        expect(firstCall(requests[1]).length).toBeGreaterThan(longCode.length);
+        expect(firstCall(requests[2]).length).toBeLessThan(1000);
+        expect(JSON.parse(firstCall(requests[2])).shortened).toBe(true);
     });
 });

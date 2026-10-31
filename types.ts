@@ -277,6 +277,12 @@ export interface TokenUsage {
   totalTokens: number;
   /** In US dollars, when the provider says (OpenRouter does). */
   cost?: number;
+  /** Of the completion: the model's hidden thinking, when it reports it. */
+  reasoningTokens?: number;
+  /** Of the prompt: read from the provider's cache, at a discount. */
+  cachedTokens?: number;
+  /** Model requests counted in. */
+  requests?: number;
 }
 
 export interface DailySpend {
@@ -350,6 +356,8 @@ export interface BoardMessage {
    * Shown on the message so the cost sits where it was incurred.
    */
   tokensUsed?: number;
+  /** Where tokensUsed went (services/usage), shown on hover. */
+  tokenDetail?: { prompt: number, completion: number, reasoning?: number, cached?: number, requests?: number };
   /** Bot-only: what the reply cost in US dollars, when the provider said. */
   costUsd?: number;
   /**

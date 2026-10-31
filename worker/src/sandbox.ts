@@ -560,7 +560,7 @@ export const sandboxTools = (
     const lifetime = persistent
         ? "This is the board's own computer: files and installed packages stay between conversations, days apart."
         : 'State and files persist between calls for about 25 minutes.';
-    const sameFiles = 'All sandbox tools share one home directory: "~", relative paths and the working directory of code and commands all point there, so a file written by one tool is found by the others at the same path.';
+    const sameFiles = 'All sandbox tools share one home directory ("~", relative paths, working directory): same files everywhere.';
 
     const tools: ServerTool[] = [
         {
