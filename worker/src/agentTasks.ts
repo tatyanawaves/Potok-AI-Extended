@@ -57,7 +57,7 @@ export interface TaskParams {
     bots: BoardMember[];
     author: { id: string, name: string };
     /** Non-secret model settings. */
-    settings: Pick<AISettings, 'apiBaseUrl' | 'openRouterModel' | 'memoryModel' | 'embeddingModel' | 'fallbackModel' | 'dailyRequestLimit'>;
+    settings: Pick<AISettings, 'apiBaseUrl' | 'openRouterModel' | 'memoryModel' | 'embeddingModel' | 'fallbackModel' | 'dailyRequestLimit' | 'language'>;
     /** { apiKey, refreshToken, mcpTokens }, sealed. */
     sealed: string;
     /** This worker's public origin, to reach its own Pipedream bridge in-process. */
@@ -231,7 +231,8 @@ export const handleTaskStart = async (
             memoryModel: body.settings?.memoryModel || undefined,
             embeddingModel: body.settings?.embeddingModel || undefined,
             fallbackModel: typeof body.settings?.fallbackModel === 'string' ? body.settings.fallbackModel.slice(0, 200) || undefined : undefined,
-            dailyRequestLimit: Number.isFinite(Number(body.settings?.dailyRequestLimit)) ? Math.max(0, Math.floor(Number(body.settings.dailyRequestLimit))) : undefined
+            dailyRequestLimit: Number.isFinite(Number(body.settings?.dailyRequestLimit)) ? Math.max(0, Math.floor(Number(body.settings.dailyRequestLimit))) : undefined,
+            language: (['ru', 'en', 'kk'] as const).find(l => l === body.settings?.language) || 'ru'
         },
         sealed: await seal({ apiKey, refreshToken, mcpTokens: body.mcpTokens || {} } satisfies Secrets, sealingSecret(env)),
         selfOrigin: new URL(request.url).origin
