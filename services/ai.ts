@@ -68,11 +68,14 @@ export const isUsablePost = (content: string): boolean => {
 const writePost = async (task: string, temperature: number, settings: AISettings | undefined, type: Thought['type']): Promise<Thought> => {
   const messages = postMessages(task, settings);
   // A short creative answer: thinking at length adds tokens, not quality.
-  let result = await complete({ messages, temperature, json: true, reasoning: 'low' }, settings);
+  // The service model (Settings): fast and without long thinking. On the
+  // main model, Nemotron, a two-sentence post took one to three minutes.
+  const model = settings?.memoryModel?.trim() || undefined;
+  let result = await complete({ messages, temperature, json: true, reasoning: 'low', model }, settings);
   let thought = thoughtFrom(result.content, promptText(messages), settings, type, result.model);
   if (!isUsablePost(thought.content)) {
     const retry: ChatMessage[] = [...messages, { role: 'assistant', content: result.content || '' }, { role: 'user', content: `That is not a usable post (too short, a fragment, or not a complete thought). Write it again following the rules: ${MIN_POST_LENGTH}–220 characters, one complete thought.` }];
-    result = await complete({ messages: retry, temperature: Math.max(0.5, temperature - 0.2), json: true, reasoning: 'low' }, settings);
+    result = await complete({ messages: retry, temperature: Math.max(0.5, temperature - 0.2), json: true, reasoning: 'low', model }, settings);
     thought = thoughtFrom(result.content, promptText(messages), settings, type, result.model);
   }
   return thought;

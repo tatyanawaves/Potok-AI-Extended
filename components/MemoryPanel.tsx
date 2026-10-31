@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useConfirm } from './Confirm';
 import { translations } from '../translations';
 import { AISettings } from '../types';
 import { Hint } from './Learning';
@@ -26,6 +27,7 @@ interface MemoryPanelProps {
 }
 
 const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, language, settings, onClose }) => {
+    const confirm = useConfirm();
     const t = translations[language as 'ru' | 'en' | 'kk'] as any;
     const [summary, setSummary] = useState<ChannelSummary>(EMPTY_SUMMARY);
     const [notes, setNotes] = useState<MemoryNote[]>([]);
@@ -139,7 +141,7 @@ const MemoryPanel: React.FC<MemoryPanelProps> = ({ boardId, channelId, isOwner, 
                                     </span>
                                     {(isOwner || d.addedBy === auth.currentUser?.uid) && (
                                         <button
-                                            onClick={() => window.confirm(`${t.removeDocumentConfirm || 'Убрать из базы знаний'}: ${d.title}?`) && run(() => removeFromKnowledge(boardId, d.id))}
+                                            onClick={async () => (await confirm({ message: `${t.removeDocumentConfirm || 'Убрать из базы знаний'}: ${d.title}?`, confirmLabel: t.delete || 'Удалить', danger: true })) && run(() => removeFromKnowledge(boardId, d.id))}
                                             className="text-slate-600 hover:text-rose-400 md:opacity-0 md:group-hover:opacity-100"
                                             title={t.delete || 'Удалить'}
                                         >

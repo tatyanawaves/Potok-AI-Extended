@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useConfirm } from '../Confirm';
 import { AISettings } from '../../types';
 import { Schedule, STEP_MINUTES, describeSchedule } from '../../services/schedule';
 import { subscribeToSchedules, createSchedule, setScheduleEnabled, deleteSchedule, schedulesAvailable } from '../../services/schedules';
@@ -24,6 +25,7 @@ interface SchedulesPanelProps {
 const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 const SchedulesPanel: React.FC<SchedulesPanelProps> = ({ boardId, channel, bots, currentUid, currentName, isOwner, settings, t, onClose }) => {
+    const confirm = useConfirm();
     const language = settings.language || 'ru';
     const dayNames: string[] = language === 'en'
         ? ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
@@ -95,7 +97,7 @@ const SchedulesPanel: React.FC<SchedulesPanelProps> = ({ boardId, channel, bots,
                                         </button>
                                     )}
                                     <button
-                                        onClick={() => window.confirm(`${t.deleteScheduleConfirm || 'Удалить расписание'}?`) && deleteSchedule(boardId, s.id).catch(e => setError(String(e)))}
+                                        onClick={async () => (await confirm({ message: `${t.deleteScheduleConfirm || 'Удалить расписание'}?`, confirmLabel: t.delete || 'Удалить', danger: true })) && deleteSchedule(boardId, s.id).catch(e => setError(String(e)))}
                                         className="text-slate-500 hover:text-red-400"
                                     >
                                         {t.delete || 'удалить'}

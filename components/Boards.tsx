@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useConfirm } from './Confirm';
 import { useIsWide } from '../hooks/useIsWide';
 import { subscribeToReadState, markRead, isBoardUnread, isChannelUnread, EMPTY_READ_STATE } from '../services/reads';
 import { subscribeToSpend } from '../services/spend';
@@ -70,6 +71,7 @@ interface BoardsProps {
 }
 
 const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettings }) => {
+    const confirm = useConfirm();
     const t = translations[settings.language] as any;
 
     /**
@@ -234,7 +236,7 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
     };
 
     const deleteBoardMessage = async (msg: BoardMessage) => {
-        if (!activeBoardId || !window.confirm(t.deleteMessageConfirm || 'Удалить сообщение?')) return;
+        if (!activeBoardId || !(await confirm({ message: t.deleteMessageConfirm || 'Удалить сообщение?', confirmLabel: t.delete || 'Удалить', danger: true }))) return;
         // Keys live only on the message; delete the files before it is gone.
         await deleteAttachments(msg.attachments || []);
         await deleteMessage(activeBoardId, msg.channelId, msg.id!);
@@ -1008,12 +1010,12 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
     };
 
     /** ▶ on a message: its code blocks, in order, in one sandbox. */
-    const runMessageCode = (msg: BoardMessage) => {
+    const runMessageCode = async (msg: BoardMessage) => {
         const blocks = runnableBlocks(msg.content);
         if (!blocks.length || isRunning) return;
         // Someone else's code runs under this user's key: say what will run.
         const what = blocks.map(b => b.kind === 'shell' ? 'bash' : b.kind).join(', ');
-        if (!window.confirm(`${t.runCodeConfirm || 'Запустить в вашей облачной песочнице'}: ${what}?`)) return;
+        if (!(await confirm({ message: `${t.runCodeConfirm || 'Запустить в вашей облачной песочнице'}: ${what}?`, confirmLabel: '▶' }))) return;
         runAndPost(blocks, `▶ ${t.ranCodeFrom || 'код из сообщения'} ${msg.authorName}`);
     };
 
@@ -1473,8 +1475,8 @@ const Boards: React.FC<BoardsProps> = ({ settings, onViewProfile, onUpdateSettin
                                     onClose={() => setSidePanel(null)}
                                     onViewProfile={onViewProfile}
                                     onSaveBot={member => handleSaveBot(member).catch(e => setError(e instanceof Error ? e.message : String(e)))}
-                                    onRemove={member => {
-                                        if (!window.confirm(`${t.removeMemberConfirm || 'Убрать с доски'}: ${member.name}?`)) return;
+                                    onRemove={async member => {
+                                        if (!(await confirm({ message: `${t.removeMemberConfirm || 'Убрать с доски'}: ${member.name}?`, danger: true }))) return;
                                         removeMember(activeBoard.id!, member.id).catch(e => setError(String(e)));
                                     }}
                                     openModal={openModal}

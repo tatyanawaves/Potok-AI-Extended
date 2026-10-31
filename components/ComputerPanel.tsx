@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useConfirm } from './Confirm';
 import { machine, downloadFromMachine, previewPort, MachineInfo } from '../services/connectors';
 import { formatSize } from '../services/attachments';
 
@@ -70,6 +71,7 @@ const parentOf = (path: string) => path.replace(/\/[^/]+\/?$/, '') || '/';
 const join = (dir: string, name: string) => `${dir === '/' ? '' : dir}/${name}`;
 
 const ComputerPanel: React.FC<ComputerPanelProps> = ({ boardId, language, activity, onClose }) => {
+    const confirm = useConfirm();
     const tx = TEXT[language as keyof typeof TEXT] || TEXT.ru;
     const [info, setInfo] = useState<MachineInfo | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
@@ -124,8 +126,8 @@ const ComputerPanel: React.FC<ComputerPanelProps> = ({ boardId, language, activi
         return machine(boardId, 'status');
     });
 
-    const remove = () => {
-        if (!window.confirm(tx.deleteConfirm)) return;
+    const remove = async () => {
+        if (!(await confirm({ message: tx.deleteConfirm, confirmLabel: tx.remove, danger: true }))) return;
         setPreviewUrl(null);
         run(tx.deleting, async () => {
             await machine(boardId, 'delete');
@@ -133,8 +135,8 @@ const ComputerPanel: React.FC<ComputerPanelProps> = ({ boardId, language, activi
         });
     };
 
-    const preview = () => {
-        if (!info?.public && !window.confirm(tx.previewConfirm)) return;
+    const preview = async () => {
+        if (!info?.public && !(await confirm({ message: tx.previewConfirm, confirmLabel: tx.open }))) return;
         run(tx.publishing, async () => {
             setPreviewUrl(await previewPort(boardId, Number(port)));
             return { key: true, exists: true, public: true };

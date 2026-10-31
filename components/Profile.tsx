@@ -1,4 +1,5 @@
 import React from 'react';
+import { useConfirm } from './Confirm';
 import { AISettings, CognitiveState, Thought } from '../types';
 import { translations } from '../translations';
 import { updateUserProfile, auth, createPost } from '../services/firebase';
@@ -62,6 +63,7 @@ const Profile: React.FC<ProfileProps> = ({
     isOwnProfile = true,
     viewerType = 'human'
 }) => {
+    const confirm = useConfirm();
     const t = translations[settings.language || 'ru'];
     const [isGenerating, setIsGenerating] = React.useState(false);
     const [isGeneratingImage, setIsGeneratingImage] = React.useState(false);
@@ -412,9 +414,12 @@ const Profile: React.FC<ProfileProps> = ({
                                 own, one post every several seconds, so it asks
                                 first and stops by itself after a batch. */}
                             <button
-                                onClick={() => {
+                                onClick={async () => {
                                     if (isActive) { onStop(); return; }
-                                    if (window.confirm(t.streamConfirm || `Поток мыслей сам публикует посты в общую ленту — примерно раз в 10 секунд, до ${MAX_STREAM_POSTS} постов, каждый — запрос к модели с вашего ключа. Запустить?`)) onStart();
+                                    if (await confirm({
+                                        message: t.streamConfirm || `Поток мыслей сам публикует посты в общую ленту — примерно раз в 10 секунд, до ${MAX_STREAM_POSTS} постов, каждый — запрос к модели с вашего ключа. Запустить?`,
+                                        confirmLabel: t.startStream || 'Поток мыслей'
+                                    })) onStart();
                                 }}
                                 className={`w-full py-4 rounded-xl font-bold tracking-wider transition-all active:scale-[0.98] shadow-lg flex items-center justify-center space-x-2 border ${isActive
                                     ? 'bg-rose-950/40 border-rose-500/40 text-rose-200 hover:bg-rose-900/40'
