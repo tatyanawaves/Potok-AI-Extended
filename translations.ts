@@ -1,6 +1,6 @@
 export const translations = {
   en: {
-    title: 'Potok',
+    title: 'NEON',
     statusWaiting: 'STANDBY',
     statusActive: 'PROCESSING',
     start: 'INITIATE',
@@ -178,7 +178,7 @@ export const translations = {
     deleteChannel: "Delete channel",
     boardNameHint: "Name of the new space",
     channelNameHint: "Name of the channel in the board",
-    memberPickHint: "Find a person on Potok and add them to the board",
+    memberPickHint: "Find a person on NEON and add them to the board",
     botHint: "A bot answers to @name. Whoever mentions it spends the tokens. A bot saved to “My bots” can be added to any of your boards.",
     myBotsHint: "Bots saved for reuse: prompt, model and tools. Tool tokens are not saved — they stay in this browser's settings.",
     cloneHint: "A copy of someone's persona in your board. It costs its author nothing — whoever mentions the bot pays.",
@@ -409,15 +409,15 @@ export const translations = {
     openRouterLogin: "Sign in with OpenRouter — get a key automatically",
     modelGone: "That free model is not on OpenRouter any more — pick one from the list (click the field).",
     freeQuotaLeft: "Free requests left today",
-    freeLimitsNote: "OpenRouter free models: up to 20 requests a minute and 50 a day per account (1,000 a day after a $10 top-up). A meeting task takes 10–30 requests. If a model is busy, Potok switches to another free one.",
+    freeLimitsNote: "OpenRouter free models: up to 20 requests a minute and 50 a day per account (1,000 a day after a $10 top-up). A meeting task takes 10–30 requests. If a model is busy, NEON switches to another free one.",
     sandboxKeysLabel: "Code sandboxes (your key)",
     keySaved: "key saved",
     saveShort: "Save",
-    sandboxKeysHint: "Bots run code and commands and work with files in your own cloud sandbox — you pay the provider directly. The key is checked and stored encrypted on the Potok server; it never stays in the browser.",
+    sandboxKeysHint: "Bots run code and commands and work with files in your own cloud sandbox — you pay the provider directly. The key is checked and stored encrypted on the NEON server; it never stays in the browser.",
     gcpLabel: "Google Cloud Run (your project)",
     gcpConnected: "project connected",
     pickKeyFile: "Choose a JSON key…",
-    gcpHint: "Bots deploy services into your Google Cloud project, billed to your account. Create a service account (roles: Cloud Run Admin, Cloud Build Editor, Storage Admin, Artifact Registry Administrator, Service Account User), enable the APIs and upload its JSON key. The key is stored encrypted on the Potok server.",
+    gcpHint: "Bots deploy services into your Google Cloud project, billed to your account. Create a service account (roles: Cloud Run Admin, Cloud Build Editor, Storage Admin, Artifact Registry Administrator, Service Account User), enable the APIs and upload its JSON key. The key is stored encrypted on the NEON server.",
     learning: "Learn",
     confirmTitle: "Confirm",
     deletePostConfirm: "Delete this post? This cannot be undone.",
@@ -430,7 +430,7 @@ export const translations = {
     whereToGetKey: "Where to get a key"
   },
   ru: {
-    title: 'Potok',
+    title: 'NEON',
     statusWaiting: 'ОЖИДАНИЕ',
     statusActive: 'ОБРАБОТКА',
     start: 'ЗАПУСТИТЬ',
@@ -578,7 +578,7 @@ export const translations = {
     whereToGetKey: "Где взять ключ"
   },
   kk: {
-    title: 'Potok',
+    title: 'NEON',
     statusWaiting: 'КҮТУ',
     statusActive: 'ӨҢДЕУ',
     start: 'ІСКЕ ҚОСУ',

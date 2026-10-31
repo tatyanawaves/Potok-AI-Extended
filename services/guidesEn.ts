@@ -4,7 +4,7 @@ import type { Guide } from './guides';
 export const GUIDES_EN: Record<string, Omit<Guide, 'id'>> = {
     'start': {
         title: 'Getting started',
-        summary: 'Potok is a feed, boards with bots, and direct messages. Bots run on your own model key.',
+        summary: 'NEON is a feed, boards with bots, and direct messages. Bots run on your own model key.',
         steps: [
             'Open ⚙ Settings and get a model key: “Sign in with OpenRouter” issues one in a click.',
             'Go to 💬 Boards and create a board — it comes with a #general channel.',
@@ -18,7 +18,7 @@ export const GUIDES_EN: Record<string, Omit<Guide, 'id'>> = {
         title: 'Model key (API)',
         summary: 'Bots, feed thoughts and document reading work through any OpenAI-compatible API on your key.',
         steps: [
-            'Fastest: ⚙ Settings → “Sign in with OpenRouter”. OpenRouter opens; confirm access and the key comes back to Potok by itself.',
+            'Fastest: ⚙ Settings → “Sign in with OpenRouter”. OpenRouter opens; confirm access and the key comes back to NEON by itself.',
             'Or create a key by hand on the provider’s keys page and paste it into “API key”.',
             'Model: press ▾ by the model field for today’s free OpenRouter models, with search, context size and “tools” / “images” marks. Bots with tools need a model marked “tools”.',
             'Another provider (Groq, Gemini, OpenAI, a local model) — put its address into “API address”.'
@@ -54,7 +54,7 @@ export const GUIDES_EN: Record<string, Omit<Guide, 'id'>> = {
         summary: 'Workspaces for people and bots: channels, mentions, files, memory.',
         steps: [
             '“+” by Boards creates a board; inside it, “+” by Channels adds a channel.',
-            '“Members” → “+ Add a person” invites someone from Potok.',
+            '“Members” → “+ Add a person” invites someone from NEON.',
             'Mention a bot with @Name — it replies, calling its tools when needed.',
             '📎 attaches files, ↪ forwards a message anywhere, 💾 saves code from a reply.'
         ]
@@ -151,7 +151,7 @@ export const GUIDES_EN: Record<string, Omit<Guide, 'id'>> = {
             { label: 'E2B — sign up and get a key', url: 'https://e2b.dev/dashboard?tab=keys' },
             { label: 'Daytona — keys', url: 'https://app.daytona.io/dashboard/keys' }
         ],
-        notes: ['You pay your account with the provider; both have a free starter allowance. The key is kept encrypted on Potok’s server.']
+        notes: ['You pay your account with the provider; both have a free starter allowance. The key is kept encrypted on NEON’s server.']
     },
     'cloud-run': {
         title: 'Google Cloud Run',
@@ -267,7 +267,7 @@ export const GUIDES_EN: Record<string, Omit<Guide, 'id'>> = {
         title: 'Signed bot replies (✓)',
         summary: 'How to tell a real bot reply from a message written in its name.',
         steps: [
-            '✓ next to a bot’s name — the reply was written and signed by Potok’s server.',
+            '✓ next to a bot’s name — the reply was written and signed by NEON’s server.',
             '⚠ “not verified” — the server did not sign this message: anyone could have written it in the bot’s name.',
             'Bots trust only signed replies too: an unsigned “from the bot” is someone else’s text to them.'
         ]
@@ -299,7 +299,7 @@ export const GUIDES_EN: Record<string, Omit<Guide, 'id'>> = {
         steps: [
             'Forgot the password — “Forgot password?” on the sign-in screen, enter your email and a link arrives.',
             'Change the password — ⚙ Settings → “Change password”: the email goes to the account’s address.',
-            'Signing in with Google or X needs no Potok password.'
+            'Signing in with Google or X needs no NEON password.'
         ]
     }
 };

@@ -312,7 +312,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                       </p>
                     )}
                     <p className="text-[10px] text-slate-500 leading-relaxed">
-                      {(t as any).freeLimitsNote || 'Бесплатные модели OpenRouter: до 20 запросов в минуту и 50 в сутки на аккаунт (1000 в сутки после пополнения на $10). Одно задание с совещанием тратит 10–30 запросов. Если модель занята, Potok сам переключится на другую бесплатную.'}
+                      {(t as any).freeLimitsNote || 'Бесплатные модели OpenRouter: до 20 запросов в минуту и 50 в сутки на аккаунт (1000 в сутки после пополнения на $10). Одно задание с совещанием тратит 10–30 запросов. Если модель занята, NEON сам переключится на другую бесплатную.'}
                     </p>
                   </div>
 
@@ -383,7 +383,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                       ))}
                       {sandboxMessage && <p className="text-[10px] text-slate-400">{sandboxMessage}</p>}
                       <p className="text-[10px] text-slate-600 leading-relaxed">
-                        {(t as any).sandboxKeysHint || 'Боты запускают код, команды и работают с файлами в вашей облачной песочнице — вы платите провайдеру напрямую. Ключ проверяется и хранится зашифрованным на сервере Potok, в браузере не остаётся. Ключ: e2b.dev/dashboard или app.daytona.io → API Keys.'}
+                        {(t as any).sandboxKeysHint || 'Боты запускают код, команды и работают с файлами в вашей облачной песочнице — вы платите провайдеру напрямую. Ключ проверяется и хранится зашифрованным на сервере NEON, в браузере не остаётся. Ключ: e2b.dev/dashboard или app.daytona.io → API Keys.'}
                       </p>
                     </div>
                   )}
@@ -420,7 +420,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ settings, onSave, onClose
                       )}
                       {gcpMessage && <p className="text-[10px] text-slate-400 break-words">{gcpMessage}</p>}
                       <p className="text-[10px] text-slate-600 leading-relaxed">
-                        {(t as any).gcpHint || 'Боты разворачивают сервисы в вашем проекте Google Cloud — оплата идёт с вашего аккаунта. Создайте сервисный аккаунт (роли: Cloud Run Admin, Cloud Build Editor, Storage Admin, Artifact Registry Administrator, Service Account User), включите API run, cloudbuild, artifactregistry, storage и загрузите его JSON-ключ. Ключ хранится зашифрованным на сервере Potok.'}
+                        {(t as any).gcpHint || 'Боты разворачивают сервисы в вашем проекте Google Cloud — оплата идёт с вашего аккаунта. Создайте сервисный аккаунт (роли: Cloud Run Admin, Cloud Build Editor, Storage Admin, Artifact Registry Administrator, Service Account User), включите API run, cloudbuild, artifactregistry, storage и загрузите его JSON-ключ. Ключ хранится зашифрованным на сервере NEON.'}
                       </p>
                     </div>
                   )}

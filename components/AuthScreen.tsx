@@ -554,7 +554,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthorize, initialSettings })
       </div>
 
       <div className="mt-8 text-[10px] font-mono text-slate-600 uppercase tracking-widest">
-        Powered by OpenRouter & Potok Engine
+        Powered by OpenRouter & NEON Engine
       </div>
     </div>
   );
