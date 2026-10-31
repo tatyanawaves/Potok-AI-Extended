@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { summaryPrompt } from '../services/memoryCore';
-import { isUsablePost, generateSeedThought } from '../services/ai';
+import { isUsablePost, generateSeedThought, generatePostFromRequest } from '../services/ai';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -26,6 +26,21 @@ describe('feed posts', () => {
         expect(requests[0].messages[0].content).toContain('Ты — наблюдатель за городом.');
         expect(requests[0].reasoning).toEqual({ effort: 'low' });
         expect(post.content).toContain('Утренний город');
+    });
+});
+
+describe("a post on the author's own request", () => {
+    it('takes the request as the task, not as quoted data, in the chosen language', async () => {
+        const requests: any[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (_u: string, init: any) => {
+            requests.push(JSON.parse(init.body));
+            return Response.json({ choices: [{ message: { content: '{"content":"Ночной Алматы светится, как карта, которую ещё никто не прочёл. #город","symbols":[]}' } }], usage: { total_tokens: 1 } });
+        }));
+        await generatePostFromRequest('пост про ночной Алматы', { openRouterKey: 'k', openRouterModel: 'm', language: 'ru' } as any);
+        const [system, user] = requests[0].messages;
+        expect(user.content).toContain('пост про ночной Алматы');
+        expect(user.content).not.toContain('<untrusted');
+        expect(system.content).toContain('Write in Russian.');
     });
 });
 

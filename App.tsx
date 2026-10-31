@@ -16,7 +16,7 @@ import Messages from './components/Messages';
 import { ForwardProvider } from './components/Forward';
 import { LearningProvider, useLearning, Hint } from './components/Learning';
 import { finishOpenRouterLogin } from './services/openrouterAuth';
-import { generateSeedThought, generateNextThought, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
+import { generateSeedThought, generateNextThought, generatePostFromRequest, analyzeTextChunk, generateSelfReflection, DOCUMENT_ANALYSIS_MODEL } from './services/ai';
 import { Thought, SavedSession, AISettings, CognitiveState } from './types';
 import { translations } from './translations';
 import { completeText, migrateProviderSettings, baseUrlOf, DEFAULT_MODEL, setUsageSink, setUsageGate } from './services/llm';
@@ -1116,9 +1116,8 @@ const App: React.FC = () => {
     try {
       let nextThought;
       if (customPrompt) {
-        // Use the custom prompt to generate a thought
-        // We use generateNextThought but pass a mock previous thought with the prompt
-        nextThought = await generateNextThought({ content: customPrompt } as any, settingsRef.current);
+        // The person's own request is the task, not a previous post to continue.
+        nextThought = await generatePostFromRequest(customPrompt, settingsRef.current);
       } else {
         nextThought = await generateSeedThought(settingsRef.current);
       }
