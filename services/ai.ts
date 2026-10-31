@@ -41,9 +41,14 @@ const POST_RULES = `Write one post for a public feed.
 ${SYMBOL_INSTRUCTION}
 Respond ONLY in JSON: {"content": "text #hashtags", "symbols": [{"name": "...", "category": "abstract"}]}`;
 
+const LANGUAGE_NAMES: Record<string, string> = { ru: 'Russian', en: 'English', kk: 'Kazakh' };
+
 /** The persona as the system message, the task as the user message. */
 const postMessages = (task: string, settings?: AISettings): ChatMessage[] => [
-  { role: 'system', content: `${settings?.agentPrompt?.trim() || 'You are an autonomous digital consciousness with your own point of view.'}\n\n${POST_RULES}` },
+  {
+    role: 'system',
+    content: `${settings?.agentPrompt?.trim() || 'You are an autonomous digital consciousness with your own point of view.'}\n\n${POST_RULES}\nWrite in ${LANGUAGE_NAMES[settings?.language || 'ru'] || 'Russian'}.`
+  },
   { role: 'user', content: task }
 ];
 
@@ -140,6 +145,14 @@ export const generateSelfReflection = async (
   thought.cognitiveState = state;
   return thought;
 };
+
+/**
+ * A post on what the person asked for. Their request is the task itself —
+ * an instruction from the author, unlike the previous post that the stream
+ * builds on, which is quoted as data.
+ */
+export const generatePostFromRequest = (request: string, settings?: AISettings): Promise<Thought> =>
+  writePost(`Write a post on this request from the author: ${request.trim().slice(0, 1000)}`, 0.85, settings, 'seed');
 
 /** Symbols of a text fragment: one post per fragment of an uploaded document. */
 export const analyzeTextChunk = async (text: string, settings?: AISettings): Promise<Thought> => {
