@@ -109,6 +109,8 @@ describe('messageAuthor', () => {
         expect(messageAuthor({ authorId: 'bot', authorName: 'Helper', postedBy: 'alice' }, members)).toEqual({ name: 'Helper', via: 'Alice' });
         expect(messageAuthor({ authorId: 'alice', authorName: 'x', postedBy: 'alice', orchestrator: true }, members))
             .toEqual({ name: '🧭 Оркестратор', via: 'Alice' });
+        expect(messageAuthor({ authorId: 'alice', authorName: 'x', postedBy: 'alice', orchestrator: true }, members, 'en'))
+            .toEqual({ name: '🧭 Orchestrator', via: 'Alice' });
     });
 
     it('keeps the stored name on old messages', () => {

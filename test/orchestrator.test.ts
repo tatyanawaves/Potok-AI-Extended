@@ -123,4 +123,11 @@ describe('reporting', () => {
     it('bounds the cost: plan + steps × (turn + check) + final', () => {
         expect(estimateOrchestrationRequests(4, 5)).toBe(1 + 4 * 6 + 1);
     });
+
+    it('speaks English when the task is in English', () => {
+        const text = renderReport({ answer: 'Done', progress: 90, criteria: [{ text: 'a', met: true }] }, 'en');
+        expect(text).toContain('✅ Result');
+        expect(text).toContain('How complete: 90%');
+        expect(text).not.toMatch(/[А-Яа-я]/);
+    });
 });

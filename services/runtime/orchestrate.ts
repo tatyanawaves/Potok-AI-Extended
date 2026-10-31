@@ -3,7 +3,7 @@ import { complete, isFatalProviderError } from '../llm';
 import {
     RosterEntry, Plan, PlanStep, StepLog, Evaluation, FinalReport, OrchestrationProgress,
     planPrompt, parsePlan, evaluationPrompt, parseEvaluation, finalPrompt, parseFinal,
-    renderPlan, renderReport, readySteps, inputsFor, appendStep,
+    renderPlan, renderReport, readySteps, inputsFor, appendStep, orchestratorLabels,
     MAX_ORCHESTRATED_STEPS, MAX_PARALLEL_STEPS, MAX_RESUMES
 } from '../orchestratorCore';
 import { AgentStore } from './store';
@@ -61,7 +61,7 @@ const post = (ctx: TaskContext, content: string) => ctx.store.postMessage({
     channelId: ctx.channelId,
     boardId: ctx.boardId,
     authorId: ctx.author.id,
-    authorName: '🧭 Оркестратор',
+    authorName: `🧭 ${orchestratorLabels(ctx.settings.language).name}`,
     authorType: 'agent',
     orchestrator: true,
     content,
@@ -93,7 +93,7 @@ export const startRun = async (ctx: TaskContext): Promise<RunState> => {
         temperature: 0.3, json: true, model: bookkeeping(ctx.settings)
     }, ctx.settings);
     const plan = parsePlan(planned.content, ctx.task, roster, stepLimit(ctx));
-    await post(ctx, renderPlan(plan));
+    await post(ctx, renderPlan(plan, ctx.settings.language));
 
     return { plan, roster, steps: plan.steps, done: [], log: [], evaluation: null, stopped: false, finished: false };
 };
@@ -215,12 +215,13 @@ export const finishRun = async (ctx: TaskContext, state: RunState): Promise<Fina
             messages: [{ role: 'user', content: finalPrompt(state.plan, state.log) }],
             temperature: 0.3, json: true, maxTokens: 4000, model: bookkeeping(ctx.settings)
         }, ctx.settings);
-        report = parseFinal(final.content, state.plan, state.evaluation, state.log);
+        report = parseFinal(final.content, state.plan, state.evaluation, state.log, ctx.settings.language);
     } catch {
-        report = parseFinal(null, state.plan, state.evaluation, state.log);
+        report = parseFinal(null, state.plan, state.evaluation, state.log, ctx.settings.language);
     }
 
-    await post(ctx, renderReport(report) + (state.stopped ? '\n(остановлено до завершения)' : ''));
+    const labels = orchestratorLabels(ctx.settings.language);
+    await post(ctx, renderReport(report, ctx.settings.language) + (state.stopped ? `\n${labels.stopped}` : ''));
 
     // The outcome is worth knowing later, in this channel or another one.
     await fileNote(ctx.store, ctx.settings, ctx.boardId, {
