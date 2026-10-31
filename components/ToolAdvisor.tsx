@@ -5,7 +5,7 @@ import { addBot, updateBot } from '../services/boards';
 import { designBot, toolServersOf } from '../services/boardAgent';
 import { freeName } from '../services/mentions';
 import { startAccountConnection } from '../services/pipedream';
-import { collectCandidates, startOAuthConnection, ToolCandidate } from '../services/connectors';
+import { collectCandidates, startOAuthConnection, ToolCandidate, SANDBOX_NAMES, SandboxProvider } from '../services/connectors';
 import { adviseTools, generateMcpServer, Suggestion } from '../services/runtime/advisor';
 import { CodeFile } from '../services/codeSave';
 
@@ -32,8 +32,31 @@ const hostOf = (url: string): string => {
     try { return new URL(url).host; } catch { return url; }
 };
 
+/** The advisor's own sentences: English for 'en', Russian otherwise. */
+const SAY = {
+    ru: {
+        gcpKey: 'Добавьте ключ сервисного аккаунта Google Cloud в Настройках → «Google Cloud Run»',
+        sandboxKey: (name: string) => `Добавьте свой ключ ${name} в Настройках → «Песочницы кода»`,
+        signInThenAdd: 'Войдите в открывшемся окне, затем нажмите «Добавить»',
+        added: (bot: string) => `Добавлено боту ${bot}`,
+        signInThenCreate: (service: string) => `Войдите в ${service}, затем создайте бота`,
+        botCreated: (bot: string) => `Бот @${bot} создан`,
+        serverReady: 'Код сервера готов — сохраните его и разверните по README'
+    },
+    en: {
+        gcpKey: 'Add a Google Cloud service account key in Settings → “Google Cloud Run”',
+        sandboxKey: (name: string) => `Add your ${name} key in Settings → “Code sandboxes”`,
+        signInThenAdd: 'Sign in in the window that opened, then press “Add”',
+        added: (bot: string) => `Added to ${bot}`,
+        signInThenCreate: (service: string) => `Sign in to ${service}, then create the bot`,
+        botCreated: (bot: string) => `Bot @${bot} created`,
+        serverReady: 'The server code is ready — save it and deploy it as the README says'
+    }
+};
+
 const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId, settings, onCodeFiles, onBotCreated, onClose }) => {
     const t = translations[settings.language] as any;
+    const say = settings.language === 'en' ? SAY.en : SAY.ru;
     const [candidates, setCandidates] = useState<ToolCandidate[]>([]);
     const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -43,7 +66,7 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
     useEffect(() => {
         (async () => {
             try {
-                const found = await collectCandidates(task);
+                const found = await collectCandidates(task, settings.language);
                 setCandidates(found);
                 const byUrl = new Map(found.map(c => [c.url, c.name]));
                 const advice = await adviseTools(task, bots.map(b => ({
@@ -71,8 +94,8 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
     const connect = async (c: ToolCandidate) => {
         if (c.kind === 'oauth') await startOAuthConnection(c.target!);
         else if (c.kind === 'pipedream') await startAccountConnection(c.target!);
-        else if (c.kind === 'gcp') throw new Error('Добавьте ключ сервисного аккаунта Google Cloud в Настройках → «Google Cloud Run»');
-        else if (c.kind === 'sandbox') throw new Error(`Добавьте свой ключ ${c.name.replace('Песочница ', '')} в Настройках → «Песочницы кода»`);
+        else if (c.kind === 'gcp') throw new Error(say.gcpKey);
+        else if (c.kind === 'sandbox') throw new Error(say.sandboxKey(SANDBOX_NAMES[c.target as SandboxProvider] || c.name));
     };
 
     const act = async (index: number, action: () => Promise<string>) => {
@@ -124,7 +147,7 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
                                 <div className="flex gap-2 flex-wrap">
                                     {c.needsConnection && (
                                         <button className={`${btn} border-amber-500/40 text-amber-300`} disabled={busy !== null}
-                                            onClick={() => act(i, async () => { await connect(c); return 'Войдите в открывшемся окне, затем нажмите «Добавить»'; })}>
+                                            onClick={() => act(i, async () => { await connect(c); return say.signInThenAdd; })}>
                                             {t.connect || 'Подключить'}
                                         </button>
                                     )}
@@ -133,7 +156,7 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
                                             // Merged at write time: this bot's list may have changed
                                             // since the advice was drawn up.
                                             await updateBot(boardId, bot.id, { addToolServerUrls: [c.url] });
-                                            return `Добавлено боту ${bot.name}`;
+                                            return say.added(bot.name);
                                         })}>
                                         {t.add || 'Добавить'}
                                     </button>
@@ -151,7 +174,7 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
                                 <div className="flex gap-2 flex-wrap">
                                     {tools.filter(c => c.needsConnection).map(c => (
                                         <button key={c.id} className={`${btn} border-amber-500/40 text-amber-300`} disabled={busy !== null}
-                                            onClick={() => act(i, async () => { await connect(c); return `Войдите в ${c.name}, затем создайте бота`; })}>
+                                            onClick={() => act(i, async () => { await connect(c); return say.signInThenCreate(c.name); })}>
                                             {t.connect || 'Подключить'} {c.name}
                                         </button>
                                     ))}
@@ -164,7 +187,7 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
                                                 toolServerUrls: tools.map(c => c.url)
                                             });
                                             onBotCreated?.(name);
-                                            return `Бот @${name} создан`;
+                                            return say.botCreated(name);
                                         })}>
                                         {t.createBot || 'Создать бота'}
                                     </button>
@@ -181,7 +204,7 @@ const ToolAdvisor: React.FC<ToolAdvisorProps> = ({ task, bots, boardId, ownerId,
                             <button className={`${btn} border-cyan-500/40 text-cyan-200`} disabled={busy !== null}
                                 onClick={() => act(i, async () => {
                                     onCodeFiles(await generateMcpServer(s.spec, settings));
-                                    return 'Код сервера готов — сохраните его и разверните по README';
+                                    return say.serverReady;
                                 })}>
                                 {busy === i ? '…' : (t.generateCode || 'Сгенерировать код')}
                             </button>

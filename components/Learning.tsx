@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { GUIDES, Guide, guideById } from '../services/guides';
+import { Guide, guideById, guidesFor } from '../services/guides';
 
 /**
  * Learning mode: a help centre (the mortarboard icon in the header) with a guide per feature,
@@ -30,11 +30,10 @@ const UI = {
     en: { title: 'Learn', showHints: 'Show "?" hints next to features', close: 'Close', all: 'All topics', links: 'Where to get / connect', hintTitle: 'How it works and where to get a key' },
     kk: { title: 'Оқыту', showHints: 'Функциялардың жанында «?» кеңестерін көрсету', close: 'Жабу', all: 'Барлық бөлімдер', links: 'Қайдан алуға / қосуға болады', hintTitle: 'Бұл қалай жұмыс істейді және кілтті қайдан алуға болады' }
 };
-const ui = () => {
-    let language = 'ru';
-    try { language = JSON.parse(localStorage.getItem('ai_settings') || '{}').language || 'ru'; } catch { /* default */ }
-    return (UI as Record<string, typeof UI.ru>)[language] || UI.ru;
+const language = () => {
+    try { return JSON.parse(localStorage.getItem('ai_settings') || '{}').language || 'ru'; } catch { return 'ru'; }
 };
+const ui = () => (UI as Record<string, typeof UI.ru>)[language()] || UI.ru;
 
 export const useLearning = () => useContext(LearningContext);
 
@@ -55,7 +54,7 @@ export const LearningProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
     }, []);
 
-    const guide = view?.kind === 'guide' ? guideById(view.id) : undefined;
+    const guide = view?.kind === 'guide' ? guideById(view.id, language()) : undefined;
 
     return (
         <LearningContext.Provider value={{ hintsOn, setHintsOn, openGuide, openCenter }}>
@@ -68,7 +67,7 @@ export const LearningProvider: React.FC<{ children: React.ReactNode }> = ({ chil
                         {ui().showHints}
                     </label>
                     <div className="grid grid-cols-1 gap-1.5">
-                        {GUIDES.map(g => (
+                        {guidesFor(language()).map(g => (
                             <button key={g.id} onClick={() => openGuide(g.id)}
                                 className="text-left px-3 py-2 rounded-lg border border-slate-800 hover:border-cyan-500/40 hover:bg-slate-800/50">
                                 <span className="text-sm text-slate-200 block">{g.title}</span>
@@ -142,7 +141,7 @@ export const Hint: React.FC<{ id: string, always?: boolean, className?: string }
     return (
         <button type="button" onClick={(e) => { e.stopPropagation(); e.preventDefault(); openGuide(id); }}
             title={ui().hintTitle}
-            aria-label={`${ui().title}: ${guideById(id)?.title || id}`}
+            aria-label={`${ui().title}: ${guideById(id, language())?.title || id}`}
             className={`inline-flex items-center justify-center w-4 h-4 rounded-full border border-cyan-500/50 text-cyan-300 text-[9px] font-bold leading-none hover:bg-cyan-900/40 align-middle shrink-0 ${className}`}>
             ?
         </button>

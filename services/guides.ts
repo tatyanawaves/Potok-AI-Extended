@@ -4,7 +4,10 @@
  *
  * Kept as data so every "?" in the interface and the help centre read from
  * the same place, and a guide can be fixed without touching a component.
+ * English versions live in guidesEn.
  */
+
+import { GUIDES_EN } from './guidesEn';
 
 export interface GuideLink {
     label: string;
@@ -352,4 +355,9 @@ export const GUIDES: Guide[] = [
     }
 ];
 
-export const guideById = (id: string): Guide | undefined => GUIDES.find(g => g.id === id);
+/** The guides in the interface language: English for 'en', Russian otherwise. */
+export const guidesFor = (language?: string): Guide[] =>
+    language === 'en' ? GUIDES.map(g => ({ ...g, ...GUIDES_EN[g.id] })) : GUIDES;
+
+export const guideById = (id: string, language?: string): Guide | undefined =>
+    guidesFor(language).find(g => g.id === id);
